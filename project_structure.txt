@@ -1,0 +1,204 @@
+.
+├── experiments
+│   ├── __pycache__
+│   │   └── search.cpython-311.pyc
+│   ├── search.py
+│   └── simple_search.py
+├── msa_models
+│   ├── LICENSE
+│   ├── README.md
+│   ├── configs
+│   │   ├── evaluating_msa-v1
+│   │   │   ├── bp-25-10-06.yml
+│   │   │   ├── bp-25-10-22-ind.yml
+│   │   │   ├── bp-25-10-22.yml
+│   │   │   ├── bpo-5-5-avg.yml
+│   │   │   ├── bpo-5-5.yml
+│   │   │   ├── cc-25-10-22.yml
+│   │   │   ├── cco-5-5-avg.yml
+│   │   │   ├── cco-5-5.yml
+│   │   │   ├── metafile.yml
+│   │   │   ├── mf-25-10-22.yml
+│   │   │   ├── mfo-5-5-avg.yml
+│   │   │   └── mfo-5-5.yml
+│   │   ├── evaluating_netgo-v1
+│   │   │   ├── bp-24-12-20-avg.yml
+│   │   │   ├── bp-24-12-20.yml
+│   │   │   ├── bp-25-03-21-avg.yml
+│   │   │   ├── bp-25-03-21.yml
+│   │   │   ├── bp-25-03-24.yml
+│   │   │   ├── bp-25-03-26-avg.yml
+│   │   │   ├── bp-25-03-26.yml
+│   │   │   ├── bp-25-04-02.yml
+│   │   │   ├── bp-25-07-05.yml
+│   │   │   ├── bpo-11-27.yml
+│   │   │   ├── cc-24-12-20-avg.yml
+│   │   │   ├── cc-25-03-24.yml
+│   │   │   ├── cc-25-03-26-avg.yml
+│   │   │   ├── cc-25-03-26.yml
+│   │   │   ├── cc-25-04-02.yml
+│   │   │   ├── metafile.yml
+│   │   │   ├── mf-24-12-20-avg.yml
+│   │   │   ├── mf-25-03-21-avg.yml
+│   │   │   ├── mf-25-03-24.yml
+│   │   │   ├── mf-25-03-26-avg.yml
+│   │   │   ├── mf-25-03-26.yml
+│   │   │   └── mf-25-04-02.yml
+│   │   ├── training_msa-v1
+│   │   │   ├── bp-25-10-06.yml
+│   │   │   ├── bp-25-10-22.yml
+│   │   │   ├── bp-25-12-23.yml
+│   │   │   ├── bpo-5-5.yml
+│   │   │   ├── cc-25-10-22.yml
+│   │   │   ├── cco-5-5.yml
+│   │   │   ├── metafile.yml
+│   │   │   ├── mf-25-10-22.yml
+│   │   │   └── mfo-5-5.yml
+│   │   └── training_netgo-v1
+│   │       ├── bp-04-09-1.yml
+│   │       ├── bp-04-14-1.yml
+│   │       ├── bp-04-28-1.yml
+│   │       ├── bp-05-13-1.yml
+│   │       ├── bp-24-12-20.yml
+│   │       ├── bp-25-03-21.yml
+│   │       ├── bp-25-03-24.yml
+│   │       ├── bp-25-03-26.yml
+│   │       ├── bp-25-04-02.yml
+│   │       ├── bp-25-07-05.yml
+│   │       ├── bpo-11-27-1.yml
+│   │       ├── bpo-11-27-2.yml
+│   │       ├── bpo-11-27-3.yml
+│   │       ├── bpo-11-27.yml
+│   │       ├── cc-04-09-1.yml
+│   │       ├── cc-04-28-1.yml
+│   │       ├── cc-24-12-20.yml
+│   │       ├── cc-25-03-21.yml
+│   │       ├── cc-25-03-24.yml
+│   │       ├── cc-25-03-26.yml
+│   │       ├── cc-25-04-02.yml
+│   │       ├── cco-11-27-1.yml
+│   │       ├── cco-11-27-2.yml
+│   │       ├── cco-11-27-3.yml
+│   │       ├── cco-11-27.yml
+│   │       ├── metafile.yml
+│   │       ├── mf-04-09-1.yml
+│   │       ├── mf-04-28-1.yml
+│   │       ├── mf-24-12-20.yml
+│   │       ├── mf-25-03-21.yml
+│   │       ├── mf-25-03-24.yml
+│   │       ├── mf-25-03-26.yml
+│   │       ├── mf-25-04-02.yml
+│   │       ├── mf-25-07-05.yml
+│   │       ├── mfo-11-27-1.yml
+│   │       ├── mfo-11-27-2.yml
+│   │       ├── mfo-11-27-3.yml
+│   │       └── mfo-11-27.yml
+│   ├── experiments
+│   │   ├── __pycache__
+│   │   │   ├── msa.cpython-310.pyc
+│   │   │   └── msa.cpython-311.pyc
+│   │   ├── feature_extractor.py
+│   │   ├── go
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-310.pyc
+│   │   │   │   ├── __init__.cpython-311.pyc
+│   │   │   │   ├── eval.cpython-310.pyc
+│   │   │   │   ├── eval.cpython-311.pyc
+│   │   │   │   ├── run_training.cpython-310.pyc
+│   │   │   │   ├── run_training.cpython-311.pyc
+│   │   │   │   ├── train.cpython-310.pyc
+│   │   │   │   └── train.cpython-311.pyc
+│   │   │   ├── build_som.py
+│   │   │   ├── eval.py
+│   │   │   ├── run_training.py
+│   │   │   └── train.py
+│   │   ├── msa.py
+│   │   └── preprocess
+│   │       ├── __pycache__
+│   │       │   ├── utils.cpython-310.pyc
+│   │       │   └── utils.cpython-311.pyc
+│   │       ├── alignment.py
+│   │       ├── alignparser.py
+│   │       ├── sequence.py
+│   │       └── utils.py
+│   ├── helper_functions
+│   │   ├── __pycache__
+│   │   │   ├── aug.cpython-310.pyc
+│   │   │   ├── aug.cpython-311.pyc
+│   │   │   ├── constants.cpython-310.pyc
+│   │   │   ├── constants.cpython-311.pyc
+│   │   │   ├── helper.cpython-310.pyc
+│   │   │   ├── helper.cpython-311.pyc
+│   │   │   ├── prc.cpython-310.pyc
+│   │   │   └── prc.cpython-311.pyc
+│   │   ├── aug.py
+│   │   ├── constants.py
+│   │   ├── helper.py
+│   │   ├── obo_parser.py
+│   │   └── prc.py
+│   ├── loss_functions
+│   │   ├── __pycache__
+│   │   │   ├── loss.cpython-310.pyc
+│   │   │   └── loss.cpython-311.pyc
+│   │   └── loss.py
+│   ├── models
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-310.pyc
+│   │   │   ├── __init__.cpython-311.pyc
+│   │   │   ├── _internally_replaced_utils.cpython-310.pyc
+│   │   │   ├── _internally_replaced_utils.cpython-311.pyc
+│   │   │   ├── architecture.cpython-310.pyc
+│   │   │   ├── architecture.cpython-311.pyc
+│   │   │   ├── gendis.cpython-310.pyc
+│   │   │   ├── gendis.cpython-311.pyc
+│   │   │   ├── resnet.cpython-310.pyc
+│   │   │   ├── resnet.cpython-311.pyc
+│   │   │   ├── timm_models.cpython-310.pyc
+│   │   │   ├── timm_models.cpython-311.pyc
+│   │   │   ├── utils.cpython-310.pyc
+│   │   │   └── utils.cpython-311.pyc
+│   │   ├── architecture.py
+│   │   ├── gendis.py
+│   │   ├── timm_models.py
+│   │   └── utils.py
+│   ├── multi_node_train.sh
+│   ├── multi_node_train_sp.sh
+│   ├── optimizers
+│   │   ├── __pycache__
+│   │   │   ├── optim.cpython-310.pyc
+│   │   │   └── optim.cpython-311.pyc
+│   │   └── optim.py
+│   ├── predict.sh
+│   ├── requirements.txt
+│   ├── run_test.sh
+│   ├── run_test_avg.sh
+│   ├── run_test_sp.sh
+│   ├── run_train_1.sh
+│   ├── scripts
+│   │   ├── average_performance.py
+│   │   ├── calculate_msa.py
+│   │   ├── construct_gendis.py
+│   │   ├── predict.py
+│   │   └── trans_predict.py
+│   └── single_train_profiling.sh
+├── notebooks
+│   └── preprocess
+│       ├── count_a3m_fast.py
+│       ├── count_a3m_with_log.py
+│       ├── count_msa_size.ipynb
+│       ├── get_fast_from_dataframe.ipynb
+│       ├── parse_grep_z_counts.py
+│       ├── sprot_2204_a3m_counts.err
+│       ├── sprot_2204_a3m_counts.tsv
+│       ├── sprot_2204_anno_MSA_seq_counts.tsv
+│       ├── sprot_2204_anno_a3m_counts.raw
+│       └── sprot_2204_anno_a3m_counts.tsv
+├── project_structure.txt
+└── utils
+    ├── __pycache__
+    │   └── batch.cpython-311.pyc
+    └── batch.py
+
+27 directories, 174 files

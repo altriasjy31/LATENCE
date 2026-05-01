@@ -1,0 +1,9 @@
+# train and save eam weight
+base: configs/training_msa-v1/metafile.yml
+task: molecular_function
+num_classes: 7038
+netD: timm_tresnet_m
+optim: AMSGrad
+lr: 0.0001
+batch_size: 16
+wandb: transformer-v1

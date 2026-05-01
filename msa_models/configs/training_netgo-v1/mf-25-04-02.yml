@@ -1,0 +1,38 @@
+base: configs/training_netgo-v1/metafile.yml
+task: molecular_function
+num_classes: 6854
+dataloader_num_workers: 20
+msa_max_size: -1
+top_k: 64
+max_len: 2048
+# netD: timm_ecaresnetblur101d
+netD: timm_swinv2_base_window16
+# optim: AdamW
+optim: Lamb
+optim_eps: 1.e-6
+epochs: 280
+stop_epoch: 260
+lr: 0.0028
+lr_policy: cycle
+lr_pct_start: 0.2
+lr_cycle_three_phase: false
+batch_size: 32
+# gpu_ids:
+#   - 0
+#   - 1
+#   - 2
+#   - 3
+validation_split: 0.
+extra_val: valid
+no_amp: false
+smoothing: 0.
+torch_compile: false
+weight_decay: 0.033
+no_model_weight_decay: true
+ema_decay: 0.998
+mixup_alpha: 0.2
+accum_steps: 1
+top_k_models: 5
+use_optuna: false
+optuna_trials: 20
+wandb: profun-som-v5

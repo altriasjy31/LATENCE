@@ -1,0 +1,7 @@
+base: configs/evaluating_msa-v1/metafile.yml
+task: cellular_component
+num_classes: 2903
+netD: timm_tresnet_m
+trained_model: ema-fmax-highest.pth
+no_eval: false
+prediction_save: /root/autodl-tmp/rogo/data/target/pred_seqs/msa-v1-5-5/cco/ema-fmax-highest-a5.npy

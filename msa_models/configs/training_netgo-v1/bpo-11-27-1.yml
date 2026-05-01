@@ -1,0 +1,18 @@
+base: configs/training_netgo-v1/metafile.yml
+task: biological_process
+num_classes: 21814
+dataloader_num_workers: 10
+msa_max_size: -1
+netD: timm_ecaresnet101d
+optim: AMSGrad
+epochs: 140
+stop_epoch: 60
+lr: 0.0002
+lr_policy: cycle
+pct_start: 0.1
+batch_size: 32
+gpu_ids:
+  - 0
+validation_split: 0.
+extra_val: valid
+wandb: profun-som-v2

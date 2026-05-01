@@ -1,0 +1,10 @@
+base: configs/evaluating_netgo-v1/metafile.yml
+task: cellular_component
+num_classes: 2880
+msa_max_size: -1
+netD: timm_ecaresnetblur101d
+trained_model: ema-model-highest-rank1.pth,ema-model-highest-rank2.pth,ema-model-highest-rank3.pth,ema-model-highest-rank4.pth,ema-model-highest-rank5.pth
+batch_size: 8
+no_eval: false
+torch_compile: false
+prediction_save: /data0/Databases/GOA-S2F/data-netgo/target/pred_seqs/ng-v1-25-03-26/cc/ema-avgmodel-highest-rank12345.npy

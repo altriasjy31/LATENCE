@@ -1,0 +1,18 @@
+base: configs/training_netgo-v1/metafile.yml
+task: molecular_function
+num_classes: 6854
+dataloader_num_workers: 20
+msa_max_size: -1
+netD: timm_ecaresnet50d
+optim: AMSGrad
+epochs: 140
+stop_epoch: 128
+lr: 0.0002
+pct_start: 0.1
+batch_size: 32
+gpu_ids:
+  - 0
+  - 1
+validation_split: 0.1
+# extra_val: valid
+wandb: profun-som-v2

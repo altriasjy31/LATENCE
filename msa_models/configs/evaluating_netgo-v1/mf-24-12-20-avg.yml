@@ -1,0 +1,9 @@
+base: configs/evaluating_netgo-v1/metafile.yml
+task: molecular_function
+num_classes: 6854
+msa_max_size: -1
+netD: timm_ecaresnetblur101d
+trained_model: ema-fmax-highest.pth
+batch_size: 8
+no_eval: false
+prediction_save: /data0/Databases/GOA-S2F/data-netgo/target/pred_seqs/ng-v1-24-12-20/mf/ema-fmax-highest-a5.npy

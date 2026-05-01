@@ -1,0 +1,9 @@
+# train and saving ema weight
+base: configs/training_msa-v1/metafile.yml
+task: biological_process
+num_classes: 21312
+netD: timm_tresnet_m
+optim: AMSGrad
+lr: 0.0001
+batch_size: 32
+wandb: transformer-v1

@@ -1,0 +1,39 @@
+in_channels: 32
+out_channels_G: 32
+mode: train
+top_k: 40
+max_len: 2000
+dataloader_num_workers: 10
+msa_embedding_dim: 32
+msa_encoding_strategy: emb
+msa_max_size: 10000
+ngf: 64
+netG: resnet_4blocks
+no_antialias: false
+no_antialias_up: false
+ndf: 64
+netD: resnet50
+replace_stride_with_dilation: 
+  - false
+  - false
+  - false
+no_dropout: false
+normG: instance
+normD: batch
+no_ipr_input: true
+ipr_embed_dims: 2048
+init_type: xavier
+init_gain: 0.02
+gpu_ids: 
+  - 0
+loss: ASL
+optim: Adam
+weight_decay: 3e-6
+epochs: 100
+stop_epoch: 100
+lr_policy: cycle
+validation_split: 0.1
+smoothing: 0.
+shuffle: true
+torch_compile: false
+wandb: GeneralGO-MSA

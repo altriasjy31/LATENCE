@@ -1,0 +1,14 @@
+base: configs/evaluating_msa-v1/metafile.yml
+task: biological_process
+mode: ind_test
+num_classes: 21312
+msa_max_size: -1
+max_len: 2048
+top_k: 64
+netD: timm_ecaresnetblur101d
+trained_model: ema-model-highest-rank1.pth,ema-model-highest-rank2.pth,ema-model-highest-rank3.pth,ema-model-highest-rank4.pth,ema-model-highest-rank5.pth
+batch_size: 8
+no_eval: false
+torch_compile: false
+# prediction_save: /data0/Databases/GOA-S2F/data-sp/target/pred_seqs/sp-v1-25-10-22/bp/ema-avgmodel-highest-rank12345.npy
+prediction_save: null

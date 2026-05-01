@@ -1,0 +1,7 @@
+base: configs/evaluating_msa-v1/metafile.yml
+task: biological_process
+num_classes: 21814
+netD: timm_resnet50d
+trained_model: ema-fmax-highest.pth
+no_eval: false
+prediction_save: /root/autodl-tmp/GOA-S2F/data-netgo/target/pred_seqs/netgo-v1-11-27/bpo/ema-fmax-highest.npy

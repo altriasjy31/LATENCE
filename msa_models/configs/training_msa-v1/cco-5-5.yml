@@ -1,0 +1,8 @@
+base: configs/training_msa-v1/metafile.yml
+task: cellular_component
+num_classes: 2903
+netD: timm_tresnet_m
+optim: AMSGrad
+lr: 0.00015
+batch_size: 32
+wandb: transformer-v1
