@@ -154,6 +154,103 @@ class Arch(nn.Module):
 
         return logits
 
+    def _forward_msa_multi_view(
+        self,
+        x_encoded: Tensor,
+        view_params_list: T.List[T.Dict],
+        permute_dims: T.Tuple[int, int, int, int] = (0, 3, 2, 1),
+        return_embedding: bool = False,
+        return_format: str = "tuple",
+    ):
+        """
+        Multi-view MSA augmentation.
+
+        This method assumes x_encoded is already produced by self.pre_model(x).
+
+        It creates multiple augmented views from the same encoded MSA, concatenates
+        them on batch dimension, and performs only one pass through gnet/rnet.
+
+        Motivation:
+            Avoid doing two separate forwards through BatchNorm-containing rnet
+            before a single backward, which can trigger autograd version errors
+            due to in-place updates of BatchNorm running statistics.
+
+        Args:
+            x_encoded:
+                Encoded MSA tensor, usually [B, K, L, C].
+            view_params_list:
+                List of msa_view_params dictionaries. Each dict is passed to
+                aug.apply_msa_view_aug_encoded.
+            permute_dims:
+                Permutation used by _forward_encoded.
+            return_embedding:
+                Whether to return backbone embedding h.
+            return_format:
+                "tuple":
+                    return (logits_views, h_views) if return_embedding else logits_views,
+                    where logits_views is a tuple/list with one tensor per view.
+                "cat":
+                    return concatenated tensors directly.
+
+        Returns:
+            If return_format == "tuple":
+                return_embedding=False:
+                    (logits_v1, logits_v2, ...)
+                return_embedding=True:
+                    ((logits_v1, logits_v2, ...), (h_v1, h_v2, ...))
+
+            If return_format == "cat":
+                return_embedding=False:
+                    logits_cat
+                return_embedding=True:
+                    logits_cat, h_cat
+        """
+        if not isinstance(view_params_list, (list, tuple)):
+            raise TypeError(
+                f"view_params_list must be list/tuple, got {type(view_params_list)}"
+            )
+
+        if len(view_params_list) == 0:
+            raise ValueError("view_params_list must contain at least one view params dict")
+
+        views = []
+        for vp in view_params_list:
+            if vp is None:
+                # Optional identity view.
+                views.append(x_encoded)
+            else:
+                views.append(
+                    aug.apply_msa_view_aug_encoded(
+                        x_encoded,
+                        **vp,
+                    )
+                )
+
+        batch_size = x_encoded.shape[0]
+        x_cat = torch.cat(views, dim=0)
+
+        out = self._forward_encoded(
+            x_cat,
+            permute_dims=permute_dims,
+            return_embedding=return_embedding,
+        )
+
+        if return_format == "cat":
+            return out
+
+        if return_format != "tuple":
+            raise ValueError(f"Unknown return_format: {return_format}")
+
+        if return_embedding:
+            logits_cat, h_cat = out
+            logits_views = torch.split(logits_cat, batch_size, dim=0)
+            h_views = torch.split(h_cat, batch_size, dim=0)
+            return logits_views, h_views
+
+        logits_cat = out
+        logits_views = torch.split(logits_cat, batch_size, dim=0)
+        return logits_views
+
     def forward(
         self,
         x: Tensor,
@@ -163,21 +260,27 @@ class Arch(nn.Module):
         **kwargs,
     ):
         """
-        Three modes:
-    
+        Four modes:
+
         1. aug_params is None:
            normal forward.
-    
+
         2. aug_params contains "y":
            old mixup path, for compatibility with train.py.
-    
+
         3. aug_params["aug_type"] == "msa_view":
-           weak/strong MSA view augmentation for semi-supervised contrastive training.
+           single weak/strong MSA view augmentation for semi-supervised training.
+
+        4. aug_params["aug_type"] == "msa_multi_view":
+           multiple MSA views are generated from the same encoded MSA, concatenated
+           on batch dimension, and passed through gnet/rnet once. This is useful
+           when the downstream loss needs multiple views but rnet contains
+           BatchNorm layers.
         """
-    
+
         # Always encode raw MSA first.
         x = self.pre_model(x)
-    
+
         # ------------------------------------------------------------
         # Case 1: no augmentation
         # ------------------------------------------------------------
@@ -187,54 +290,81 @@ class Arch(nn.Module):
                 permute_dims=permute_dims,
                 return_embedding=return_embedding,
             )
-    
+
         # ------------------------------------------------------------
         # Case 2: old mixup path
         # Keep this for compatibility with train.py.
         # ------------------------------------------------------------
         if "y" in aug_params:
             y = aug_params["y"]
-    
+
             assert isinstance(y, Tensor), "Y must be a Tensor"
-    
+
             x_mix, y_mix, lam = aug.mixup_msa_data(
                 x,
                 y,
                 alpha=aug_params.get("mixup_alpha", 0.2),
             )
-    
+
             out = self._forward_encoded(
                 x_mix,
                 permute_dims=permute_dims,
                 return_embedding=return_embedding,
             )
-    
+
             if return_embedding:
                 logits, h = out
                 return logits, y_mix, h
-    
+
             return out, y_mix
-    
-        # ------------------------------------------------------------
-        # Case 3: MSA view augmentation path
-        # Used by exp_train.py.
-        # ------------------------------------------------------------
+
         aug_type = aug_params.get("aug_type", None)
-    
+
+        # ------------------------------------------------------------
+        # Case 3: single MSA view augmentation path
+        # Existing behavior. Keep for compatibility.
+        # ------------------------------------------------------------
         if aug_type == "msa_view":
             msa_view_params = aug_params.get("msa_view_params", {})
-    
+
             x_aug = aug.apply_msa_view_aug_encoded(
                 x,
                 **msa_view_params,
             )
-    
+
             return self._forward_encoded(
                 x_aug,
                 permute_dims=permute_dims,
                 return_embedding=return_embedding,
             )
-    
+
+        # ------------------------------------------------------------
+        # Case 4: multi-view MSA augmentation path
+        # New behavior. Used to avoid multiple BN forwards before backward.
+        # ------------------------------------------------------------
+        if aug_type == "msa_multi_view":
+            view_params_list = aug_params.get("views", None)
+
+            if view_params_list is None:
+                # Also support a more explicit alias.
+                view_params_list = aug_params.get("msa_view_params_list", None)
+
+            if view_params_list is None:
+                raise ValueError(
+                    "aug_type='msa_multi_view' requires aug_params['views'] "
+                    "or aug_params['msa_view_params_list']"
+                )
+
+            return_format = aug_params.get("return_format", "tuple")
+
+            return self._forward_msa_multi_view(
+                x_encoded=x,
+                view_params_list=view_params_list,
+                permute_dims=permute_dims,
+                return_embedding=return_embedding,
+                return_format=return_format,
+            )
+
         # ------------------------------------------------------------
         # Unknown aug_params
         # ------------------------------------------------------------
@@ -245,7 +375,7 @@ class Arch(nn.Module):
                 permute_dims=permute_dims,
                 return_embedding=return_embedding,
             )
-    
+
         raise ValueError(f"Unknown aug_type: {aug_type}")
 
 

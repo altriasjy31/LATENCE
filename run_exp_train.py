@@ -25,6 +25,8 @@ Important:
 
 from __future__ import annotations
 
+import subprocess
+
 import os
 import sys
 import json
@@ -56,6 +58,8 @@ EXP_TRAIN = ROOT / "experiments" / "exp_train.py"
 # Allowed:
 #   "mf", "bp", "cc"
 #   "molecular_function", "biological_process", "cellular_component"
+# TASK = "cc"
+# TASK = "mf"
 TASK = "bp"
 
 
@@ -70,7 +74,7 @@ INIT_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_ra
 #   data["exp_train"][task]
 # optionally:
 #   data["test"][task] or validation split
-FILE_ADDRESS = ROOT / "data" / "dataset_with_exp_train_pseudo.pkl"
+FILE_ADDRESS = ROOT / "data" / "unidata_with_exp_train_pseudo.pkl"
 
 # MSA working directory used by MSADataset.
 # WORKING_ADDRESS = ROOT / "data" / "sprot_2204_MSA"
@@ -79,13 +83,13 @@ WORKING_ADDRESS = ROOT / "data" / "sprot_2204_MSA_bin" / "index.pkl"
 # Optional IC and hierarchy files.
 # If IC_PATH is None, exp_train.py computes IC from train labels.
 IC_PATH = None
-GO_EDGES_PATH = None
+GO_EDGES_PATH = ROOT / "data" / "go_edges" / f"go_edges_{TASK}.pt"
 
 
 # ---------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------
-RUN_TAG = f"{TASK}_semisup_v1"
+RUN_TAG = f"{TASK}_semisup_multi_node_v1"
 
 OUTPUT_ROOT = ROOT / "outputs" / "exp_train"
 OUTPUT_DIR = OUTPUT_ROOT / RUN_TAG
@@ -100,16 +104,16 @@ FAIL_IF_OUTPUT_EXISTS = False
 # ---------------------------------------------------------------------
 # CUDA_VISIBLE_DEVICES is applied before importing torch via exp_train.py.
 # Use "0" for one GPU, "1" for another GPU, "0,1" if you later extend to multi-GPU.
-CUDA_VISIBLE_DEVICES = "1,2,3"
-
-# exp_train.py --device
-# Usually keep "auto".
+CUDA_VISIBLE_DEVICES = "0,1,2,3"
 DEVICE = "auto"
 
-# exp_train.py --gpu_ids
-# In a single-process run with CUDA_VISIBLE_DEVICES="0", this should usually be "0".
-# Use "-1" for CPU.
-GPU_IDS = "0"
+# DDP 下必须用 auto，使每个 rank 使用 LOCAL_RANK 对应的 visible GPU。
+GPU_IDS = "auto"
+
+USE_DDP = True
+NPROC_PER_NODE = 4
+DDP_STANDALONE = True
+MASTER_PORT = 29531
 
 
 # ---------------------------------------------------------------------
@@ -134,11 +138,44 @@ TORCH_COMPILE = False
 # ---------------------------------------------------------------------
 SEED = 3407
 
-EPOCHS = 20
+# EPOCHS = 20
+EPOCHS = 30
 BATCH_SIZE = 24
 PSEUDO_BATCH_SIZE = 20
 EVAL_BATCH_SIZE = 8
 DATALOADER_NUM_WORKERS = 4
+
+# Binary MSA loader
+# ---------------------------------------------------------------------
+# 当前最保守配置：和你现在一致，完整读 MSA 后随机采样。
+MSA_READ_MODE = "full"
+MSA_SAMPLE_STRATEGY = "random"
+
+# 如果 build_msa_binary.py 阶段用了 --shuffle-rows，可以测试：
+#   MSA_READ_MODE = "block"
+#   MSA_SAMPLE_STRATEGY = "block"
+# 这样会减少随机读和完整 MSA 读取，但语义依赖预处理阶段已打乱非 query 行。
+MSA_SHUFFLE_ROWS_AT_GETITEM = True
+
+# 注意：这是每个 DataLoader worker 的 cache。
+# DDP 总上限近似：
+#   ranks * loaders_per_rank * workers_per_loader * MSA_CACHE_GB
+#
+# 例如 3 ranks, true+pseudo 两个 loader, 每个 4 workers, MSA_CACHE_GB=4:
+#   3 * 2 * 4 * 4GB = 96GB CPU cache 上限
+#
+# 不建议继续硬编码 64GB。
+MSA_CACHE_GB = 4.0
+MSA_MAX_OPEN_FILES = 256
+
+SAMPLE_SEED = 1
+SAMPLER_SEED = 1
+
+PREFETCH_FACTOR = 2
+PERSISTENT_WORKERS = True
+
+DDP_FIND_UNUSED_PARAMETERS = False
+DDP_STATIC_GRAPH = False
 
 PIN_MEMORY = True
 DROP_LAST = False
@@ -169,8 +206,8 @@ PROJ_DROPOUT = 0.1
 # Semi-supervised losses
 # ---------------------------------------------------------------------
 LAMBDA_U = 0.5
-LAMBDA_C = 0.05
-LAMBDA_H = 0.0
+LAMBDA_C = 0.1
+LAMBDA_H = 0.001
 
 # Important for GO pseudo labels:
 # True means pseudo BCE only supervises pseudo-positive terms.
@@ -191,7 +228,7 @@ W_PSEUDO_PSEUDO = 0.4
 # IC / hierarchy
 # ---------------------------------------------------------------------
 IC_ALPHA = 1.0
-IC_MIN_COUNT = 2
+IC_MIN_COUNT = 1
 
 
 # ---------------------------------------------------------------------
@@ -342,17 +379,17 @@ def _validate_paths():
     if GO_EDGES_PATH is not None and not Path(GO_EDGES_PATH).is_file():
         raise FileNotFoundError(f"GO_EDGES_PATH not found: {GO_EDGES_PATH}")
 
-
 def _validate_output_dir():
     output_dir = Path(OUTPUT_DIR)
 
-    if output_dir.exists() and any(output_dir.iterdir()) and FAIL_IF_OUTPUT_EXISTS:
-        raise FileExistsError(
-            f"OUTPUT_DIR already exists and is not empty:\n"
-            f"  {output_dir}\n"
-            f"To reuse it, set FAIL_IF_OUTPUT_EXISTS = False, "
-            f"or change RUN_TAG / OUTPUT_DIR."
-        )
+    if _is_rank0_env():
+        if output_dir.exists() and any(output_dir.iterdir()) and FAIL_IF_OUTPUT_EXISTS:
+            raise FileExistsError(
+                f"OUTPUT_DIR already exists and is not empty:\n"
+                f"  {output_dir}\n"
+                f"To reuse it, set FAIL_IF_OUTPUT_EXISTS = False, "
+                f"or change RUN_TAG / OUTPUT_DIR."
+            )
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -379,6 +416,62 @@ def _validate_semantics():
             "PSEUDO_POS_ONLY=False. This treats unannotated pseudo-label terms "
             "as negatives. For GO annotation this assumption is often unsafe."
         )
+
+def _rank_from_env() -> int:
+    return int(os.environ.get("RANK", "0"))
+
+
+def _is_rank0_env() -> bool:
+    return _rank_from_env() == 0
+
+
+def _under_torchrun() -> bool:
+    return "WORLD_SIZE" in os.environ and int(os.environ.get("WORLD_SIZE", "1")) > 1
+
+
+def _is_ddp_child_arg() -> bool:
+    return "--ddp-child" in sys.argv
+
+
+def _should_launch_ddp() -> bool:
+    return bool(USE_DDP) and int(NPROC_PER_NODE) > 1 and not _under_torchrun() and not _is_ddp_child_arg()
+
+
+def _launch_ddp_and_exit():
+    env = os.environ.copy()
+
+    if CUDA_VISIBLE_DEVICES is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(CUDA_VISIBLE_DEVICES)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+    ]
+
+    if DDP_STANDALONE:
+        cmd.append("--standalone")
+    else:
+        cmd.extend(["--master_port", str(MASTER_PORT)])
+
+    cmd.extend(
+        [
+            "--nproc_per_node",
+            str(NPROC_PER_NODE),
+            str(Path(__file__).resolve()),
+            "--ddp-child",
+        ]
+    )
+
+    print("=" * 80)
+    print("[DDP launcher]")
+    print("CUDA_VISIBLE_DEVICES =", env.get("CUDA_VISIBLE_DEVICES"))
+    print("Command:")
+    print(" ".join(cmd))
+    print("=" * 80)
+
+    ret = subprocess.run(cmd, env=env)
+    raise SystemExit(ret.returncode)
 
 
 def build_args() -> argparse.Namespace:
@@ -422,6 +515,21 @@ def build_args() -> argparse.Namespace:
         dataloader_num_workers=int(DATALOADER_NUM_WORKERS),
         pin_memory=bool(PIN_MEMORY),
         drop_last=bool(DROP_LAST),
+
+        # Binary MSA loader
+        msa_read_mode=str(MSA_READ_MODE),
+        msa_sample_strategy=str(MSA_SAMPLE_STRATEGY),
+        msa_shuffle_rows_at_getitem=bool(MSA_SHUFFLE_ROWS_AT_GETITEM),
+        msa_cache_gb=float(MSA_CACHE_GB),
+        msa_max_open_files=int(MSA_MAX_OPEN_FILES),
+        sample_seed=int(SAMPLE_SEED),
+        sampler_seed=int(SAMPLER_SEED),
+        prefetch_factor=int(PREFETCH_FACTOR),
+        persistent_workers=bool(PERSISTENT_WORKERS),
+
+        # DDP
+        ddp_find_unused_parameters=bool(DDP_FIND_UNUSED_PARAMETERS),
+        ddp_static_graph=bool(DDP_STATIC_GRAPH),
 
         lr=float(LR),
         min_lr=float(MIN_LR),
@@ -521,6 +629,13 @@ def print_run_summary(args: argparse.Namespace):
     print(f"PSEUDO_POS_ONLY      = {args.pseudo_pos_only}")
     print(f"DO_VALIDATION         = {not args.no_validation}")
     print(f"VAL_MODE             = {args.val_mode}")
+    print(f"USE_DDP              = {USE_DDP}")
+    print(f"NPROC_PER_NODE       = {NPROC_PER_NODE}")
+    print(f"MSA_READ_MODE        = {args.msa_read_mode}")
+    print(f"MSA_SAMPLE_STRATEGY  = {args.msa_sample_strategy}")
+    print(f"MSA_CACHE_GB         = {args.msa_cache_gb}")
+    print(f"PREFETCH_FACTOR      = {args.prefetch_factor}")
+    print(f"PERSISTENT_WORKERS   = {args.persistent_workers}")
     print("=" * 80)
 
 
@@ -540,24 +655,29 @@ def prepare_imports():
 
 def main():
     _validate_paths()
-    _validate_output_dir()
     _validate_semantics()
+
+    # Parent process: launch torchrun and exit.
+    if _should_launch_ddp():
+        _launch_ddp_and_exit()
+
+    _validate_output_dir()
 
     args = build_args()
 
-    if PRINT_CONFIG:
+    if PRINT_CONFIG and _is_rank0_env():
         print_run_summary(args)
 
-    if SAVE_RUNNER_CONFIG:
+    if SAVE_RUNNER_CONFIG and _is_rank0_env():
         _save_json(vars(args), Path(args.output_dir) / "runner_config.json")
 
     if DRY_RUN:
-        print("[Dry run] Configuration built successfully. Exit without training.")
+        if _is_rank0_env():
+            print("[Dry run] Configuration built successfully. Exit without training.")
         return
 
     prepare_imports()
 
-    # Import after CUDA_VISIBLE_DEVICES and sys.path are configured.
     from experiments.exp_train import train_one_task, normalize_task
 
     args.task = normalize_task(args.task)
