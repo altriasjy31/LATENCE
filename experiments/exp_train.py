@@ -2229,17 +2229,10 @@ def train_one_task(args: argparse.Namespace):
                     has_pos = ic_mass > 0
     
                     if bool(has_pos.any().item()):
-                        z_con = torch.cat(
-                            [
-                                z_w[has_pos],
-                                z_s[has_pos],
-                            ],
-                            dim=0,
-                        )
-    
-                        labels_for_con = torch.cat([y_t, y_u], dim=0)
-                        masks_for_con = torch.cat([mask_t, mask_u], dim=0)
-                        confs_for_con = torch.cat([conf_t, conf_u], dim=0)
+                        z_con = torch.cat([z_w[has_pos], z_s[has_pos]], dim=0)
+                        labels_con = labels_for_con[has_pos].repeat(2, 1)
+                        masks_con = masks_for_con[has_pos].repeat(2, 1)
+                        confs_con = confs_for_con[has_pos].repeat(2, 1)
                         is_true_con = is_true[has_pos].repeat(2)
     
                         z_con, labels_con, masks_con, confs_con, is_true_con = subsample_contrastive(
@@ -2251,11 +2244,8 @@ def train_one_task(args: argparse.Namespace):
                             max_n=int(args.contrast_max_samples_per_rank),
                         )
                         
-                        if (
-                            bool(args.contrast_all_gather)
-                            and dist_is_initialized()
-                            and z_con.shape[0] > 0
-                        ):
+                         if bool(args.contrast_all_gather) and is_dist_avail_and_initialized():
+                            # Compress labels/masks/confs before gather.
                             labels_local = labels_con.bool()
                             masks_local = masks_con.bool()
                             confs_local = confs_con.to(torch.float16)
@@ -2270,17 +2260,14 @@ def train_one_task(args: argparse.Namespace):
                                 labels_local,
                                 pad_value=False,
                             )
-                        
                             masks_bank, _, _ = ddp_all_gather_padded(
                                 masks_local,
                                 pad_value=False,
                             )
-                        
                             confs_bank, _, _ = ddp_all_gather_padded(
                                 confs_local,
                                 pad_value=0.0,
                             )
-                        
                             is_true_bank, _, _ = ddp_all_gather_padded(
                                 is_true_local,
                                 pad_value=0,
@@ -2299,7 +2286,6 @@ def train_one_task(args: argparse.Namespace):
                                 conf_bank=confs_bank,
                                 local_start=local_start,
                             )
-                        
                         else:
                             loss_con = go_con_loss(
                                 z=z_con,
