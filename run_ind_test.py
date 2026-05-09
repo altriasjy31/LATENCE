@@ -72,24 +72,43 @@ WORKING_ADDRESS = ROOT / "data" / "ind_MSA_bin" / "index.pkl"
 #   outputs/exp_train/<RUN_TAG>/semisup_full_last.pt
 #   outputs/exp_train/<RUN_TAG>/semisup_full_epoch30.pt
 #
+
+
 # If DO_VALIDATION=False during training, there may be no "best" checkpoint.
 TRAIN_RUN_TAG = f"{TASK}_semisup_ema_teacher_v1"
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
 # Trained / student checkpoint.
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
 # CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
-CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_ema_backbone_epoch5.pt"
+# CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_ema_backbone_epoch5.pt"
+CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_ema_backbone_last.pt"
+# "student", "ema", "teacher", "other"
+CKPT_ROLE = "ema"
+
+# if you want to test raw student：
+
+# CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
+# CKPT_ROLE = "student"
+
+# if you want to test the original teacher only：
+
+# CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
+# CKPT_ROLE = "teacher"
+# TEACHER_CKPT = None
 
 # Teacher checkpoint.
 # Set to None to disable teacher-student averaging.
 TEACHER_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
 # TEACHER_CKPT = None
 
+
+#
+
 # Probability-average ensemble weights.
 # With 1.0 / 1.0, final prediction is:
 #   0.5 * p_student + 0.5 * p_teacher
-ENSEMBLE_STUDENT_WEIGHT = 1.0
-ENSEMBLE_TEACHER_WEIGHT = 1.0
+ENSEMBLE_STUDENT_WEIGHT = 0.2
+ENSEMBLE_TEACHER_WEIGHT = 0.8
 
 # Evaluation split inside FILE_ADDRESS.
 EVAL_MODE = "ind_test"
@@ -378,6 +397,7 @@ def build_args() -> argparse.Namespace:
         # Required
         model_config=str(Path(MODEL_CONFIG)),
         ckpt=str(Path(CKPT)),
+        ckpt_role=str(CKPT_ROLE),
         teacher_ckpt=(
             None if TEACHER_CKPT is None else str(Path(TEACHER_CKPT))
         ),
@@ -452,6 +472,7 @@ def print_run_summary(args: argparse.Namespace):
     print(f"MODE                    = {args.mode}")
     print(f"MODEL_CONFIG            = {args.model_config}")
     print(f"CKPT                    = {args.ckpt}")
+    print(f"CKPT_ROLE              = {args.ckpt_role}")
     print(f"TEACHER_CKPT            = {args.teacher_ckpt}")
     print(f"ENSEMBLE_STUDENT_WEIGHT = {args.ensemble_student_weight}")
     print(f"ENSEMBLE_TEACHER_WEIGHT = {args.ensemble_teacher_weight}")

@@ -884,6 +884,8 @@ def evaluate_one_task(args: argparse.Namespace):
 
             # Backward-compatible field.
             "checkpoint": str(Path(args.ckpt)),
+            "checkpoint_role": str(args.ckpt_role),
+            "primary_checkpoint": str(Path(args.ckpt)),
 
             # Explicit fields.
             "student_checkpoint": str(Path(args.ckpt)),
@@ -892,12 +894,12 @@ def evaluate_one_task(args: argparse.Namespace):
             "ensemble_average_space": "probability",
             "ensemble_weights": (
                 {
-                    "student": float(normalized_model_weights[0]),
+                    str(args.ckpt_role): float(normalized_model_weights[0]),
                     "teacher": float(normalized_model_weights[1]),
                 }
                 if ensemble_enabled
                 else {
-                    "student": 1.0,
+                    str(args.ckpt_role): 1.0,
                 }
             ),
 
@@ -1040,6 +1042,13 @@ def build_argparser():
     parser.add_argument("--strict_shape", dest="strict_shape", action="store_true")
     parser.add_argument("--no_strict_shape", dest="strict_shape", action="store_false")
     parser.set_defaults(strict_shape=True)
+    parser.add_argument(
+        "--ckpt_role",
+        type=str,
+        default="student",
+        choices=["student", "ema", "teacher", "other"],
+        help="Role of --ckpt, only used for logging/metadata.",
+    )
 
     # Metrics
     parser.add_argument("--report_threshold", dest="report_threshold", action="store_true")

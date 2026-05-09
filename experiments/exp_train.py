@@ -64,6 +64,7 @@ sys.path.insert(0, str(MSA_ROOT))
 from models import Arch  # noqa: E402
 # import experiments.msa as D  # noqa: E402
 from experiments.msabin import MSABinaryDataset
+from experiments.msaprob import PseudoProbDataset
 from loss_functions.loss import AsymmetricLossOptimized
 
 
@@ -113,6 +114,17 @@ def normalize_task(task: str) -> str:
     if task not in TASKS:
         raise ValueError(f"Unknown task: {task}")
     return TASKS[task]
+
+def clean_optional_path(x):
+    if x is None:
+        return None
+
+    s = str(x).strip()
+
+    if s == "" or s.lower() in {"none", "null"}:
+        return None
+
+    return s
 
 
 def build_opt_from_config(args: argparse.Namespace) -> SimpleNamespace:
@@ -245,6 +257,10 @@ def get_device(device_arg: str) -> torch.device:
     if device_arg == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(device_arg)
+
+# ---------------------------------------------------------------------
+# Distributed utils
+# ---------------------------------------------------------------------
 
 def dist_is_initialized() -> bool:
     return dist.is_available() and dist.is_initialized()
@@ -413,6 +429,75 @@ def parse_gpu_ids_arg(
 
     return []
 
+def ddp_all_gather_padded(x: torch.Tensor, pad_value=0):
+    if not dist_is_initialized():
+        sizes = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
+        return x, sizes, 0
+
+    world_size = get_world_size()
+    rank = get_rank()
+
+    local_n = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
+    sizes_list = [torch.zeros_like(local_n) for _ in range(world_size)]
+    dist.all_gather(sizes_list, local_n)
+
+    sizes = torch.cat(sizes_list, dim=0)
+    max_n = int(sizes.max().item())
+
+    if x.shape[0] < max_n:
+        pad_shape = (max_n - x.shape[0],) + tuple(x.shape[1:])
+        pad = torch.full(
+            pad_shape,
+            fill_value=pad_value,
+            dtype=x.dtype,
+            device=x.device,
+        )
+        x_pad = torch.cat([x, pad], dim=0)
+    else:
+        x_pad = x
+
+    gathered_pad = [torch.empty_like(x_pad) for _ in range(world_size)]
+    dist.all_gather(gathered_pad, x_pad)
+
+    gathered = []
+    for r, t in enumerate(gathered_pad):
+        gathered.append(t[: int(sizes[r].item())])
+
+    gathered = torch.cat(gathered, dim=0)
+
+    return gathered, sizes, rank
+
+
+def gather_bank_with_local_grad(x: torch.Tensor, pad_value=0):
+    """
+    Remote ranks are detached.
+    Local slice keeps gradient.
+
+    This gives local-anchor/global-bank contrastive learning
+    without backpropagating through remote rank tensors.
+    """
+    if not dist_is_initialized():
+        sizes = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
+        return x, sizes, 0, 0
+
+    gathered, sizes, rank = ddp_all_gather_padded(
+        x.detach(),
+        pad_value=pad_value,
+    )
+
+    start = int(sizes[:rank].sum().item())
+    end = start + x.shape[0]
+
+    gathered = torch.cat(
+        [
+            gathered[:start],
+            x,
+            gathered[end:],
+        ],
+        dim=0,
+    )
+
+    return gathered, sizes, rank, start
 
 # ---------------------------------------------------------------------
 # Dataset helpers
@@ -529,6 +614,23 @@ def unpack_batch(batch):
     proteins, X = split_input(input_data)
     return proteins, X, y
 
+def unpack_pseudo_batch(batch):
+    proteins, X, y_pack = unpack_batch(batch)
+
+    prob = None
+
+    if isinstance(y_pack, dict):
+        if "hard_y" not in y_pack:
+            raise KeyError("Pseudo batch dict must contain key 'hard_y'")
+
+        y = y_pack["hard_y"]
+        prob = y_pack.get("prob", None)
+
+    else:
+        y = y_pack
+
+    return proteins, X, y, prob
+
 
 def move_to_device(*xs, device: torch.device):
     out = []
@@ -548,6 +650,44 @@ def combine_proteins(p1, p2):
     if p2 is None:
         return list(p1)
     return list(p1) + list(p2)
+
+def subsample_contrastive(
+    z,
+    y,
+    mask,
+    conf,
+    is_true,
+    max_n: int,
+):
+    if max_n is None or int(max_n) <= 0 or z.shape[0] <= int(max_n):
+        return z, y, mask, conf, is_true
+
+    max_n = int(max_n)
+
+    idx_true = torch.where(is_true.bool())[0]
+    idx_pseudo = torch.where(~is_true.bool())[0]
+
+    keep = []
+
+    n_true_keep = min(len(idx_true), max_n // 2)
+
+    if n_true_keep > 0:
+        perm = torch.randperm(len(idx_true), device=z.device)[:n_true_keep]
+        keep.append(idx_true[perm])
+
+    remain = max_n - n_true_keep
+    n_pseudo_keep = min(len(idx_pseudo), remain)
+
+    if n_pseudo_keep > 0:
+        perm = torch.randperm(len(idx_pseudo), device=z.device)[:n_pseudo_keep]
+        keep.append(idx_pseudo[perm])
+
+    if len(keep) == 0:
+        return z[:0], y[:0], mask[:0], conf[:0], is_true[:0]
+
+    idx = torch.cat(keep, dim=0)
+
+    return z[idx], y[idx], mask[idx], conf[idx], is_true[idx]
 
 
 def build_msa_aug_params(opt, strength: str):
@@ -1124,7 +1264,23 @@ def masked_bce_with_logits(
     mask: torch.Tensor,
     conf: Optional[torch.Tensor] = None,
     pos_only: bool = True,
+    reduction_mode: str = "weighted_mean",
 ):
+    """
+    reduction_mode:
+        weighted_mean:
+            (raw * weight).sum() / weight.sum()
+            当前默认，数值较小。
+
+        batch_mean:
+            (raw * weight).sum() / batch_size
+            pseudo loss 会随每个 protein 的 pseudo positive 数量增加而增大。
+
+        sum:
+            (raw * weight).sum()
+            不推荐，尺度太大。
+    """
+    logits = logits.float()
     target = target.float()
     mask = mask.float()
 
@@ -1136,10 +1292,31 @@ def masked_bce_with_logits(
     if pos_only:
         mask = mask * (target > 0.5).float()
 
-    raw = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    raw = F.binary_cross_entropy_with_logits(
+        logits,
+        target,
+        reduction="none",
+    )
+
     weight = mask * conf
-    denom = weight.sum().clamp_min(1.0)
-    return (raw * weight).sum() / denom
+    numerator = (raw * weight).sum()
+
+    if reduction_mode == "weighted_mean":
+        denom = weight.sum().clamp_min(1.0)
+        return numerator / denom
+
+    if reduction_mode == "batch_mean":
+        denom = torch.tensor(
+            logits.shape[0],
+            device=logits.device,
+            dtype=logits.dtype,
+        ).clamp_min(1.0)
+        return numerator / denom
+
+    if reduction_mode == "sum":
+        return numerator
+
+    raise ValueError(f"Unknown reduction_mode: {reduction_mode}")
 
 
 class GOAwareSupConLoss(nn.Module):
@@ -1283,14 +1460,170 @@ class GOAwareSupConLoss(nn.Module):
 
         return loss_per_anchor[valid].mean()
 
+class GOAwareSupConLocalGlobalLoss(nn.Module):
+    def __init__(
+        self,
+        ic: torch.Tensor,
+        tau: float = 0.1,
+        min_r: float = 1e-6,
+        w_true_pseudo: float = 0.7,
+        w_pseudo_pseudo: float = 0.4,
+        eps: float = 1e-8,
+    ):
+        super().__init__()
+        self.register_buffer("ic", ic.float())
+        self.tau = tau
+        self.min_r = min_r
+        self.w_true_pseudo = w_true_pseudo
+        self.w_pseudo_pseudo = w_pseudo_pseudo
+        self.eps = eps
+
+    def forward(
+        self,
+        z_anchor: torch.Tensor,
+        y_anchor: torch.Tensor,
+        is_true_anchor: torch.Tensor,
+        mask_anchor: torch.Tensor,
+        conf_anchor: torch.Tensor,
+        z_bank: torch.Tensor,
+        y_bank: torch.Tensor,
+        is_true_bank: torch.Tensor,
+        mask_bank: torch.Tensor,
+        conf_bank: torch.Tensor,
+        local_start: int = 0,
+    ):
+        if z_anchor.shape[0] <= 0 or z_bank.shape[0] <= 1:
+            return z_anchor.float().sum() * 0.0
+
+        device = z_anchor.device
+        ic = self.ic.to(device=device, dtype=torch.float32)
+
+        z_anchor = F.normalize(z_anchor.float(), dim=-1)
+        z_bank = F.normalize(z_bank.float(), dim=-1)
+
+        y_anchor = y_anchor.float()
+        y_bank = y_bank.float()
+        mask_anchor = mask_anchor.float()
+        mask_bank = mask_bank.float()
+        conf_anchor = conf_anchor.float()
+        conf_bank = conf_bank.float()
+
+        pos_anchor = ((y_anchor > 0.5) & (mask_anchor > 0.5)).float()
+        pos_bank = ((y_bank > 0.5) & (mask_bank > 0.5)).float()
+
+        anchor_ic = pos_anchor * ic[None, :]
+        bank_ic = pos_bank * ic[None, :]
+
+        inter = anchor_ic @ pos_bank.T
+        size_a = anchor_ic.sum(dim=1)
+        size_b = bank_ic.sum(dim=1)
+        union = size_a[:, None] + size_b[None, :] - inter
+
+        r = inter / union.clamp_min(self.eps)
+        r = torch.where(r >= self.min_r, r, torch.zeros_like(r))
+
+        na = z_anchor.shape[0]
+        ng = z_bank.shape[0]
+
+        self_idx = torch.arange(na, device=device) + int(local_start)
+        valid_self = self_idx < ng
+
+        if valid_self.any():
+            r[
+                torch.arange(na, device=device)[valid_self],
+                self_idx[valid_self],
+            ] = 0.0
+
+        conf_mass_a = (conf_anchor * pos_anchor * ic[None, :]).sum(dim=1)
+        conf_den_a = (pos_anchor * ic[None, :]).sum(dim=1).clamp_min(self.eps)
+        sample_conf_a = conf_mass_a / conf_den_a
+
+        conf_mass_b = (conf_bank * pos_bank * ic[None, :]).sum(dim=1)
+        conf_den_b = (pos_bank * ic[None, :]).sum(dim=1).clamp_min(self.eps)
+        sample_conf_b = conf_mass_b / conf_den_b
+
+        sample_conf_a = torch.where(
+            conf_den_a > 0,
+            sample_conf_a,
+            torch.zeros_like(sample_conf_a),
+        )
+
+        sample_conf_b = torch.where(
+            conf_den_b > 0,
+            sample_conf_b,
+            torch.zeros_like(sample_conf_b),
+        )
+
+        sample_conf_a = torch.where(
+            is_true_anchor.bool(),
+            torch.ones_like(sample_conf_a),
+            sample_conf_a,
+        )
+
+        sample_conf_b = torch.where(
+            is_true_bank.bool(),
+            torch.ones_like(sample_conf_b),
+            sample_conf_b,
+        )
+
+        true_a = is_true_anchor.bool()[:, None]
+        true_b = is_true_bank.bool()[None, :]
+
+        pair_type_weight = torch.ones_like(r)
+
+        mixed = true_a ^ true_b
+        pair_type_weight = torch.where(
+            mixed,
+            torch.full_like(pair_type_weight, self.w_true_pseudo),
+            pair_type_weight,
+        )
+
+        pseudo_pseudo = (~true_a) & (~true_b)
+        pair_type_weight = torch.where(
+            pseudo_pseudo,
+            torch.full_like(pair_type_weight, self.w_pseudo_pseudo),
+            pair_type_weight,
+        )
+
+        pair_conf = torch.sqrt(
+            sample_conf_a[:, None].clamp_min(0.0)
+            * sample_conf_b[None, :].clamp_min(0.0)
+        )
+
+        weights = r * pair_type_weight * pair_conf
+
+        row_sum = weights.sum(dim=1, keepdim=True)
+        valid = row_sum.squeeze(1) > self.eps
+
+        if valid.sum() == 0:
+            return z_anchor.float().sum() * 0.0
+
+        pi = weights / row_sum.clamp_min(self.eps)
+
+        logits = z_anchor @ z_bank.T / self.tau
+        logits = logits - logits.max(dim=1, keepdim=True).values.detach()
+
+        if valid_self.any():
+            logits[
+                torch.arange(na, device=device)[valid_self],
+                self_idx[valid_self],
+            ] = -1e9
+
+        log_prob = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+        loss_per_anchor = -(pi * log_prob).sum(dim=1)
+
+        return loss_per_anchor[valid].mean()
+
 
 def hierarchy_violation_loss(logits: torch.Tensor, edges: Optional[torch.Tensor]):
     if edges is None or edges.numel() == 0:
-        return logits.sum() * 0.0
+        return logits.float().sum() * 0.0
 
-    probs = torch.sigmoid(logits)
+    probs = torch.sigmoid(logits.float())
+
     child = edges[:, 0]
     parent = edges[:, 1]
+
     return F.relu(probs[:, child] - probs[:, parent]).mean()
 
 
@@ -1382,6 +1715,85 @@ def pseudo_conf_from_labels(
         return torch.ones_like(pseudo_y)
     raise ValueError(f"Unknown pseudo confidence mode: {mode}")
 
+def build_pseudo_supervision(
+    y_u: torch.Tensor,
+    prob_u: Optional[torch.Tensor],
+    args: argparse.Namespace,
+    ic_device: torch.Tensor,
+):
+    """
+    Build pseudo target / mask / confidence.
+
+    Recommended modes:
+
+    pseudo_prob_target = "hard":
+        target = hard pseudo label
+        conf   = teacher probability
+        mask   = pseudo positive set
+
+    pseudo_prob_target = "soft_pos":
+        target = teacher probability
+        conf   = teacher probability
+        mask   = pseudo positive set
+
+    For current issue where pseudo loss quickly vanishes, "soft_pos" is worth testing.
+    """
+
+    y_hard = y_u.float()
+
+    if bool(args.pseudo_pos_only):
+        mask = (y_hard > 0.5).float()
+    else:
+        mask = torch.ones_like(y_hard)
+
+    pseudo_min_ic = float(getattr(args, "pseudo_min_ic", 0.0))
+
+    if pseudo_min_ic >= 0.0:
+        if ic_device.numel() != y_hard.shape[1]:
+            raise ValueError(
+                f"IC dimension mismatch: ic={ic_device.shape}, y={y_hard.shape}"
+            )
+
+        term_keep = (ic_device > pseudo_min_ic).float()
+        mask = mask * term_keep[None, :]
+
+    if prob_u is None:
+        target = y_hard
+        conf = torch.ones_like(y_hard)
+
+    else:
+        p = prob_u.float().clamp(0.0, 1.0)
+
+        if p.shape != y_hard.shape:
+            raise ValueError(
+                f"Pseudo prob shape mismatch: prob={p.shape}, y={y_hard.shape}"
+            )
+
+        min_conf = float(getattr(args, "pseudo_prob_min_conf", 0.0))
+        if min_conf > 0.0:
+            mask = mask * (p >= min_conf).float()
+
+        conf_power = float(getattr(args, "pseudo_prob_conf_power", 1.0))
+        if conf_power <= 0.0:
+            conf = torch.ones_like(p)
+        else:
+            conf = p.pow(conf_power)
+
+        target_mode = str(getattr(args, "pseudo_prob_target", "hard"))
+
+        if target_mode == "hard":
+            target = y_hard
+
+        elif target_mode == "soft_pos":
+            target = p
+
+        else:
+            raise ValueError(f"Unknown pseudo_prob_target: {target_mode}")
+
+    conf = conf * (mask > 0).float()
+
+    return target, mask, conf
+
 
 # ---------------------------------------------------------------------
 # Training
@@ -1423,12 +1835,44 @@ def train_one_task(args: argparse.Namespace):
         need_proteins=args.need_proteins,
     )
 
-    pseudo_dataset = build_msa_dataset(
+    pseudo_base_dataset = build_msa_dataset(
         opt=opt,
         mode="exp_train",
         task=task,
         need_proteins=args.need_proteins,
     )
+    
+    pseudo_prob_path = clean_optional_path(getattr(args, "pseudo_prob_path", None))
+    args.pseudo_prob_path = pseudo_prob_path
+    
+    if pseudo_prob_path is not None:
+        pseudo_dataset = PseudoProbDataset(
+            base_dataset=pseudo_base_dataset,
+            metadata_file=args.file_address,
+            mode="exp_train",
+            task=task,
+            prob_path=pseudo_prob_path,
+            num_classes=args.num_classes,
+        )
+    
+        if is_main_process():
+            print(
+                "[Pseudo prob] enabled: "
+                f"path={pseudo_prob_path}, "
+                f"shape={pseudo_dataset.prob_shape}, "
+                f"dtype={pseudo_dataset.prob_dtype}, "
+                f"target={args.pseudo_prob_target}, "
+                f"conf_power={args.pseudo_prob_conf_power}, "
+                f"min_conf={args.pseudo_prob_min_conf}, "
+                f"pseudo_min_ic={args.pseudo_min_ic}, "
+                f"loss_reduction={args.pseudo_loss_reduction}"
+            )
+    
+    else:
+        pseudo_dataset = pseudo_base_dataset
+    
+        if is_main_process():
+            print("[Pseudo prob] disabled; using hard prop_annotations only.")
 
     val_dataset = None
     if not args.no_validation:
@@ -1560,7 +2004,8 @@ def train_one_task(args: argparse.Namespace):
     # Loss components
     # -------------------------
     ic = load_ic(args, task, args.num_classes)
-    go_con_loss = GOAwareSupConLoss(
+
+    go_con_global_loss = GOAwareSupConLocalGlobalLoss(
         ic=ic,
         tau=args.contrast_tau,
         min_r=args.contrast_min_r,
@@ -1571,9 +2016,9 @@ def train_one_task(args: argparse.Namespace):
     go_edges = load_go_edges(args.go_edges_path, device)
 
     true_loss_func = AsymmetricLossOptimized(
-        gamma_neg=4,
-        gamma_pos=0,
-        clip=0.05,
+        gamma_neg=args.asl_gamma_neg,
+        gamma_pos=args.asl_gamma_pos,
+        clip=args.asl_clip,
         disable_torch_grad_focal_loss=True,
     )
 
@@ -1628,6 +2073,14 @@ def train_one_task(args: argparse.Namespace):
             "loss_kd": 0.0,
             "loss_con": 0.0,
             "loss_hier": 0.0,
+        
+            "w_loss_pseudo": 0.0,
+            "w_loss_kd": 0.0,
+            "w_loss_con": 0.0,
+            "w_loss_hier": 0.0,
+        
+            "pseudo_mask_terms": 0.0,
+            "pseudo_conf_mean": 0.0,
         }
         pbar = tqdm(
             range(steps_per_epoch),
@@ -1647,11 +2100,15 @@ def train_one_task(args: argparse.Namespace):
                 pseudo_batch, pseudo_iter = get_next_batch(pseudo_iter, pseudo_loader)
     
                 proteins_t, X_t, y_t = unpack_batch(true_batch)
-                proteins_u, X_u, y_u = unpack_batch(pseudo_batch)
+                proteins_u, X_u, y_u, prob_u = unpack_pseudo_batch(pseudo_batch)
     
                 X_t, y_t, X_u, y_u = move_to_device(
                     X_t, y_t, X_u, y_u, device=device
                 )
+                
+                if prob_u is not None:
+                    prob_u = prob_u.to(device, non_blocking=True)
+
                 X_t = X_t.long()
                 X_u = X_u.long()
     
@@ -1673,8 +2130,12 @@ def train_one_task(args: argparse.Namespace):
     
                 # pseudo labels from exp_train prop_annotations
                 # Current MSABinaryDataset gives multi-hot y_u. Trust positive pseudo labels only by default.
-                mask_u = (y_u > 0.5).float() if args.pseudo_pos_only else torch.ones_like(y_u)
-                conf_u = pseudo_conf_from_labels(y_u, mode="binary")
+                target_u, mask_u, conf_u = build_pseudo_supervision(
+                    y_u=y_u,
+                    prob_u=prob_u,
+                    args=args,
+                    ic_device=ic_device,
+                )
     
                 labels_for_con = torch.cat([y_t, y_u], dim=0)
                 masks_for_con = torch.cat([mask_t, mask_u], dim=0)
@@ -1747,10 +2208,11 @@ def train_one_task(args: argparse.Namespace):
                     )
                     loss_pseudo = masked_bce_with_logits(
                         logits=logits_u_s,
-                        target=y_u,
+                        target=target_u,
                         mask=mask_u,
                         conf=conf_u,
-                        pos_only=args.pseudo_pos_only,
+                        pos_only=False,
+                        reduction_mode=args.pseudo_loss_reduction,
                     )
     
                     # ----------------------------------------------------
@@ -1775,18 +2237,77 @@ def train_one_task(args: argparse.Namespace):
                             dim=0,
                         )
     
-                        labels_con = labels_for_con[has_pos].repeat(2, 1)
-                        masks_con = masks_for_con[has_pos].repeat(2, 1)
-                        confs_con = confs_for_con[has_pos].repeat(2, 1)
+                        labels_for_con = torch.cat([y_t, y_u], dim=0)
+                        masks_for_con = torch.cat([mask_t, mask_u], dim=0)
+                        confs_for_con = torch.cat([conf_t, conf_u], dim=0)
                         is_true_con = is_true[has_pos].repeat(2)
     
-                        loss_con = go_con_loss(
-                            z=z_con,
-                            y=labels_con,
-                            is_true=is_true_con,
-                            term_mask=masks_con,
-                            term_conf=confs_con,
+                        z_con, labels_con, masks_con, confs_con, is_true_con = subsample_contrastive(
+                            z_con,
+                            labels_con,
+                            masks_con,
+                            confs_con,
+                            is_true_con,
+                            max_n=int(args.contrast_max_samples_per_rank),
                         )
+                        
+                        if (
+                            bool(args.contrast_all_gather)
+                            and dist_is_initialized()
+                            and z_con.shape[0] > 0
+                        ):
+                            labels_local = labels_con.bool()
+                            masks_local = masks_con.bool()
+                            confs_local = confs_con.to(torch.float16)
+                            is_true_local = is_true_con.to(torch.int8)
+                        
+                            z_bank, sizes, rank, local_start = gather_bank_with_local_grad(
+                                z_con.float(),
+                                pad_value=0.0,
+                            )
+                        
+                            labels_bank, _, _ = ddp_all_gather_padded(
+                                labels_local,
+                                pad_value=False,
+                            )
+                        
+                            masks_bank, _, _ = ddp_all_gather_padded(
+                                masks_local,
+                                pad_value=False,
+                            )
+                        
+                            confs_bank, _, _ = ddp_all_gather_padded(
+                                confs_local,
+                                pad_value=0.0,
+                            )
+                        
+                            is_true_bank, _, _ = ddp_all_gather_padded(
+                                is_true_local,
+                                pad_value=0,
+                            )
+                        
+                            loss_con = go_con_global_loss(
+                                z_anchor=z_con,
+                                y_anchor=labels_local,
+                                is_true_anchor=is_true_local.bool(),
+                                mask_anchor=masks_local,
+                                conf_anchor=confs_local,
+                                z_bank=z_bank,
+                                y_bank=labels_bank,
+                                is_true_bank=is_true_bank.bool(),
+                                mask_bank=masks_bank,
+                                conf_bank=confs_bank,
+                                local_start=local_start,
+                            )
+                        
+                        else:
+                            loss_con = go_con_loss(
+                                z=z_con,
+                                y=labels_con,
+                                is_true=is_true_con,
+                                term_mask=masks_con,
+                                term_conf=confs_con,
+                            )
                     else:
                         loss_con = z_w.float().sum() * 0.0
     
@@ -1863,6 +2384,21 @@ def train_one_task(args: argparse.Namespace):
                 running["loss_kd"] += float(loss_kd.detach().cpu())
                 running["loss_con"] += float(loss_con.detach().cpu())
                 running["loss_hier"] += float(loss_hier.detach().cpu())
+
+                with torch.no_grad():
+                    pseudo_weight = mask_u * conf_u
+                    pseudo_terms = mask_u.sum()
+                    pseudo_conf_mean = (
+                        pseudo_weight.sum() / pseudo_terms.clamp_min(1.0)
+                    )
+                
+                running["w_loss_pseudo"] += float((args.lambda_u * loss_pseudo).detach().cpu())
+                running["w_loss_kd"] += float((args.lambda_kd * loss_kd).detach().cpu())
+                running["w_loss_con"] += float((args.lambda_c * loss_con).detach().cpu())
+                running["w_loss_hier"] += float((args.lambda_h * loss_hier).detach().cpu())
+                
+                running["pseudo_mask_terms"] += float(pseudo_terms.detach().cpu())
+                running["pseudo_conf_mean"] += float(pseudo_conf_mean.detach().cpu())
     
                 if is_main_process() and step % args.log_interval == 0:
                     denom = step + 1
@@ -1875,6 +2411,9 @@ def train_one_task(args: argparse.Namespace):
                             "con": running["loss_con"] / denom,
                             "hier": running["loss_hier"] / denom,
                             "lr": scheduler.get_last_lr()[0],
+                            "w_pseudo": running["w_loss_pseudo"] / denom,
+                            "mask": running["pseudo_mask_terms"] / denom,
+                            "pconf": running["pseudo_conf_mean"] / denom,
                         }
                     )
         epoch_log = {
@@ -2277,6 +2816,11 @@ def build_argparser():
     parser.add_argument("--w_true_pseudo", type=float, default=0.7)
     parser.add_argument("--w_pseudo_pseudo", type=float, default=0.4)
 
+    # ASL loss
+    parser.add_argument("--asl_gamma_neg", type=float, default=4.0)
+    parser.add_argument("--asl_gamma_pos", type=float, default=0.0)
+    parser.add_argument("--asl_clip", type=float, default=0.05)
+
     # Pseudo label treatment.
     # Default is positive-only to avoid treating unknown GO terms as negatives.
     parser.add_argument("--pseudo_pos_only", dest="pseudo_pos_only", action="store_true")
@@ -2287,6 +2831,40 @@ def build_argparser():
         help="Use all pseudo-label dimensions, including zeros, as supervised targets.",
     )
     parser.set_defaults(pseudo_pos_only=True)
+
+    parser.add_argument("--pseudo_prob_path", type=str, default=None)
+    
+    parser.add_argument(
+        "--pseudo_prob_target",
+        type=str,
+        choices=["hard", "soft_pos"],
+        default="hard",
+    )
+    
+    parser.add_argument(
+        "--pseudo_prob_conf_power",
+        type=float,
+        default=1.0,
+    )
+    
+    parser.add_argument(
+        "--pseudo_prob_min_conf",
+        type=float,
+        default=0.0,
+    )
+    
+    parser.add_argument(
+        "--pseudo_min_ic",
+        type=float,
+        default=0.0,
+    )
+    
+    parser.add_argument(
+        "--pseudo_loss_reduction",
+        type=str,
+        choices=["weighted_mean", "batch_mean", "sum"],
+        default="weighted_mean",
+    )
 
     # IC / GO hierarchy
     parser.add_argument("--ic_path", type=str, default=None)
@@ -2315,6 +2893,18 @@ def build_argparser():
     parser.add_argument("--strong_shuffle_rows", action="store_true")
     parser.add_argument("--strong_min_keep_rows", type=int, default=2)
     parser.add_argument("--strong_noise_std", type=float, default=0.0)
+
+    # Constrative all gather
+    parser.add_argument("--contrast_all_gather", action="store_true")
+    parser.add_argument("--no_contrast_all_gather", dest="contrast_all_gather", action="store_false")
+    parser.set_defaults(contrast_all_gather=False)
+    
+    parser.add_argument(
+        "--contrast_max_samples_per_rank",
+        type=int,
+        default=0,
+        help="0 means no subsampling before contrastive all_gather.",
+    )
 
     # Validation / logging / saving.
     # Default no_validation=True to avoid accidentally selecting checkpoint on test set.

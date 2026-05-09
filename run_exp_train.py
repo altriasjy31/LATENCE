@@ -85,6 +85,31 @@ WORKING_ADDRESS = ROOT / "data" / "sprot_2204_MSA_bin" / "index.pkl"
 IC_PATH = None
 GO_EDGES_PATH = ROOT / "data" / "go_edges" / f"go_edges_{TASK}.pt"
 
+# Pseudo label probability
+PROB_OUTPUT_DIR = ROOT / "data" / "outputs" / "msa_teacher_25_10_22_probs"
+
+PSEUDO_PROB_PATH_BY_TASK = {
+    "cc": PROB_OUTPUT_DIR / "cc_exp_train_probs.float16.npy",
+    "mf": PROB_OUTPUT_DIR / "mf_exp_train_probs.float16.npy",
+    "bp": PROB_OUTPUT_DIR / "bp_exp_train_probs.float16.npy",
+}
+
+PSEUDO_PROB_PATH = PSEUDO_PROB_PATH_BY_TASK[TASK]
+
+USE_PSEUDO_PROB = True
+
+# 推荐先用 soft_pos，因为 hard positive-only 容易很快饱和。
+PSEUDO_PROB_TARGET = "soft_pos"   # "hard" or "soft_pos"
+
+# 0.5 会减弱高低置信度差异，避免低概率 pseudo positive 权重过小。
+PSEUDO_PROB_CONF_POWER = 0.5
+
+PSEUDO_PROB_MIN_CONF = 0.0
+PSEUDO_MIN_IC = 0.0
+
+# 当前 ASL true loss 很大，pseudo weighted_mean 容易贡献过小。
+PSEUDO_LOSS_REDUCTION = "batch_mean"
+
 
 # ---------------------------------------------------------------------
 # Output
@@ -189,6 +214,12 @@ GRAD_CLIP = 1.0
 
 NO_AMP = False
 
+# ---------------------------------------------------------------------
+# ASL loss
+# ---------------------------------------------------------------------
+ASL_GAMMA_NEG = 4.0
+ASL_GAMMA_POS = 0.0
+ASL_CLIP = 0.05
 
 # ---------------------------------------------------------------------
 # Projection head
@@ -289,6 +320,13 @@ STRONG_N_BLOCKS = 1
 STRONG_SHUFFLE_ROWS = False
 STRONG_MIN_KEEP_ROWS = 2
 STRONG_NOISE_STD = 0.0
+
+# ---------------------------------------------------------------------
+# Constrative all gather
+# ---------------------------------------------------------------------
+CONTRAST_ALL_GATHER = True
+CONTRAST_MAX_SAMPLES_PER_RANK = 64
+LAMBDA_C = 0.02
 
 
 # ---------------------------------------------------------------------
@@ -410,6 +448,10 @@ def _validate_paths():
 
     if GO_EDGES_PATH is not None and not Path(GO_EDGES_PATH).is_file():
         raise FileNotFoundError(f"GO_EDGES_PATH not found: {GO_EDGES_PATH}")
+
+    if USE_PSEUDO_PROB:
+        if PSEUDO_PROB_PATH is None or not Path(PSEUDO_PROB_PATH).is_file():
+            raise FileNotFoundError(f"PSEUDO_PROB_PATH not found: {PSEUDO_PROB_PATH}")
 
 def _validate_output_dir():
     output_dir = Path(OUTPUT_DIR)
@@ -557,6 +599,27 @@ def build_args() -> argparse.Namespace:
         permute_dims=list(PERMUTE_DIMS),
         torch_compile=bool(TORCH_COMPILE),
 
+        # Pseudo prob
+        pseudo_prob_path=(
+            str(Path(PSEUDO_PROB_PATH))
+            if bool(USE_PSEUDO_PROB)
+            else None
+        ),
+        pseudo_prob_target=str(PSEUDO_PROB_TARGET),
+        pseudo_prob_conf_power=float(PSEUDO_PROB_CONF_POWER),
+        pseudo_prob_min_conf=float(PSEUDO_PROB_MIN_CONF),
+        pseudo_min_ic=float(PSEUDO_MIN_IC),
+        pseudo_loss_reduction=str(PSEUDO_LOSS_REDUCTION),
+        
+        # ASL
+        asl_gamma_neg=float(ASL_GAMMA_NEG),
+        asl_gamma_pos=float(ASL_GAMMA_POS),
+        asl_clip=float(ASL_CLIP),
+        
+        # Contrast all_gather
+        contrast_all_gather=bool(CONTRAST_ALL_GATHER),
+        contrast_max_samples_per_rank=int(CONTRAST_MAX_SAMPLES_PER_RANK),
+
         # GPU handling
         gpu_ids=GPU_IDS,
 
@@ -690,6 +753,22 @@ def print_run_summary(args: argparse.Namespace):
     print(f"MAX_LEN              = {args.max_len}")
     print(f"MSA_MAX_SIZE          = {args.msa_max_size}")
     print(f"PROJ_IN_DIM          = {args.proj_in_dim}")
+
+    print(f"USE_PSEUDO_PROB      = {USE_PSEUDO_PROB}")
+    print(f"PSEUDO_PROB_PATH     = {args.pseudo_prob_path}")
+    print(f"PSEUDO_PROB_TARGET   = {args.pseudo_prob_target}")
+    print(f"PSEUDO_CONF_POWER    = {args.pseudo_prob_conf_power}")
+    print(f"PSEUDO_MIN_CONF      = {args.pseudo_prob_min_conf}")
+    print(f"PSEUDO_MIN_IC        = {args.pseudo_min_ic}")
+    print(f"PSEUDO_LOSS_REDUCTION= {args.pseudo_loss_reduction}")
+    
+    print(f"ASL_GAMMA_NEG        = {args.asl_gamma_neg}")
+    print(f"ASL_GAMMA_POS        = {args.asl_gamma_pos}")
+    print(f"ASL_CLIP             = {args.asl_clip}")
+    
+    print(f"CONTRAST_ALL_GATHER  = {args.contrast_all_gather}")
+    print(f"CONTRAST_MAX_SAMPLES = {args.contrast_max_samples_per_rank}")
+
     print(f"EPOCHS               = {args.epochs}")
     print(f"BATCH_SIZE           = {args.batch_size}")
     print(f"PSEUDO_BATCH_SIZE    = {args.pseudo_batch_size}")
