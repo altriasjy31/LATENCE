@@ -2244,7 +2244,7 @@ def train_one_task(args: argparse.Namespace):
                             max_n=int(args.contrast_max_samples_per_rank),
                         )
                         
-                         if bool(args.contrast_all_gather) and is_dist_avail_and_initialized():
+                        if bool(args.contrast_all_gather) and is_dist_avail_and_initialized():
                             # Compress labels/masks/confs before gather.
                             labels_local = labels_con.bool()
                             masks_local = masks_con.bool()
