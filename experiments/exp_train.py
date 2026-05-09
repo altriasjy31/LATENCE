@@ -429,13 +429,24 @@ def parse_gpu_ids_arg(
 
     return []
 
+def is_dist_avail_and_initialized():
+    return dist.is_available() and dist.is_initialized()
+
+
 def ddp_all_gather_padded(x: torch.Tensor, pad_value=0):
-    if not dist_is_initialized():
+    """
+    Gather tensors with variable first dimension across ranks.
+    Returns:
+        gathered: [sum_i n_i, ...]
+        sizes:    [world_size]
+        rank:     current rank
+    """
+    if not is_dist_avail_and_initialized():
         sizes = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
         return x, sizes, 0
 
-    world_size = get_world_size()
-    rank = get_rank()
+    world_size = dist.get_world_size()
+    rank = dist.get_rank()
 
     local_n = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
     sizes_list = [torch.zeros_like(local_n) for _ in range(world_size)]
@@ -464,30 +475,23 @@ def ddp_all_gather_padded(x: torch.Tensor, pad_value=0):
         gathered.append(t[: int(sizes[r].item())])
 
     gathered = torch.cat(gathered, dim=0)
-
     return gathered, sizes, rank
 
 
 def gather_bank_with_local_grad(x: torch.Tensor, pad_value=0):
     """
-    Remote ranks are detached.
-    Local slice keeps gradient.
-
-    This gives local-anchor/global-bank contrastive learning
-    without backpropagating through remote rank tensors.
+    Gather detached global bank but keep current rank slice with gradient.
     """
-    if not dist_is_initialized():
+    if not is_dist_avail_and_initialized():
         sizes = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
         return x, sizes, 0, 0
 
-    gathered, sizes, rank = ddp_all_gather_padded(
-        x.detach(),
-        pad_value=pad_value,
-    )
+    gathered, sizes, rank = ddp_all_gather_padded(x.detach(), pad_value=pad_value)
 
     start = int(sizes[:rank].sum().item())
     end = start + x.shape[0]
 
+    # Replace local detached slice with original x so local gradients flow.
     gathered = torch.cat(
         [
             gathered[:start],
