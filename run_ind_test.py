@@ -73,16 +73,17 @@ WORKING_ADDRESS = ROOT / "data" / "ind_MSA_bin" / "index.pkl"
 #   outputs/exp_train/<RUN_TAG>/semisup_full_epoch30.pt
 #
 # If DO_VALIDATION=False during training, there may be no "best" checkpoint.
-TRAIN_RUN_TAG = f"{TASK}_semisup_multi_node_v1"
+TRAIN_RUN_TAG = f"{TASK}_semisup_ema_teacher_v1"
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
 # Trained / student checkpoint.
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
-CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
+# CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
+CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_ema_backbone_epoch5.pt"
 
 # Teacher checkpoint.
 # Set to None to disable teacher-student averaging.
-# TEACHER_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
-TEACHER_CKPT = None
+TEACHER_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
+# TEACHER_CKPT = None
 
 # Probability-average ensemble weights.
 # With 1.0 / 1.0, final prediction is:
@@ -97,9 +98,9 @@ EVAL_MODE = "ind_test"
 # ---------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------
-# RUN_TAG = f"{TASK}_ind_test_semisup_backbone_last"
-# RUN_TAG = f"{TASK}_ind_test_teacher_student_avg"
-RUN_TAG = f"{TASK}_ind_test_teacher_only"
+# RUN_TAG = f"{TASK}_ind_test_semisup_backbone_epoch5"
+RUN_TAG = f"{TASK}_ind_test_teacher_student_avg"
+# RUN_TAG = f"{TASK}_ind_test_teacher_only"
 OUTPUT_ROOT = ROOT / "outputs" / "ind_test"
 OUTPUT_DIR = OUTPUT_ROOT / RUN_TAG
 

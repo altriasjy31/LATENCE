@@ -64,6 +64,8 @@ sys.path.insert(0, str(MSA_ROOT))
 from models import Arch  # noqa: E402
 # import experiments.msa as D  # noqa: E402
 from experiments.msabin import MSABinaryDataset
+from loss_functions.loss import AsymmetricLossOptimized
+
 
 
 TASKS = {
@@ -893,6 +895,220 @@ def save_backbone_checkpoint(model: nn.Module, path: Union[str, Path]):
     m = unwrap_model(model)
     torch.save(m.backbone.state_dict(), path)
 
+def extract_logits(model_output):
+    if isinstance(model_output, dict):
+        return model_output["logits"]
+
+    if isinstance(model_output, (tuple, list)):
+        return model_output[0]
+
+    return model_output
+
+
+def load_arch_checkpoint(
+    model: nn.Module,
+    ckpt_path: Union[str, Path],
+    strict_shape: bool = True,
+):
+    """
+    Load an Arch checkpoint directly into an Arch model.
+
+    Compatible with:
+        original teacher Arch checkpoint
+        semisup_backbone_*.pt
+        semisup_full_*.pt after strip_state_dict_prefix()
+    """
+    ckpt_path = Path(ckpt_path)
+
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    raw = torch.load(ckpt_path, map_location="cpu")
+
+    if isinstance(raw, dict) and "state_dict" in raw:
+        sd = raw["state_dict"]
+    else:
+        sd = raw
+
+    sd = strip_state_dict_prefix(sd)
+
+    model_sd = model.state_dict()
+    load_sd = {}
+
+    skipped = []
+    ignored = []
+
+    for k, v in sd.items():
+        if k not in model_sd:
+            ignored.append(k)
+            continue
+
+        if tuple(model_sd[k].shape) != tuple(v.shape):
+            skipped.append((k, tuple(v.shape), tuple(model_sd[k].shape)))
+            continue
+
+        load_sd[k] = v
+
+    if strict_shape and len(load_sd) == 0:
+        raise RuntimeError(f"No compatible tensors loaded from {ckpt_path}")
+
+    missing, unexpected = model.load_state_dict(load_sd, strict=False)
+
+    if is_main_process():
+        print(f"[Arch checkpoint] loaded {len(load_sd)} tensors from {ckpt_path}")
+        print(f"[Arch checkpoint] ignored={len(ignored)}, skipped_shape={len(skipped)}")
+        if len(missing) > 0:
+            print(f"[Arch checkpoint] missing after partial load: {len(missing)}")
+        if len(unexpected) > 0:
+            print(f"[Arch checkpoint] unexpected after partial load: {len(unexpected)}")
+
+
+def save_arch_checkpoint(model: nn.Module, path: Union[str, Path]):
+    """
+    Save an Arch model state_dict.
+
+    This is used for EMA teacher backbone.
+    eval_ind_test.py can load this directly.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), path)
+
+
+@torch.no_grad()
+def ema_update_arch(
+    ema_model: nn.Module,
+    student_arch: nn.Module,
+    decay: float,
+):
+    """
+    EMA update:
+        ema = decay * ema + (1 - decay) * student
+
+    Non-floating buffers, e.g. num_batches_tracked, are copied directly.
+    """
+    decay = float(decay)
+
+    ema_state = ema_model.state_dict()
+    stu_state = student_arch.state_dict()
+
+    for k, ema_v in ema_state.items():
+        if k not in stu_state:
+            continue
+
+        stu_v = stu_state[k].detach()
+
+        if torch.is_floating_point(ema_v):
+            ema_v.mul_(decay).add_(stu_v.to(dtype=ema_v.dtype), alpha=1.0 - decay)
+        else:
+            ema_v.copy_(stu_v)
+
+
+def set_batchnorm_eval(
+    model: nn.Module,
+    freeze_affine: bool = False,
+):
+    """
+    Keep BatchNorm running_mean/running_var fixed during fine-tuning.
+
+    Important:
+        model.train() will put BN back into train mode,
+        so this function should be called after every model.train().
+    """
+    for m in model.modules():
+        if isinstance(m, nn.modules.batchnorm._BatchNorm):
+            m.eval()
+
+            if freeze_affine:
+                for p in m.parameters(recurse=False):
+                    p.requires_grad_(False)
+
+
+def build_student_optimizer(
+    model: nn.Module,
+    args: argparse.Namespace,
+):
+    """
+    Use smaller LR for pretrained backbone and optionally larger LR for projection head.
+
+    model may be DDP-wrapped.
+    """
+    m = unwrap_model(model)
+
+    backbone_lr = getattr(args, "backbone_lr", None)
+    proj_lr = getattr(args, "proj_lr", None)
+
+    if backbone_lr is None or float(backbone_lr) <= 0:
+        backbone_lr = args.lr
+
+    if proj_lr is None or float(proj_lr) <= 0:
+        proj_lr = args.lr
+
+    param_groups = []
+
+    backbone_params = [
+        p for p in m.backbone.parameters()
+        if p.requires_grad
+    ]
+
+    proj_params = [
+        p for p in m.proj.parameters()
+        if p.requires_grad
+    ]
+
+    if len(backbone_params) > 0:
+        param_groups.append(
+            {
+                "params": backbone_params,
+                "lr": float(backbone_lr),
+                "name": "backbone",
+            }
+        )
+
+    if len(proj_params) > 0:
+        param_groups.append(
+            {
+                "params": proj_params,
+                "lr": float(proj_lr),
+                "name": "projection",
+            }
+        )
+
+    if len(param_groups) == 0:
+        raise RuntimeError("No trainable parameters found.")
+
+    return torch.optim.AdamW(
+        param_groups,
+        lr=float(args.lr),
+        weight_decay=float(args.weight_decay),
+    )
+
+
+def sigmoid_kd_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    temperature: float = 1.0,
+):
+    """
+    Multi-label sigmoid distillation loss.
+
+    This is more appropriate than softmax KL for GO multi-label prediction.
+
+    L = BCEWithLogits(student_logits / T, sigmoid(teacher_logits / T)) * T^2
+    """
+    T = max(float(temperature), 1e-6)
+
+    with torch.no_grad():
+        teacher_probs = torch.sigmoid(teacher_logits.float() / T)
+
+    loss = F.binary_cross_entropy_with_logits(
+        student_logits.float() / T,
+        teacher_probs,
+        reduction="mean",
+    )
+
+    return loss * (T * T)
+
 
 # ---------------------------------------------------------------------
 # Losses
@@ -1273,21 +1489,55 @@ def train_one_task(args: argparse.Namespace):
     # Model
     # -------------------------
     model = SemiSupMSAGO(opt)
-
+    
     if args.init_ckpt is not None:
         load_backbone_checkpoint(
             model=model,
             ckpt_path=args.init_ckpt,
             strict_shape=True,
         )
-    model = model.to(device)
-    model = wrap_model_for_distributed(model, args=args, device=device)
     
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
+        model = model.to(device)
+        
+        # ------------------------------------------------------------
+        # EMA teacher.
+        # It is an Arch model, not SemiSupMSAGO, because it only provides logits.
+        # Both student and EMA teacher start from the same original teacher checkpoint.
+        # ------------------------------------------------------------
+        teacher_ema = None
+        
+        if bool(args.ema_enabled):
+            teacher_ema = Arch(opt)
+        
+            if args.init_ckpt is None:
+                raise ValueError("EMA teacher requires args.init_ckpt to initialize.")
+        
+            load_arch_checkpoint(
+                model=teacher_ema,
+                ckpt_path=args.init_ckpt,
+                strict_shape=True,
+            )
+        
+            teacher_ema = teacher_ema.to(device)
+            teacher_ema.eval()
+            teacher_ema.requires_grad_(False)
+        
+            if is_main_process():
+                print(
+                    f"[EMA teacher] enabled, decay={args.ema_decay}, "
+                    f"lambda_kd={args.lambda_kd}, temperature={args.kd_temperature}"
+                )
+        
+        # Freeze BN before optimizer construction if affine parameters are also frozen.
+        if bool(args.freeze_bn):
+            set_batchnorm_eval(
+                model,
+                freeze_affine=bool(args.freeze_bn_affine),
+            )
+        
+        model = wrap_model_for_distributed(model, args=args, device=device)
+        
+        optimizer = build_student_optimizer(model, args)
 
     steps_per_epoch = max(len(true_loader), len(pseudo_loader))
     total_steps = max(1, steps_per_epoch * args.epochs)
@@ -1320,6 +1570,13 @@ def train_one_task(args: argparse.Namespace):
 
     go_edges = load_go_edges(args.go_edges_path, device)
 
+    true_loss_func = AsymmetricLossOptimized(
+        gamma_neg=4,
+        gamma_pos=0,
+        clip=0.05,
+        disable_torch_grad_focal_loss=True,
+    )
+
     ic_device = ic.to(device=device, dtype=torch.float32)
 
     permute_dims = tuple(args.permute_dims)
@@ -1345,6 +1602,15 @@ def train_one_task(args: argparse.Namespace):
 
     for epoch in range(1, args.epochs + 1):
         model.train()
+    
+        if bool(args.freeze_bn):
+            set_batchnorm_eval(
+                model,
+                freeze_affine=False,
+            )
+    
+        if teacher_ema is not None:
+            teacher_ema.eval()
 
         set_loader_epoch(true_loader, epoch)
         set_loader_epoch(pseudo_loader, epoch)
@@ -1359,6 +1625,7 @@ def train_one_task(args: argparse.Namespace):
             "loss": 0.0,
             "loss_true": 0.0,
             "loss_pseudo": 0.0,
+            "loss_kd": 0.0,
             "loss_con": 0.0,
             "loss_hier": 0.0,
         }
@@ -1422,8 +1689,42 @@ def train_one_task(args: argparse.Namespace):
                 )
     
                 optimizer.zero_grad(set_to_none=True)
-    
-                # with autocast(device_type="cuda", enabled=(device.type == "cuda" and not args.no_amp)):
+                
+                # ------------------------------------------------------------
+                # EMA teacher target.
+                #
+                # Use clean/no-augmentation teacher prediction as a conservative anchor.
+                # This adds one extra forward pass but strongly reduces student drift.
+                # ------------------------------------------------------------
+                teacher_logits = None
+                
+                do_kd = (
+                    teacher_ema is not None
+                    and float(args.lambda_kd) > 0.0
+                    and int(args.kd_every_n_steps) > 0
+                    and (global_step % int(args.kd_every_n_steps) == 0)
+                )
+                
+                if do_kd:
+                    teacher_ema.eval()
+                
+                    with torch.no_grad():
+                        with autocast(
+                            device_type=device.type,
+                            dtype=torch.bfloat16,
+                            enabled=amp_enabled,
+                        ):
+                            teacher_out = teacher_ema(
+                                X,
+                                permute_dims=permute_dims,
+                                aug_params=None,
+                            )
+                
+                        teacher_logits = extract_logits(teacher_out).detach()
+                
+                # ------------------------------------------------------------
+                # Student multi-view forward.
+                # ------------------------------------------------------------
                 with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=amp_enabled):
                     logits_views, z_views = model(
                         X,
@@ -1441,8 +1742,8 @@ def train_one_task(args: argparse.Namespace):
                     logits_t_s = logits_s[:b_t]
                     logits_u_s = logits_s[b_t:]
                     loss_true = 0.5 * (
-                        bce_with_logits(logits_t_w, y_t)
-                        + bce_with_logits(logits_t_s, y_t)
+                        true_loss_func(logits_t_w.float(), y_t.float())
+                        + true_loss_func(logits_t_s.float(), y_t.float())
                     )
                     loss_pseudo = masked_bce_with_logits(
                         logits=logits_u_s,
@@ -1489,30 +1790,77 @@ def train_one_task(args: argparse.Namespace):
                     else:
                         loss_con = z_w.float().sum() * 0.0
     
+                    if teacher_logits is not None:
+                        kd_terms = []
+                    
+                        if bool(args.kd_on_weak):
+                            kd_terms.append(
+                                sigmoid_kd_loss(
+                                    student_logits=logits_w,
+                                    teacher_logits=teacher_logits,
+                                    temperature=args.kd_temperature,
+                                )
+                            )
+                    
+                        if bool(args.kd_on_strong):
+                            kd_terms.append(
+                                sigmoid_kd_loss(
+                                    student_logits=logits_s,
+                                    teacher_logits=teacher_logits,
+                                    temperature=args.kd_temperature,
+                                )
+                            )
+                    
+                        if len(kd_terms) > 0:
+                            loss_kd = sum(kd_terms) / float(len(kd_terms))
+                        else:
+                            loss_kd = logits_s.float().sum() * 0.0
+                    else:
+                        loss_kd = logits_s.float().sum() * 0.0
+                    
                     loss_hier = hierarchy_violation_loss(logits_s, go_edges)
-    
+                    
                     loss = (
                         loss_true
                         + args.lambda_u * loss_pseudo
+                        + args.lambda_kd * loss_kd
                         + args.lambda_c * loss_con
                         + args.lambda_h * loss_hier
                     )
-    
+                    
                 scaler.scale(loss).backward()
     
                 if args.grad_clip > 0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-    
+
                 scaler.step(optimizer)
                 scaler.update()
+                
+                next_global_step = global_step + 1
+                
+                # EMA update after student optimizer step.
+                if (
+                    teacher_ema is not None
+                    and next_global_step >= int(args.ema_update_after_step)
+                    and int(args.ema_update_every) > 0
+                    and next_global_step % int(args.ema_update_every) == 0
+                ):
+                    ema_update_arch(
+                        ema_model=teacher_ema,
+                        student_arch=unwrap_model(model).backbone,
+                        decay=float(args.ema_decay),
+                    )
+                
                 scheduler.step()
-    
-                global_step += 1
+                
+                global_step = next_global_step
+
     
                 running["loss"] += float(loss.detach().cpu())
                 running["loss_true"] += float(loss_true.detach().cpu())
                 running["loss_pseudo"] += float(loss_pseudo.detach().cpu())
+                running["loss_kd"] += float(loss_kd.detach().cpu())
                 running["loss_con"] += float(loss_con.detach().cpu())
                 running["loss_hier"] += float(loss_hier.detach().cpu())
     
@@ -1523,6 +1871,7 @@ def train_one_task(args: argparse.Namespace):
                             "loss": running["loss"] / denom,
                             "true": running["loss_true"] / denom,
                             "pseudo": running["loss_pseudo"] / denom,
+                            "kd": running["loss_kd"] / denom,
                             "con": running["loss_con"] / denom,
                             "hier": running["loss_hier"] / denom,
                             "lr": scheduler.get_last_lr()[0],
@@ -1576,10 +1925,17 @@ def train_one_task(args: argparse.Namespace):
                     output_dir / f"semisup_full_epoch{epoch}.pt",
                     extra={"epoch": epoch},
                 )
+            
                 save_backbone_checkpoint(
                     model,
                     output_dir / f"semisup_backbone_epoch{epoch}.pt",
                 )
+            
+                if teacher_ema is not None and bool(args.save_ema_checkpoint):
+                    save_arch_checkpoint(
+                        teacher_ema,
+                        output_dir / f"semisup_ema_backbone_epoch{epoch}.pt",
+                    )
         
         if args.distributed:
             dist.barrier()
@@ -1590,7 +1946,19 @@ def train_one_task(args: argparse.Namespace):
             output_dir / "semisup_full_last.pt",
             extra={"epoch": args.epochs},
         )
-        save_backbone_checkpoint(model, output_dir / "semisup_backbone_last.pt")
+    
+        save_backbone_checkpoint(
+            model,
+            output_dir / "semisup_backbone_last.pt",
+        )
+    
+        if teacher_ema is not None and bool(args.save_ema_checkpoint):
+            save_arch_checkpoint(
+                teacher_ema,
+                output_dir / "semisup_ema_backbone_last.pt",
+            )
+    
+        print(f"[Done] saved to {output_dir}")
     
         print(f"[Done] saved to {output_dir}")
     
@@ -1824,6 +2192,15 @@ def build_argparser():
     parser.add_argument("--ddp_find_unused_parameters", action="store_true")
     parser.add_argument("--ddp_static_graph", action="store_true")
 
+    # BatchNorm fine-tuning policy
+    parser.add_argument("--freeze_bn", action="store_true")
+    parser.add_argument("--no_freeze_bn", dest="freeze_bn", action="store_false")
+    parser.set_defaults(freeze_bn=False)
+
+    parser.add_argument("--freeze_bn_affine", action="store_true")
+    parser.add_argument("--no_freeze_bn_affine", dest="freeze_bn_affine", action="store_false")
+    parser.set_defaults(freeze_bn_affine=False)
+
     # Training
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -1834,6 +2211,18 @@ def build_argparser():
     parser.add_argument("--drop_last", action="store_true")
 
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--backbone_lr",
+        type=float,
+        default=None,
+        help="LR for pretrained backbone. If None, use --lr.",
+    )
+    parser.add_argument(
+        "--proj_lr",
+        type=float,
+        default=None,
+        help="LR for projection head. If None, use --lr.",
+    )
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--grad_clip", type=float, default=1.0)
@@ -1850,8 +2239,37 @@ def build_argparser():
 
     # Semi-supervised loss weights
     parser.add_argument("--lambda_u", type=float, default=0.5)
+    parser.add_argument("--lambda_kd", type=float, default=0.0)
     parser.add_argument("--lambda_c", type=float, default=0.05)
     parser.add_argument("--lambda_h", type=float, default=0.0)
+
+    # EMA teacher / distillation
+    parser.add_argument("--ema_enabled", action="store_true")
+    parser.add_argument("--no_ema", dest="ema_enabled", action="store_false")
+    parser.set_defaults(ema_enabled=False)
+
+    parser.add_argument("--ema_decay", type=float, default=0.9999)
+    parser.add_argument("--ema_update_after_step", type=int, default=0)
+    parser.add_argument("--ema_update_every", type=int, default=1)
+
+    parser.add_argument("--kd_temperature", type=float, default=1.0)
+    parser.add_argument("--kd_every_n_steps", type=int, default=1)
+
+    parser.add_argument("--kd_on_weak", action="store_true")
+    parser.add_argument("--no_kd_on_weak", dest="kd_on_weak", action="store_false")
+    parser.set_defaults(kd_on_weak=True)
+
+    parser.add_argument("--kd_on_strong", action="store_true")
+    parser.add_argument("--no_kd_on_strong", dest="kd_on_strong", action="store_false")
+    parser.set_defaults(kd_on_strong=True)
+
+    parser.add_argument("--save_ema_checkpoint", action="store_true")
+    parser.add_argument(
+        "--no_save_ema_checkpoint",
+        dest="save_ema_checkpoint",
+        action="store_false",
+    )
+    parser.set_defaults(save_ema_checkpoint=True)
 
     # Contrastive loss
     parser.add_argument("--contrast_tau", type=float, default=0.1)
