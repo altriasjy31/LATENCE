@@ -692,12 +692,15 @@ class WeakMSAGOWithQueryDecoder(nn.Module):
             prob_hint=prob_hint,
             has_prob=has_prob,
         )
-        refined_logits, selected_logits = self.query_decoder(
+        qout = self.query_decoder(
             h=h,
             base_logits=base_logits,
             topk_idx=topk_idx,
             classifier_weight=self.classifier.weight,
         )
+        
+        refined_logits = qout["logits"]
+        delta = qout.get("delta", None)
         if return_dict:
             return {
                 "logits": refined_logits,
@@ -1247,15 +1250,15 @@ def build_argparser():
     p.add_argument("--no_query_decoder_include_label_boost", dest="query_decoder_include_label_boost", action="store_false")
     p.set_defaults(query_decoder_include_label_boost=True)
     p.add_argument("--query_decoder_label_boost", type=float, default=2.0)
-    parser.add_argument(
+    p.add_argument(
         "--query_decoder_memory_mode",
         type=str,
         default="tokens_plus_pooled",
         choices=["pooled", "tokens", "tokens_plus_pooled"],
     )
     
-    parser.add_argument("--query_decoder_memory_grid_h", type=int, default=0)
-    parser.add_argument("--query_decoder_memory_grid_w", type=int, default=0)
+    p.add_argument("--query_decoder_memory_grid_h", type=int, default=0)
+    p.add_argument("--query_decoder_memory_grid_w", type=int, default=0)
 
     p.add_argument("--ic_path", type=str, default=None)
     p.add_argument("--ic_alpha", type=float, default=1.0)

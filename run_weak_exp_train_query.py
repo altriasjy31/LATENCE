@@ -49,11 +49,11 @@ RUN_TAG = f"{TASK}_weak_asl_prob_v1"
 OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train_query" / RUN_TAG
 FAIL_IF_OUTPUT_EXISTS = False
 
-CUDA_VISIBLE_DEVICES = "0,1,2,3"
+CUDA_VISIBLE_DEVICES = "1,2"
 DEVICE = "auto"
 GPU_IDS = "auto"
 USE_DDP = True
-NPROC_PER_NODE = 4
+NPROC_PER_NODE = 2
 DDP_STANDALONE = True
 MASTER_PORT = 29541
 
@@ -147,6 +147,43 @@ QUERY_DECODER_MEMORY_MODE = "tokens_plus_pooled"
 QUERY_DECODER_MEMORY_GRID_H = 0
 QUERY_DECODER_MEMORY_GRID_W = 0
 
+# =============================================================================
+# Multi-node DDP
+# =============================================================================
+
+# "single_node" or "multi_node"
+LAUNCH_MODE = "multi_node"
+
+# 每台机器使用多少张 GPU
+NPROC_PER_NODE = int(os.environ.get("NPROC_PER_NODE", "2"))
+
+# 总节点数
+NNODES = int(os.environ.get("NNODES", "2"))
+
+# 当前节点编号：master node = 0, second node = 1, ...
+# 建议也允许从环境变量读取，避免每台机器手动改文件。
+NODE_RANK = int(os.environ.get("NODE_RANK", "0"))
+
+# master 节点的内网 IP，必须所有节点都能访问
+MASTER_ADDR = os.environ.get("MASTER_ADDR", "10.233.128.18")
+MASTER_PORT = int(os.environ.get("MASTER_PORT", "46001"))
+
+# rendezvous
+RDZV_BACKEND = "c10d"
+RDZV_ID = os.environ.get("RDZV_ID", "latence_weak_query_bp_v1")
+
+# 如果使用 --rdzv_endpoint
+RDZV_ENDPOINT = f"{MASTER_ADDR}:{MASTER_PORT}"
+
+# 出错是否自动重启。不建议调试阶段自动重启。
+DDP_MAX_RESTARTS = 0
+
+# DDP timeout
+DDP_TIMEOUT_MINUTES = 180
+
+NCCL_SOCKET_IFNAME = "eth0"  # 例如 "eth0" / "ens3f0" / "ib0"
+GLOO_SOCKET_IFNAME = None
+
 IC_ALPHA = 1.0
 IC_MIN_COUNT = 2
 
@@ -239,23 +276,69 @@ def _should_launch_ddp() -> bool:
 
 def _launch_ddp_and_exit():
     env = os.environ.copy()
+
     if CUDA_VISIBLE_DEVICES is not None:
         env["CUDA_VISIBLE_DEVICES"] = str(CUDA_VISIBLE_DEVICES)
 
-    cmd = [sys.executable, "-m", "torch.distributed.run"]
-    if DDP_STANDALONE:
-        cmd.append("--standalone")
-    cmd += [
-        f"--nproc_per_node={int(NPROC_PER_NODE)}",
-        f"--master_port={int(MASTER_PORT)}",
-        str(Path(__file__).resolve()),
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
+    env.setdefault("NUMEXPR_NUM_THREADS", "1")
+
+    env.setdefault("NCCL_DEBUG", "INFO")
+    env.setdefault("NCCL_ASYNC_ERROR_HANDLING", "1")
+    env.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
+    env.setdefault("NCCL_IB_DISABLE", "1")
+
+    # 可选：根据集群网卡名称设置。
+    if NCCL_SOCKET_IFNAME is not None:
+        env["NCCL_SOCKET_IFNAME"] = str(NCCL_SOCKET_IFNAME)
+    if GLOO_SOCKET_IFNAME is not None:
+        env["GLOO_SOCKET_IFNAME"] = str(GLOO_SOCKET_IFNAME)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
     ]
 
+    if LAUNCH_MODE == "single_node":
+        cmd += [
+            "--standalone",
+            f"--nproc_per_node={int(NPROC_PER_NODE)}",
+            f"--max_restarts={int(DDP_MAX_RESTARTS)}",
+        ]
+
+    elif LAUNCH_MODE == "multi_node":
+        cmd += [
+            f"--nnodes={int(NNODES)}",
+            f"--nproc_per_node={int(NPROC_PER_NODE)}",
+            f"--node_rank={int(NODE_RANK)}",
+            f"--rdzv_id={str(RDZV_ID)}",
+            f"--rdzv_backend={str(RDZV_BACKEND)}",
+            f"--rdzv_endpoint={str(RDZV_ENDPOINT)}",
+            f"--max_restarts={int(DDP_MAX_RESTARTS)}",
+        ]
+
+    else:
+        raise ValueError(f"Unknown LAUNCH_MODE: {LAUNCH_MODE}")
+
+    cmd.append(str(Path(__file__).resolve()))
+
     print("=" * 80)
-    print("[DDP launcher: weak_exp_train]")
-    print("CUDA_VISIBLE_DEVICES =", env.get("CUDA_VISIBLE_DEVICES"))
-    print("Command:", " ".join(cmd))
+    print("[DDP launcher: weak_exp_train_query]")
+    print(f"LAUNCH_MODE          = {LAUNCH_MODE}")
+    print(f"NNODES               = {NNODES}")
+    print(f"NODE_RANK            = {NODE_RANK}")
+    print(f"NPROC_PER_NODE        = {NPROC_PER_NODE}")
+    print(f"MASTER_ADDR           = {MASTER_ADDR}")
+    print(f"MASTER_PORT           = {MASTER_PORT}")
+    print(f"RDZV_ENDPOINT         = {RDZV_ENDPOINT}")
+    print(f"CUDA_VISIBLE_DEVICES  = {env.get('CUDA_VISIBLE_DEVICES')}")
+    print("Command:")
+    print(" ".join(cmd))
     print("=" * 80)
+
     ret = subprocess.run(cmd, env=env)
     raise SystemExit(ret.returncode)
 
