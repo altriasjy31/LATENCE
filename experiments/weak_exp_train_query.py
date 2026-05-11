@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Optional, Union, Tuple
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -90,6 +91,7 @@ from experiments.exp_train import (  # noqa: E402
     set_batchnorm_eval,
     load_arch_checkpoint,
     save_arch_checkpoint,
+    unwrap_model,
     load_ic,
     load_go_edges,
     hierarchy_violation_loss,
@@ -493,8 +495,11 @@ class OntologyQueryDecoder(nn.Module):
         memory_grid_h: int = 0,
         memory_grid_w: int = 0,
         detach_query_weight: bool = True,
+        delta_max: float = 0.5,
     ):
         super().__init__()
+
+        self.delta_max = float(delta_max)
 
         self.memory_mode = memory_mode
         self.memory_grid_h = int(memory_grid_h)
@@ -575,7 +580,9 @@ class OntologyQueryDecoder(nn.Module):
             memory=memory,
         )
 
-        delta = self.out(decoded).squeeze(-1)  # [B, K]
+        # delta = self.out(decoded).squeeze(-1)  # [B, K]
+        raw_delta = self.out(decoded).squeeze(-1)
+        delta = self.delta_max * torch.tanh(raw_delta)
 
         refined_logits = base_logits.clone()
         refined_logits.scatter_add_(
@@ -701,12 +708,13 @@ class WeakMSAGOWithQueryDecoder(nn.Module):
         
         refined_logits = qout["logits"]
         delta = qout.get("delta", None)
+
         if return_dict:
             return {
                 "logits": refined_logits,
                 "base_logits": base_logits,
                 "topk_idx": topk_idx,
-                "selected_logits": selected_logits,
+                "delta": delta,
             }
         return refined_logits
 
@@ -829,6 +837,21 @@ def wrap_ddp(model: nn.Module, args: argparse.Namespace, device: torch.device):
         )
     return DDP(model, find_unused_parameters=bool(args.ddp_find_unused_parameters))
 
+def topk_positive_coverage(topk_idx, y):
+    """
+    topk_idx: [B, K]
+    y:        [B, C]
+    """
+    b = y.shape[0]
+    pos = y > 0.5
+
+    if pos.sum() == 0:
+        return torch.tensor(0.0, device=y.device)
+
+    hit = torch.gather(pos, dim=1, index=topk_idx).float().sum()
+    total = pos.float().sum().clamp_min(1.0)
+
+    return hit / total
 
 def train_one_task(args: argparse.Namespace):
     task = normalize_task(args.task)
@@ -946,6 +969,12 @@ def train_one_task(args: argparse.Namespace):
     global_step = 0
     update_step = 0
 
+    if is_main_process():
+        print("[Model]", model.__class__.__name__)
+        print("[Use query decoder]", getattr(args, "use_query_decoder", False))
+        if hasattr(unwrap_model(model), "query_decoder"):
+            print("[Query decoder]", unwrap_model(model).query_decoder)
+
     for epoch in range(1, args.epochs + 1):
         model.train()
         if bool(args.freeze_bn):
@@ -956,7 +985,8 @@ def train_one_task(args: argparse.Namespace):
         true_iter = iter(true_loader)
         pseudo_iter = iter(pseudo_loader)
 
-        running: Dict[str, float] = {
+        running: Dict[str, float] = defaultdict(float)
+        running.update({
             "loss": 0.0,
             "loss_true": 0.0,
             "loss_pseudo": 0.0,
@@ -968,7 +998,7 @@ def train_one_task(args: argparse.Namespace):
             "pseudo_pos_terms": 0.0,
             "pseudo_neg_terms": 0.0,
             "pseudo_conf_mean": 0.0,
-        }
+        })
 
         pbar = tqdm(range(steps_per_epoch), desc=f"weak epoch {epoch}/{args.epochs}", disable=not is_main_process())
         optimizer.zero_grad(set_to_none=True)
@@ -1024,6 +1054,24 @@ def train_one_task(args: argparse.Namespace):
                         logits = logits["logits"]
                     elif isinstance(logits, (tuple, list)):
                         logits = logits[0]
+
+                if is_main_process() and global_step == 0:
+                    print("[Query] topk_idx shape:", tuple(out["topk_idx"].shape))
+                    if out.get("delta", None) is not None:
+                        print("[Query] delta shape:", tuple(out["delta"].shape))
+
+                if isinstance(out, dict) and out.get("delta", None) is not None:
+                    delta = out["delta"].detach()
+                    delta_abs_mean = delta.abs().mean()
+                    delta_abs_max = delta.abs().max()
+                else:
+                    delta_abs_mean = torch.tensor(0.0, device=device)
+                    delta_abs_max = torch.tensor(0.0, device=device)
+
+                if isinstance(out, dict) and "topk_idx" in out:
+                    topk_cov = topk_positive_coverage(out["topk_idx"], y_hint)
+                else:
+                    topk_cov = torch.tensor(0.0, device=device)
 
                 logits_t = logits[:b_t]
                 logits_u = logits[b_t:]
@@ -1097,6 +1145,10 @@ def train_one_task(args: argparse.Namespace):
             running["contrib_true"] += float((args.lambda_true * loss_true).detach().cpu())
             running["contrib_pseudo"] += float((args.lambda_pseudo * loss_pseudo).detach().cpu())
             running["contrib_hier"] += float((args.lambda_h * loss_hier).detach().cpu())
+            running["delta_abs_mean"] += float(delta_abs_mean.cpu())
+            running["delta_abs_max"] += float(delta_abs_max.cpu())
+            running["topk_pos_coverage"] += float(topk_cov.detach().cpu())
+
             for k, v in pseudo_stats.items():
                 running[k] += float(v)
 

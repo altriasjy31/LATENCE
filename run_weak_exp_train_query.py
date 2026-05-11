@@ -32,7 +32,7 @@ WEAK_EXP_TRAIN = ROOT / "experiments" / "weak_exp_train.py"
 # USER CONFIG
 # =============================================================================
 
-TASK = "bp"  # "cc", "mf", "bp"
+TASK = os.environ.get("TASK", "bp")  # "cc", "mf", "bp"
 
 MODEL_CONFIG = ROOT / "data" / "msa_models" / "configs" / "model_opts" / f"{TASK}_msa_model_config.pkl"
 INIT_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
@@ -48,14 +48,6 @@ USE_PSEUDO_PROB = True
 RUN_TAG = f"{TASK}_weak_asl_prob_v1"
 OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train_query" / RUN_TAG
 FAIL_IF_OUTPUT_EXISTS = False
-
-CUDA_VISIBLE_DEVICES = "1,2"
-DEVICE = "auto"
-GPU_IDS = "auto"
-USE_DDP = True
-NPROC_PER_NODE = 2
-DDP_STANDALONE = True
-MASTER_PORT = 29541
 
 NUM_CLASSES = None
 TOP_K = 64          # teacher reference
@@ -73,7 +65,7 @@ PSEUDO_BATCH_SIZE = 48
 DATALOADER_NUM_WORKERS = 8
 PIN_MEMORY = True
 DROP_LAST = False
-MAX_STEPS_PER_EPOCH = None  # for smoke test: e.g. 200
+MAX_STEPS_PER_EPOCH = 200  # for smoke test: e.g. 200
 
 MSA_READ_MODE = "full"
 MSA_SAMPLE_STRATEGY = "random"
@@ -90,7 +82,9 @@ DDP_FIND_UNUSED_PARAMETERS = False
 # Weak training: single model, no EMA/KD/contrastive.
 OPTIM = "adamw"          # fallback to AdamW if timm Lamb unavailable
 OPTIM_EPS = 1e-6
-LR = 1.8e-3             # teacher reference
+# LR = 1.8e-3             # teacher reference
+LR = 3e-4
+
 LR_POLICY = "cycle"
 LR_PCT_START = 0.1
 LR_CYCLE_THREE_PHASE = False
@@ -106,8 +100,8 @@ NO_AMP = False
 FREEZE_BN = False       # teacher-like training; set True only if unstable
 FREEZE_BN_AFFINE = False
 
-LAMBDA_TRUE = 0.7
-LAMBDA_PSEUDO = 0.6
+LAMBDA_TRUE = 0.9
+LAMBDA_PSEUDO = 0.3
 LAMBDA_H = 0.0005
 
 TRUE_ASL_GAMMA_NEG = 4.0
@@ -132,8 +126,8 @@ PSEUDO_ASL_REDUCTION = "batch_mean"
 # Optional DETR-style top-k ontology query decoder
 # ---------------------------------------------------------------------
 USE_QUERY_DECODER = True
-QUERY_DECODER_TOPK = 50
-QUERY_DECODER_TOPK_SOURCE = "mixed"      # "base", "prob", "mixed"
+QUERY_DECODER_TOPK = 100
+QUERY_DECODER_TOPK_SOURCE = "base"      # "base", "prob", "mixed"
 QUERY_DECODER_MODE = "residual"          # strongly recommended; "replace" is risky
 QUERY_DECODER_DIM = 256
 QUERY_DECODER_HEADS = 8
@@ -141,7 +135,7 @@ QUERY_DECODER_LAYERS = 1
 QUERY_DECODER_FFN_DIM = 1024
 QUERY_DECODER_DROPOUT = 0.1
 QUERY_DECODER_DETACH_QUERY_WEIGHT = True
-QUERY_DECODER_INCLUDE_LABEL_BOOST = True
+QUERY_DECODER_INCLUDE_LABEL_BOOST = False
 QUERY_DECODER_LABEL_BOOST = 2.0
 QUERY_DECODER_MEMORY_MODE = "tokens_plus_pooled"
 QUERY_DECODER_MEMORY_GRID_H = 0
@@ -152,13 +146,19 @@ QUERY_DECODER_MEMORY_GRID_W = 0
 # =============================================================================
 
 # "single_node" or "multi_node"
-LAUNCH_MODE = "multi_node"
+LAUNCH_MODE = "single_node"
+
+CUDA_VISIBLE_DEVICES = "1,2"
+DEVICE = "auto"
+GPU_IDS = "auto"
+USE_DDP = True
+DDP_STANDALONE = True
 
 # 每台机器使用多少张 GPU
 NPROC_PER_NODE = int(os.environ.get("NPROC_PER_NODE", "2"))
 
 # 总节点数
-NNODES = int(os.environ.get("NNODES", "2"))
+NNODES = int(os.environ.get("NNODES", "1"))
 
 # 当前节点编号：master node = 0, second node = 1, ...
 # 建议也允许从环境变量读取，避免每台机器手动改文件。
@@ -166,7 +166,7 @@ NODE_RANK = int(os.environ.get("NODE_RANK", "0"))
 
 # master 节点的内网 IP，必须所有节点都能访问
 MASTER_ADDR = os.environ.get("MASTER_ADDR", "10.233.128.18")
-MASTER_PORT = int(os.environ.get("MASTER_PORT", "46001"))
+MASTER_PORT = int(os.environ.get("MASTER_PORT", "46123"))
 
 # rendezvous
 RDZV_BACKEND = "c10d"
@@ -507,7 +507,7 @@ def main():
         return
 
     prepare_imports()
-    from experiments.weak_exp_train import train_one_task, normalize_task
+    from experiments.weak_exp_train_query import train_one_task, normalize_task
 
     args.task = normalize_task(args.task)
     train_one_task(args)

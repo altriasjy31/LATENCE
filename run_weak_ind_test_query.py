@@ -61,7 +61,7 @@ TRAIN_OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train_query" / TRAIN_RUN_TAG
 #   "weak_backbone_last"
 #   "teacher_only"
 CKPT_KIND = "weak_query_epoch"
-CKPT_EPOCH = 5
+CKPT_EPOCH = 2
 
 TEACHER_ORIGINAL_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
 
@@ -122,12 +122,12 @@ FAIL_IF_OUTPUT_EXISTS = False
 # ---------------------------------------------------------------------
 # Hardware
 # ---------------------------------------------------------------------
-CUDA_VISIBLE_DEVICES = "0,1"
+CUDA_VISIBLE_DEVICES = "0"
 DEVICE = "auto"
 GPU_IDS = "auto"
 
 USE_DDP = True
-NPROC_PER_NODE = 2
+NPROC_PER_NODE = 1
 DDP_STANDALONE = True
 MASTER_ADDR = "127.0.0.1"
 MASTER_PORT = 29543
@@ -144,7 +144,7 @@ PERMUTE_DIMS = (0, 3, 2, 1)
 TORCH_COMPILE = False
 
 # Query decoder settings must match training.
-QUERY_DECODER_TOPK = 50
+QUERY_DECODER_TOPK = 100
 QUERY_DECODER_MODE = "residual"
 QUERY_DECODER_DIM = 256
 QUERY_DECODER_HEADS = 8
