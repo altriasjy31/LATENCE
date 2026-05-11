@@ -37,7 +37,7 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -352,6 +352,389 @@ def build_pseudo_supervision(
     return target, mask, conf, stats
 
 
+
+# ---------------------------------------------------------------------
+# Optional DETR-style top-k ontology query decoder
+# ---------------------------------------------------------------------
+
+def _unwrap_module(m: nn.Module) -> nn.Module:
+    return m.module if hasattr(m, "module") else m
+
+
+def pool_backbone_feature(h: torch.Tensor) -> torch.Tensor:
+    """Pool rnet.forward_features output to [B, D]."""
+    if h.ndim == 4:
+        return F.adaptive_avg_pool2d(h, 1).flatten(1)
+    if h.ndim == 3:
+        return h.mean(dim=1)
+    if h.ndim == 2:
+        return h
+    return h.flatten(1)
+
+def build_backbone_memory(
+    h: torch.Tensor,
+    mode: str = "tokens_plus_pooled",
+    memory_grid_h: int = 0,
+    memory_grid_w: int = 0,
+):
+    """
+    Convert backbone feature to decoder memory.
+
+    Returns
+    -------
+    memory:
+        [B, T, C]
+    pooled:
+        [B, C]
+
+    mode:
+        pooled:
+            T = 1
+        tokens:
+            T = H * W
+        tokens_plus_pooled:
+            T = 1 + H * W
+    """
+
+    if h.ndim == 4:
+        # h: [B, C, H, W]
+
+        if memory_grid_h > 0 and memory_grid_w > 0:
+            h = F.adaptive_avg_pool2d(h, (memory_grid_h, memory_grid_w))
+
+        pooled = F.adaptive_avg_pool2d(h, 1).flatten(1)  # [B, C]
+
+        tokens = h.flatten(2).transpose(1, 2).contiguous()  # [B, H*W, C]
+
+        if mode == "pooled":
+            memory = pooled.unsqueeze(1)  # [B, 1, C]
+
+        elif mode == "tokens":
+            memory = tokens
+
+        elif mode == "tokens_plus_pooled":
+            memory = torch.cat(
+                [
+                    pooled.unsqueeze(1),
+                    tokens,
+                ],
+                dim=1,
+            )
+
+        else:
+            raise ValueError(f"Unknown memory mode: {mode}")
+
+        return memory, pooled
+
+    if h.ndim == 3:
+        # Usually already token-like.
+        # Assume h is [B, T, C].
+        memory = h
+        pooled = h.mean(dim=1)
+        return memory, pooled
+
+    if h.ndim == 2:
+        # Already pooled feature [B, C].
+        pooled = h
+        memory = h.unsqueeze(1)
+        return memory, pooled
+
+    # Fallback.
+    pooled = h.flatten(1)
+    memory = pooled.unsqueeze(1)
+    return memory, pooled
+
+
+def find_classifier_linear(arch_model: nn.Module, num_classes: int) -> nn.Linear:
+    """
+    Find the final classifier linear layer in Arch/rnet.
+    This is used as ontology query embedding source: W[class_id].
+    """
+    m = _unwrap_module(arch_model)
+
+    candidates = []
+
+    # Prefer Arch.get_fc() when available.
+    if hasattr(m, "get_fc"):
+        try:
+            fc = m.get_fc()
+            if isinstance(fc, nn.Linear) and fc.out_features == int(num_classes):
+                return fc
+            for sub in fc.modules():
+                if isinstance(sub, nn.Linear) and sub.out_features == int(num_classes):
+                    candidates.append(sub)
+        except Exception:
+            pass
+
+    # Fallback: search the whole model; choose the last matching linear.
+    for sub in m.modules():
+        if isinstance(sub, nn.Linear) and sub.out_features == int(num_classes):
+            candidates.append(sub)
+
+    if not candidates:
+        raise RuntimeError(
+            f"Cannot find classifier nn.Linear with out_features={num_classes}. "
+            "Top-k ontology decoder requires classifier weights as GO queries."
+        )
+
+    return candidates[-1]
+
+
+class OntologyQueryDecoder(nn.Module):
+    def __init__(
+        self,
+        feature_dim: int,
+        decoder_dim: int = 256,
+        num_heads: int = 8,
+        num_layers: int = 1,
+        ffn_dim: int = 1024,
+        dropout: float = 0.1,
+        memory_mode: str = "tokens_plus_pooled",
+        memory_grid_h: int = 0,
+        memory_grid_w: int = 0,
+        detach_query_weight: bool = True,
+    ):
+        super().__init__()
+
+        self.memory_mode = memory_mode
+        self.memory_grid_h = int(memory_grid_h)
+        self.memory_grid_w = int(memory_grid_w)
+        self.detach_query_weight = bool(detach_query_weight)
+
+        self.memory_proj = nn.Sequential(
+            nn.LayerNorm(feature_dim),
+            nn.Linear(feature_dim, decoder_dim),
+        )
+
+        self.query_proj = nn.Sequential(
+            nn.LayerNorm(feature_dim),
+            nn.Linear(feature_dim, decoder_dim),
+        )
+
+        layer = nn.TransformerDecoderLayer(
+            d_model=decoder_dim,
+            nhead=num_heads,
+            dim_feedforward=ffn_dim,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+
+        self.decoder = nn.TransformerDecoder(
+            decoder_layer=layer,
+            num_layers=num_layers,
+        )
+
+        self.out = nn.Linear(decoder_dim, 1)
+
+        # Critical: residual decoder initially does nothing.
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        base_logits: torch.Tensor,
+        classifier_weight: torch.Tensor,
+        topk_idx: torch.Tensor,
+    ):
+        """
+        h:
+            backbone feature before pooling.
+            Usually [B, C, H, W].
+
+        base_logits:
+            [B, num_classes]
+
+        classifier_weight:
+            [num_classes, C]
+
+        topk_idx:
+            [B, K]
+        """
+
+        memory_tokens, pooled_feature = build_backbone_memory(
+            h,
+            mode=self.memory_mode,
+            memory_grid_h=self.memory_grid_h,
+            memory_grid_w=self.memory_grid_w,
+        )
+
+        memory = self.memory_proj(memory_tokens)  # [B, T, D]
+
+        query_weight = classifier_weight[topk_idx]  # [B, K, C]
+
+        if self.detach_query_weight:
+            query_weight = query_weight.detach()
+
+        query = self.query_proj(query_weight)  # [B, K, D]
+
+        decoded = self.decoder(
+            tgt=query,
+            memory=memory,
+        )
+
+        delta = self.out(decoded).squeeze(-1)  # [B, K]
+
+        refined_logits = base_logits.clone()
+        refined_logits.scatter_add_(
+            dim=1,
+            index=topk_idx,
+            src=delta,
+        )
+
+        return {
+            "logits": refined_logits,
+            "base_logits": base_logits,
+            "topk_idx": topk_idx,
+            "delta": delta,
+            "memory_tokens": memory_tokens,
+            "pooled_feature": pooled_feature,
+        }
+
+class WeakMSAGOWithQueryDecoder(nn.Module):
+    """
+    Arch + optional top-k ontology query decoder.
+
+    At train time:
+        - true samples use base self top-k, optionally boosted by true labels;
+        - pseudo samples can use teacher prob top-k, boosted by pseudo labels.
+
+    At eval time:
+        - no teacher prob is available;
+        - use base logits top-k for refinement.
+    """
+
+    def __init__(self, opt: SimpleNamespace, args: argparse.Namespace):
+        super().__init__()
+        self.backbone = Arch(opt)
+        self.num_classes = int(args.num_classes)
+        self.topk = int(args.query_decoder_topk)
+        self.topk_source = str(args.query_decoder_topk_source)
+        self.include_label_boost = bool(args.query_decoder_include_label_boost)
+        self.label_boost = float(args.query_decoder_label_boost)
+
+        classifier = find_classifier_linear(self.backbone, self.num_classes)
+        feature_dim = int(classifier.in_features)
+        self.classifier = classifier
+
+        self.query_decoder = OntologyQueryDecoder(
+            feature_dim=feature_dim,
+            decoder_dim=args.query_decoder_dim,
+            num_heads=args.query_decoder_heads,
+            num_layers=args.query_decoder_layers,
+            ffn_dim=args.query_decoder_ffn_dim,
+            dropout=args.query_decoder_dropout,
+            memory_mode=args.query_decoder_memory_mode,
+            memory_grid_h=args.query_decoder_memory_grid_h,
+            memory_grid_w=args.query_decoder_memory_grid_w,
+            detach_query_weight=args.query_decoder_detach_query_weight,
+        )
+
+    @torch.no_grad()
+    def build_topk_idx(
+        self,
+        base_logits: torch.Tensor,
+        y_hint: Optional[torch.Tensor] = None,
+        prob_hint: Optional[torch.Tensor] = None,
+        has_prob: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        k = min(self.topk, base_logits.shape[1])
+
+        base_score = torch.sigmoid(base_logits.float())
+
+        if self.topk_source == "base":
+            score = base_score
+        elif self.topk_source == "prob":
+            if prob_hint is None:
+                score = base_score
+            else:
+                score = prob_hint.float().clamp(0.0, 1.0)
+                if has_prob is not None:
+                    hp = has_prob.bool().view(-1, 1)
+                    score = torch.where(hp, score, base_score)
+        elif self.topk_source == "mixed":
+            if prob_hint is None:
+                score = base_score
+            else:
+                prob_score = prob_hint.float().clamp(0.0, 1.0)
+                if has_prob is not None:
+                    hp = has_prob.bool().view(-1, 1)
+                    score = torch.where(hp, prob_score, base_score)
+                else:
+                    score = prob_score
+        else:
+            raise ValueError(f"Unknown query_decoder_topk_source: {self.topk_source}")
+
+        if self.include_label_boost and y_hint is not None:
+            score = score + y_hint.float() * self.label_boost
+
+        return torch.topk(score, k=k, dim=1).indices
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        permute_dims=(0, 3, 2, 1),
+        y_hint: Optional[torch.Tensor] = None,
+        prob_hint: Optional[torch.Tensor] = None,
+        has_prob: Optional[torch.Tensor] = None,
+        return_dict: bool = True,
+    ):
+        base_logits, h = self.backbone(
+            x,
+            permute_dims=permute_dims,
+            return_embedding=True,
+        )
+        topk_idx = self.build_topk_idx(
+            base_logits=base_logits.detach(),
+            y_hint=y_hint,
+            prob_hint=prob_hint,
+            has_prob=has_prob,
+        )
+        refined_logits, selected_logits = self.query_decoder(
+            h=h,
+            base_logits=base_logits,
+            topk_idx=topk_idx,
+            classifier_weight=self.classifier.weight,
+        )
+        if return_dict:
+            return {
+                "logits": refined_logits,
+                "base_logits": base_logits,
+                "topk_idx": topk_idx,
+                "selected_logits": selected_logits,
+            }
+        return refined_logits
+
+
+def save_weak_model(model: nn.Module, path: Union[str, Path]):
+    """
+    Save backbone-only checkpoint for old eval compatibility.
+    If query decoder is enabled, also save a full decoder checkpoint next to it.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    m = _unwrap_module(model)
+
+    if isinstance(m, WeakMSAGOWithQueryDecoder):
+        # Old eval compatibility: backbone only.
+        torch.save(m.backbone.state_dict(), path)
+        full_path = path.parent / path.name.replace("weak_backbone", "weak_query_decoder")
+        torch.save(
+            {
+                "checkpoint_type": "weak_query_decoder",
+                "backbone": m.backbone.state_dict(),
+                "query_decoder": m.query_decoder.state_dict(),
+                "num_classes": m.num_classes,
+                "query_decoder_topk": m.topk,
+                "query_decoder_classifier_weight_shape": tuple(m.classifier.weight.shape),
+            },
+            full_path,
+        )
+    else:
+        torch.save(m.state_dict(), path)
+
 def build_optimizer(model: nn.Module, args: argparse.Namespace):
     opt_name = str(args.optim).lower()
     no_weight_decay = set()
@@ -443,23 +826,6 @@ def wrap_ddp(model: nn.Module, args: argparse.Namespace, device: torch.device):
         )
     return DDP(model, find_unused_parameters=bool(args.ddp_find_unused_parameters))
 
-def ddp_all_finite(x: torch.Tensor) -> bool:
-    """
-    Return True only if all ranks have finite x.
-    """
-    finite = torch.isfinite(x.detach()).all()
-
-    flag = torch.tensor(
-        1 if finite else 0,
-        device=x.device,
-        dtype=torch.int32,
-    )
-
-    if dist_is_initialized():
-        torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MIN)
-
-    return bool(flag.item() == 1)
-
 
 def train_one_task(args: argparse.Namespace):
     task = normalize_task(args.task)
@@ -535,8 +901,12 @@ def train_one_task(args: argparse.Namespace):
         print(f"[Data] train={len(true_dataset)}, exp_train={len(pseudo_dataset)}")
         print(f"[Data] local steps: train={len(true_loader)}, pseudo={len(pseudo_loader)}")
 
-    model = Arch(opt)
-    load_arch_checkpoint(model, args.init_ckpt, strict_shape=True)
+    if bool(args.use_query_decoder):
+        model = WeakMSAGOWithQueryDecoder(opt, args)
+        load_arch_checkpoint(model.backbone, args.init_ckpt, strict_shape=True)
+    else:
+        model = Arch(opt)
+        load_arch_checkpoint(model, args.init_ckpt, strict_shape=True)
     model = model.to(device)
 
     if bool(args.freeze_bn):
@@ -624,11 +994,33 @@ def train_one_task(args: argparse.Namespace):
                 set_model_proteins(model, proteins)
 
             with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=amp_enabled):
-                logits = model(X, permute_dims=permute_dims)
-                if isinstance(logits, dict):
-                    logits = logits["logits"]
-                elif isinstance(logits, (tuple, list)):
-                    logits = logits[0]
+                if bool(args.use_query_decoder):
+                    # true samples have no teacher prob; pseudo samples use prob_u when available.
+                    y_hint = torch.cat([y_t, y_u], dim=0)
+                    if prob_u is not None:
+                        prob_hint = torch.cat([torch.zeros_like(y_t), prob_u.float()], dim=0)
+                        has_prob = torch.cat([
+                            torch.zeros(y_t.shape[0], dtype=torch.bool, device=device),
+                            torch.ones(y_u.shape[0], dtype=torch.bool, device=device),
+                        ], dim=0)
+                    else:
+                        prob_hint = None
+                        has_prob = None
+                    out = model(
+                        X,
+                        permute_dims=permute_dims,
+                        y_hint=y_hint,
+                        prob_hint=prob_hint,
+                        has_prob=has_prob,
+                        return_dict=True,
+                    )
+                    logits = out["logits"]
+                else:
+                    logits = model(X, permute_dims=permute_dims)
+                    if isinstance(logits, dict):
+                        logits = logits["logits"]
+                    elif isinstance(logits, (tuple, list)):
+                        logits = logits[0]
 
                 logits_t = logits[:b_t]
                 logits_u = logits[b_t:]
@@ -678,21 +1070,6 @@ def train_one_task(args: argparse.Namespace):
                     + args.lambda_pseudo * loss_pseudo
                     + args.lambda_h * loss_hier
                 )
-                
-                if not ddp_all_finite(loss):
-                    if is_main_process():
-                        print(
-                            f"[Warning] Non-finite loss detected at "
-                            f"epoch={epoch}, step={step}, global_step={global_step}. "
-                            f"Skip this step on all ranks."
-                        )
-                
-                    optimizer.zero_grad(set_to_none=True)
-                
-                    if device.type == "cuda":
-                        torch.cuda.empty_cache()
-                
-                    continue
                 loss_for_backward = loss / int(args.accum_steps)
 
             scaler.scale(loss_for_backward).backward()
@@ -747,13 +1124,13 @@ def train_one_task(args: argparse.Namespace):
             append_jsonl(epoch_log, output_dir / "weak_train_log.jsonl")
             print("[WeakEpoch]", epoch_log)
             if epoch % args.save_interval == 0:
-                save_backbone(model, output_dir / f"weak_backbone_epoch{epoch}.pt")
+                save_weak_model(model, output_dir / f"weak_backbone_epoch{epoch}.pt")
 
         if args.distributed:
             torch.distributed.barrier()
 
     if is_main_process():
-        save_backbone(model, output_dir / "weak_backbone_last.pt")
+        save_weak_model(model, output_dir / "weak_backbone_last.pt")
         print(f"[Done] saved to {output_dir}")
 
     if args.distributed:
@@ -850,6 +1227,35 @@ def build_argparser():
     p.add_argument("--pseudo_asl_gamma_pos", type=float, default=0.0)
     p.add_argument("--pseudo_asl_clip", type=float, default=0.05)
     p.add_argument("--pseudo_asl_reduction", type=str, default="batch_mean", choices=["weighted_mean", "mean_mask", "batch_mean", "sum"])
+
+    # Optional DETR-style top-k ontology query decoder
+    p.add_argument("--use_query_decoder", action="store_true")
+    p.add_argument("--no_query_decoder", dest="use_query_decoder", action="store_false")
+    p.set_defaults(use_query_decoder=False)
+    p.add_argument("--query_decoder_topk", type=int, default=50)
+    p.add_argument("--query_decoder_topk_source", type=str, default="mixed", choices=["base", "prob", "mixed"])
+    p.add_argument("--query_decoder_mode", type=str, default="residual", choices=["residual", "replace"])
+    p.add_argument("--query_decoder_dim", type=int, default=256)
+    p.add_argument("--query_decoder_heads", type=int, default=8)
+    p.add_argument("--query_decoder_layers", type=int, default=1)
+    p.add_argument("--query_decoder_ffn_dim", type=int, default=1024)
+    p.add_argument("--query_decoder_dropout", type=float, default=0.1)
+    p.add_argument("--query_decoder_detach_query_weight", action="store_true")
+    p.add_argument("--no_query_decoder_detach_query_weight", dest="query_decoder_detach_query_weight", action="store_false")
+    p.set_defaults(query_decoder_detach_query_weight=True)
+    p.add_argument("--query_decoder_include_label_boost", action="store_true")
+    p.add_argument("--no_query_decoder_include_label_boost", dest="query_decoder_include_label_boost", action="store_false")
+    p.set_defaults(query_decoder_include_label_boost=True)
+    p.add_argument("--query_decoder_label_boost", type=float, default=2.0)
+    parser.add_argument(
+        "--query_decoder_memory_mode",
+        type=str,
+        default="tokens_plus_pooled",
+        choices=["pooled", "tokens", "tokens_plus_pooled"],
+    )
+    
+    parser.add_argument("--query_decoder_memory_grid_h", type=int, default=0)
+    parser.add_argument("--query_decoder_memory_grid_w", type=int, default=0)
 
     p.add_argument("--ic_path", type=str, default=None)
     p.add_argument("--ic_alpha", type=float, default=1.0)

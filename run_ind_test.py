@@ -75,13 +75,13 @@ WORKING_ADDRESS = ROOT / "data" / "ind_MSA_bin" / "index.pkl"
 
 
 # If DO_VALIDATION=False during training, there may be no "best" checkpoint.
-TRAIN_RUN_TAG = f"{TASK}_semisup_ema_teacher_v1"
+TRAIN_RUN_TAG = f"{TASK}_weak_asl_prob_v1"
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
 # Trained / student checkpoint.
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_backbone_last.pt"
 # CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
 # CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_ema_backbone_epoch5.pt"
-CKPT = ROOT / "outputs" / "exp_train" / TRAIN_RUN_TAG / "semisup_ema_backbone_last.pt"
+CKPT = ROOT / "outputs" / "weak_exp_train" / TRAIN_RUN_TAG / "weak_backbone_epoch10.pt"
 # "student", "ema", "teacher", "other"
 CKPT_ROLE = "ema"
 
@@ -98,8 +98,8 @@ CKPT_ROLE = "ema"
 
 # Teacher checkpoint.
 # Set to None to disable teacher-student averaging.
-TEACHER_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
-# TEACHER_CKPT = None
+# TEACHER_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
+TEACHER_CKPT = None
 
 
 #
@@ -117,8 +117,8 @@ EVAL_MODE = "ind_test"
 # ---------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------
-# RUN_TAG = f"{TASK}_ind_test_semisup_backbone_epoch5"
-RUN_TAG = f"{TASK}_ind_test_teacher_student_avg"
+RUN_TAG = f"{TASK}_ind_test_semisup_weak_backbone_epoch10"
+# RUN_TAG = f"{TASK}_ind_test_teacher_student_avg"
 # RUN_TAG = f"{TASK}_ind_test_teacher_only"
 OUTPUT_ROOT = ROOT / "outputs" / "ind_test"
 OUTPUT_DIR = OUTPUT_ROOT / RUN_TAG

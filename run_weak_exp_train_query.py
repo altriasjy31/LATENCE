@@ -46,7 +46,7 @@ PSEUDO_PROB_PATH = PROB_OUTPUT_DIR / f"{TASK}_exp_train_probs.float16.npy"
 USE_PSEUDO_PROB = True
 
 RUN_TAG = f"{TASK}_weak_asl_prob_v1"
-OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train" / RUN_TAG
+OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train_query" / RUN_TAG
 FAIL_IF_OUTPUT_EXISTS = False
 
 CUDA_VISIBLE_DEVICES = "0,1,2,3"
@@ -68,12 +68,12 @@ SEED = 3407
 EPOCHS = 50
 # With the provided weak_exp_train.py, true and pseudo batches are concatenated.
 # Therefore BATCH_SIZE=32 and PSEUDO_BATCH_SIZE=32 means a per-GPU forward batch of 64.
-BATCH_SIZE = 32
-PSEUDO_BATCH_SIZE = 32
-DATALOADER_NUM_WORKERS = 4
+BATCH_SIZE = 16
+PSEUDO_BATCH_SIZE = 48
+DATALOADER_NUM_WORKERS = 8
 PIN_MEMORY = True
 DROP_LAST = False
-MAX_STEPS_PER_EPOCH = 1000  # for smoke test: e.g. 200
+MAX_STEPS_PER_EPOCH = None  # for smoke test: e.g. 200
 
 MSA_READ_MODE = "full"
 MSA_SAMPLE_STRATEGY = "random"
@@ -88,9 +88,9 @@ PERSISTENT_WORKERS = True
 DDP_FIND_UNUSED_PARAMETERS = False
 
 # Weak training: single model, no EMA/KD/contrastive.
-OPTIM = "adamw"          # fallback to AdamW if timm Muon unavailable
+OPTIM = "adamw"          # fallback to AdamW if timm Lamb unavailable
 OPTIM_EPS = 1e-6
-LR = 8e-4             # teacher reference
+LR = 1.8e-3             # teacher reference
 LR_POLICY = "cycle"
 LR_PCT_START = 0.1
 LR_CYCLE_THREE_PHASE = False
@@ -106,8 +106,8 @@ NO_AMP = False
 FREEZE_BN = False       # teacher-like training; set True only if unstable
 FREEZE_BN_AFFINE = False
 
-LAMBDA_TRUE = 1.0
-LAMBDA_PSEUDO = 0.2
+LAMBDA_TRUE = 0.7
+LAMBDA_PSEUDO = 0.6
 LAMBDA_H = 0.0005
 
 TRUE_ASL_GAMMA_NEG = 4.0
@@ -128,11 +128,30 @@ PSEUDO_ASL_GAMMA_POS = 0.0
 PSEUDO_ASL_CLIP = 0.05
 PSEUDO_ASL_REDUCTION = "batch_mean"
 
+# ---------------------------------------------------------------------
+# Optional DETR-style top-k ontology query decoder
+# ---------------------------------------------------------------------
+USE_QUERY_DECODER = True
+QUERY_DECODER_TOPK = 50
+QUERY_DECODER_TOPK_SOURCE = "mixed"      # "base", "prob", "mixed"
+QUERY_DECODER_MODE = "residual"          # strongly recommended; "replace" is risky
+QUERY_DECODER_DIM = 256
+QUERY_DECODER_HEADS = 8
+QUERY_DECODER_LAYERS = 1
+QUERY_DECODER_FFN_DIM = 1024
+QUERY_DECODER_DROPOUT = 0.1
+QUERY_DECODER_DETACH_QUERY_WEIGHT = True
+QUERY_DECODER_INCLUDE_LABEL_BOOST = True
+QUERY_DECODER_LABEL_BOOST = 2.0
+QUERY_DECODER_MEMORY_MODE = "tokens_plus_pooled"
+QUERY_DECODER_MEMORY_GRID_H = 0
+QUERY_DECODER_MEMORY_GRID_W = 0
+
 IC_ALPHA = 1.0
 IC_MIN_COUNT = 2
 
 LOG_INTERVAL = 20
-SAVE_INTERVAL = 5
+SAVE_INTERVAL = 2
 NEED_PROTEINS = False
 DRY_RUN = False
 PRINT_CONFIG = True
@@ -274,6 +293,21 @@ def build_args() -> argparse.Namespace:
         pseudo_asl_gamma_pos=float(PSEUDO_ASL_GAMMA_POS),
         pseudo_asl_clip=float(PSEUDO_ASL_CLIP),
         pseudo_asl_reduction=str(PSEUDO_ASL_REDUCTION),
+        use_query_decoder=bool(USE_QUERY_DECODER),
+        query_decoder_topk=int(QUERY_DECODER_TOPK),
+        query_decoder_topk_source=str(QUERY_DECODER_TOPK_SOURCE),
+        query_decoder_mode=str(QUERY_DECODER_MODE),
+        query_decoder_dim=int(QUERY_DECODER_DIM),
+        query_decoder_heads=int(QUERY_DECODER_HEADS),
+        query_decoder_layers=int(QUERY_DECODER_LAYERS),
+        query_decoder_ffn_dim=int(QUERY_DECODER_FFN_DIM),
+        query_decoder_dropout=float(QUERY_DECODER_DROPOUT),
+        query_decoder_detach_query_weight=bool(QUERY_DECODER_DETACH_QUERY_WEIGHT),
+        query_decoder_include_label_boost=bool(QUERY_DECODER_INCLUDE_LABEL_BOOST),
+        query_decoder_label_boost=float(QUERY_DECODER_LABEL_BOOST),
+        query_decoder_memory_mode=str(QUERY_DECODER_MEMORY_MODE),
+        query_decoder_memory_grid_h=int(QUERY_DECODER_MEMORY_GRID_H),
+        query_decoder_memory_grid_w=int(QUERY_DECODER_MEMORY_GRID_W),
         true_asl_gamma_neg=float(TRUE_ASL_GAMMA_NEG),
         true_asl_gamma_pos=float(TRUE_ASL_GAMMA_POS),
         true_asl_clip=float(TRUE_ASL_CLIP),
@@ -356,6 +390,11 @@ def print_run_summary(args: argparse.Namespace):
     print(f"PSEUDO_NEG_POLICY    = {args.pseudo_negative_policy}")
     print(f"PSEUDO_ASL_REDUCTION = {args.pseudo_asl_reduction}")
     print(f"TRUE_ASL_REDUCTION   = {args.true_asl_reduction}")
+    print(f"USE_QUERY_DECODER    = {args.use_query_decoder}")
+    print(f"QUERY_DECODER_TOPK   = {args.query_decoder_topk}")
+    print(f"QUERY_DECODER_SOURCE = {args.query_decoder_topk_source}")
+    print(f"QUERY_DECODER_MODE   = {args.query_decoder_mode}")
+    print(f"QUERY_DECODER_DIM    = {args.query_decoder_dim}")
     print(f"FREEZE_BN            = {args.freeze_bn}")
     print("=" * 80)
 
