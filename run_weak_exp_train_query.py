@@ -65,7 +65,7 @@ PSEUDO_BATCH_SIZE = 48
 DATALOADER_NUM_WORKERS = 8
 PIN_MEMORY = True
 DROP_LAST = False
-MAX_STEPS_PER_EPOCH = 200  # for smoke test: e.g. 200
+MAX_STEPS_PER_EPOCH = 1000  # for smoke test: e.g. 200
 
 MSA_READ_MODE = "full"
 MSA_SAMPLE_STRATEGY = "random"

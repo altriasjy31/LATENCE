@@ -41,7 +41,7 @@ EVAL_SCRIPT = ROOT / "experiments" / "eval_weak_ind_test_query.py"
 # USER CONFIG
 # =============================================================================
 
-TASK = "bp"  # "cc", "mf", "bp"
+TASK = os.environ.get("TASK", "bp")  # "cc", "mf", "bp"
 
 MODEL_CONFIG = ROOT / "data" / "msa_models" / "configs" / "model_opts" / f"{TASK}_msa_model_config.pkl"
 FILE_ADDRESS = ROOT / "data" / "unidata_with_exp_train_pseudo.pkl"
@@ -61,7 +61,7 @@ TRAIN_OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train_query" / TRAIN_RUN_TAG
 #   "weak_backbone_last"
 #   "teacher_only"
 CKPT_KIND = "weak_query_epoch"
-CKPT_EPOCH = 2
+CKPT_EPOCH = 46
 
 TEACHER_ORIGINAL_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
 
@@ -101,8 +101,8 @@ ENSEMBLE_PRIMARY_WEIGHT = 1.0
 ENSEMBLE_TEACHER_WEIGHT = 0.0
 # Example for teacher + query ensemble:
 # TEACHER_CKPT = TEACHER_ORIGINAL_CKPT
-# ENSEMBLE_PRIMARY_WEIGHT = 0.2
-# ENSEMBLE_TEACHER_WEIGHT = 0.8
+# ENSEMBLE_PRIMARY_WEIGHT = 0.5
+# ENSEMBLE_TEACHER_WEIGHT = 0.5
 
 EVAL_MODE = "ind_test"
 
