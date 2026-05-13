@@ -637,6 +637,7 @@ class WeakMSAGOWithQueryDecoder(nn.Module):
             memory_grid_h=args.query_decoder_memory_grid_h,
             memory_grid_w=args.query_decoder_memory_grid_w,
             detach_query_weight=args.query_decoder_detach_query_weight,
+            delta_max=args.query_decoder_delta_max,
         )
 
     @torch.no_grad()

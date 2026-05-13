@@ -60,8 +60,8 @@ TRAIN_OUTPUT_DIR = ROOT / "outputs" / "weak_exp_train_query" / TRAIN_RUN_TAG
 #   "weak_backbone_epoch"
 #   "weak_backbone_last"
 #   "teacher_only"
-CKPT_KIND = "weak_query_epoch"
-CKPT_EPOCH = 46
+CKPT_KIND = "weak_backbone_epoch"
+CKPT_EPOCH = 50
 
 TEACHER_ORIGINAL_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
 

@@ -56,16 +56,62 @@ MSA_MAX_SIZE = None
 PERMUTE_DIMS = (0, 3, 2, 1)
 TORCH_COMPILE = False
 
+TASK_CONFIGS = {
+    "bp": {
+        "batch_size": 24,
+        "pseudo_batch_size": 40,
+        "lambda_true": 0.9,
+        "lambda_pseudo": 0.3,
+        "lr": 3e-4,
+        "query_topk": 100,
+        "delta_max": 0.5,
+        "max_steps": 1000,
+    },
+
+    "mf": {
+        "batch_size": 8,
+        "pseudo_batch_size": 56,
+        "lambda_true": 0.75,
+        "lambda_pseudo": 0.8,
+        "lr": 2e-4,
+        "query_topk": 100,
+        "delta_max": 0.5,
+        "max_steps": 1000,
+    },
+
+    "cc": {
+        "batch_size": 8,
+        "pseudo_batch_size": 56,
+        "lambda_true": 0.65,
+        "lambda_pseudo": 1.0,
+        "lr": 1.5e-4,
+        "query_topk": 100,
+        "delta_max": 0.5,
+        "max_steps": 1000,
+    },
+}
+
+_cfg = TASK_CONFIGS[TASK]
+
+BATCH_SIZE = _cfg["batch_size"]
+PSEUDO_BATCH_SIZE = _cfg["pseudo_batch_size"]
+LAMBDA_TRUE = _cfg["lambda_true"]
+LAMBDA_PSEUDO = _cfg["lambda_pseudo"]
+LR = _cfg["lr"]
+QUERY_DECODER_TOPK = _cfg["query_topk"]
+QUERY_DECODER_DELTA_MAX = _cfg["delta_max"]
+MAX_STEPS_PER_EPOCH = _cfg["max_steps"]
+
 SEED = 3407
 EPOCHS = 50
 # With the provided weak_exp_train.py, true and pseudo batches are concatenated.
 # Therefore BATCH_SIZE=32 and PSEUDO_BATCH_SIZE=32 means a per-GPU forward batch of 64.
-BATCH_SIZE = 16
-PSEUDO_BATCH_SIZE = 48
+# BATCH_SIZE = 8
+# PSEUDO_BATCH_SIZE = 56
 DATALOADER_NUM_WORKERS = 8
 PIN_MEMORY = True
 DROP_LAST = False
-MAX_STEPS_PER_EPOCH = 1000  # for smoke test: e.g. 200
+# MAX_STEPS_PER_EPOCH = 1000  # for smoke test: e.g. 200
 
 MSA_READ_MODE = "full"
 MSA_SAMPLE_STRATEGY = "random"
@@ -83,7 +129,8 @@ DDP_FIND_UNUSED_PARAMETERS = False
 OPTIM = "adamw"          # fallback to AdamW if timm Lamb unavailable
 OPTIM_EPS = 1e-6
 # LR = 1.8e-3             # teacher reference
-LR = 3e-4
+# LR = 3e-4 # bp
+LR = 2e-4 # mf
 
 LR_POLICY = "cycle"
 LR_PCT_START = 0.1
@@ -100,8 +147,8 @@ NO_AMP = False
 FREEZE_BN = False       # teacher-like training; set True only if unstable
 FREEZE_BN_AFFINE = False
 
-LAMBDA_TRUE = 0.9
-LAMBDA_PSEUDO = 0.3
+# LAMBDA_TRUE = 0.75
+# LAMBDA_PSEUDO = 0.8
 LAMBDA_H = 0.0005
 
 TRUE_ASL_GAMMA_NEG = 4.0
@@ -379,6 +426,7 @@ def build_args() -> argparse.Namespace:
         use_query_decoder=bool(USE_QUERY_DECODER),
         query_decoder_topk=int(QUERY_DECODER_TOPK),
         query_decoder_topk_source=str(QUERY_DECODER_TOPK_SOURCE),
+        query_decoder_delta_max=str(QUERY_DECODER_DELTA_MAX),
         query_decoder_mode=str(QUERY_DECODER_MODE),
         query_decoder_dim=int(QUERY_DECODER_DIM),
         query_decoder_heads=int(QUERY_DECODER_HEADS),
