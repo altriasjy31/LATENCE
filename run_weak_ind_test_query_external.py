@@ -34,7 +34,7 @@ from typing import Any, Dict
 
 ROOT = Path(__file__).resolve().parent
 MSA_ROOT = ROOT / "msa_models"
-EVAL_SCRIPT = ROOT / "experiments" / "eval_weak_ind_test_query.py"
+EVAL_SCRIPT = ROOT / "experiments" / "eval_weak_ind_test_query_external.py"
 
 
 # =============================================================================
@@ -115,7 +115,7 @@ if CKPT_EPOCH is not None:
 if TEACHER_CKPT is not None:
     RUN_TAG += f"_ens_p{ENSEMBLE_PRIMARY_WEIGHT}_t{ENSEMBLE_TEACHER_WEIGHT}"
 
-OUTPUT_ROOT = ROOT / "outputs" / "ind_test_weak_query"
+OUTPUT_ROOT = ROOT / "outputs" / "ind_test_weak_query_externel"
 OUTPUT_DIR = OUTPUT_ROOT / RUN_TAG
 FAIL_IF_OUTPUT_EXISTS = False
 
@@ -156,6 +156,16 @@ QUERY_DECODER_MEMORY_MODE = "tokens_plus_pooled"
 QUERY_DECODER_MEMORY_GRID_H = 0
 QUERY_DECODER_MEMORY_GRID_W = 0
 STRICT_QUERY_DECODER = True
+
+# Optional external expert probabilities for query proposal at evaluation time.
+# If None, query top-k is selected from the model's own base logits.
+# external_prob_path must be shape [num_eval_samples, num_classes] and aligned
+# with the eval dataset row order, unless EXTERNAL_PROB_PROTEIN_IDS is provided.
+QUERY_DECODER_TOPK_SOURCE = "blend"  # "base", "external_prob", "external_or_base", "blend"
+# EXTERNAL_PROB_PATH = None
+EXTERNAL_PROB_PATH = ROOT / "data" / "externel_probs" / "esm2_3b" / f"{TASK}_predictions.float16.npy"
+EXTERNAL_PROB_PROTEIN_IDS = None
+EXTERNAL_PROB_BLEND_ALPHA = 1.0
 
 # ---------------------------------------------------------------------
 # Eval loader
@@ -257,6 +267,10 @@ def _validate_paths():
         raise FileNotFoundError(f"CKPT not found: {CKPT}")
     if TEACHER_CKPT is not None and not Path(TEACHER_CKPT).is_file():
         raise FileNotFoundError(f"TEACHER_CKPT not found: {TEACHER_CKPT}")
+    if EXTERNAL_PROB_PATH is not None and not Path(EXTERNAL_PROB_PATH).is_file():
+        raise FileNotFoundError(f"EXTERNAL_PROB_PATH not found: {EXTERNAL_PROB_PATH}")
+    if EXTERNAL_PROB_PROTEIN_IDS is not None and not Path(EXTERNAL_PROB_PROTEIN_IDS).is_file():
+        raise FileNotFoundError(f"EXTERNAL_PROB_PROTEIN_IDS not found: {EXTERNAL_PROB_PROTEIN_IDS}")
     if not Path(FILE_ADDRESS).is_file():
         raise FileNotFoundError(f"FILE_ADDRESS not found: {FILE_ADDRESS}")
     if not Path(WORKING_ADDRESS).is_file():
@@ -367,6 +381,10 @@ def build_args() -> argparse.Namespace:
 
         use_query_decoder=bool(USE_QUERY_DECODER),
         query_decoder_topk=int(QUERY_DECODER_TOPK),
+        query_decoder_topk_source=str(QUERY_DECODER_TOPK_SOURCE),
+        external_prob_path=_path_or_none(EXTERNAL_PROB_PATH),
+        external_prob_protein_ids=_path_or_none(EXTERNAL_PROB_PROTEIN_IDS),
+        external_prob_blend_alpha=float(EXTERNAL_PROB_BLEND_ALPHA),
         query_decoder_mode=str(QUERY_DECODER_MODE),
         query_decoder_dim=int(QUERY_DECODER_DIM),
         query_decoder_heads=int(QUERY_DECODER_HEADS),
@@ -441,7 +459,7 @@ def main():
     if msa_str not in sys.path:
         sys.path.insert(0, msa_str)
 
-    from experiments.eval_weak_ind_test_query import evaluate_one_task, normalize_task
+    from experiments.eval_weak_ind_test_query_external import evaluate_one_task, normalize_task
 
     args.task = normalize_task(args.task)
     evaluate_one_task(args)

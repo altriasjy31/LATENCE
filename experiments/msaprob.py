@@ -147,3 +147,101 @@ class PseudoProbDataset(Dataset):
 
         prob = torch.from_numpy(arr)
         return input_data, {"hard_y": hard_y, "prob": prob}
+
+class EvalExternalProbDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        base_dataset,
+        external_prob_path,
+        external_prob_ids=None,
+        metadata_file=None,
+        mode="ind_test",
+        task=None,
+        num_classes=None,
+    ):
+        self.base = base_dataset
+        self.external_prob_path = str(external_prob_path)
+        self.num_classes = int(num_classes)
+
+        prob = np.load(self.external_prob_path, mmap_mode="r")
+
+        if prob.ndim != 2:
+            raise ValueError(f"external prob must be 2D, got {prob.shape}")
+
+        if prob.shape[1] != self.num_classes:
+            raise ValueError(
+                f"external prob classes={prob.shape[1]}, "
+                f"expected={self.num_classes}"
+            )
+
+        self.prob_shape = tuple(prob.shape)
+        self.prob_dtype = str(prob.dtype)
+
+        if external_prob_ids is None:
+            if len(base_dataset) != prob.shape[0]:
+                raise ValueError(
+                    "external_prob_ids is None, so row order must match dataset. "
+                    f"But len(dataset)={len(base_dataset)}, prob rows={prob.shape[0]}"
+                )
+            self.row_indices = np.arange(len(base_dataset), dtype=np.int64)
+
+        else:
+            with open(external_prob_ids, "r") as f:
+                prob_ids = [line.strip().split()[0] for line in f if line.strip()]
+
+            if len(prob_ids) != prob.shape[0]:
+                raise ValueError(
+                    f"external_prob_ids rows={len(prob_ids)}, "
+                    f"prob rows={prob.shape[0]}"
+                )
+
+            id_to_row = {p: i for i, p in enumerate(prob_ids)}
+
+            if not hasattr(base_dataset, "proteins"):
+                raise RuntimeError(
+                    "base_dataset must expose .proteins when external_prob_ids is provided"
+                )
+
+            row_indices = []
+            missing = []
+
+            for p in base_dataset.proteins:
+                p = str(p)
+                if p not in id_to_row:
+                    missing.append(p)
+                else:
+                    row_indices.append(id_to_row[p])
+
+            if missing:
+                raise RuntimeError(
+                    f"{len(missing)} proteins missing from external_prob_ids. "
+                    f"Examples: {missing[:10]}"
+                )
+
+            self.row_indices = np.asarray(row_indices, dtype=np.int64)
+
+        self._prob = None
+        del prob
+
+    @property
+    def prob(self):
+        if self._prob is None:
+            self._prob = np.load(self.external_prob_path, mmap_mode="r")
+        return self._prob
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getattr__(self, name):
+        return getattr(self.base, name)
+
+    def __getitem__(self, idx):
+        input_data, y = self.base[idx]
+        row = int(self.row_indices[idx])
+        p = np.array(self.prob[row], dtype=np.float16, copy=True)
+        p = torch.from_numpy(p)
+
+        return input_data, {
+            "target": y,
+            "external_prob": p,
+        }
