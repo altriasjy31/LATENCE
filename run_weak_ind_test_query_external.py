@@ -115,7 +115,7 @@ if CKPT_EPOCH is not None:
 if TEACHER_CKPT is not None:
     RUN_TAG += f"_ens_p{ENSEMBLE_PRIMARY_WEIGHT}_t{ENSEMBLE_TEACHER_WEIGHT}"
 
-OUTPUT_ROOT = ROOT / "outputs" / "ind_test_weak_query_externel"
+OUTPUT_ROOT = ROOT / "outputs" / "ind_test_weak_query_external"
 OUTPUT_DIR = OUTPUT_ROOT / RUN_TAG
 FAIL_IF_OUTPUT_EXISTS = False
 
@@ -163,7 +163,7 @@ STRICT_QUERY_DECODER = True
 # with the eval dataset row order, unless EXTERNAL_PROB_PROTEIN_IDS is provided.
 QUERY_DECODER_TOPK_SOURCE = "blend"  # "base", "external_prob", "external_or_base", "blend"
 # EXTERNAL_PROB_PATH = None
-EXTERNAL_PROB_PATH = ROOT / "data" / "externel_probs" / "esm2_3b" / f"{TASK}_predictions.float16.npy"
+EXTERNAL_PROB_PATH = ROOT / "data" / "external_probs" / "esm2_3b" / f"{TASK}_predictions.prop.float16.npy"
 EXTERNAL_PROB_PROTEIN_IDS = None
 EXTERNAL_PROB_BLEND_ALPHA = 1.0
 
