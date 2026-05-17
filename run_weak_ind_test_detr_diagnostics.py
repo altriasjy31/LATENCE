@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+run_eval_weak_ind_test_detr_diagnostics.py
+
+Runner for experiments/eval_weak_ind_test_detr_diagnostics.py.
+
+Examples
+--------
+TASK=bp RUN_TAG=bp_weak_detr_v3_expert_prob EPOCH=6 python run_eval_weak_ind_test_detr_diagnostics.py
+
+or explicitly:
+
+TASK=bp \
+CHECKPOINT=/.../outputs/weak_exp_train_detr/bp_weak_detr_v3_expert_prob/weak_detr_decoder_epoch6.pt \
+EXTERNAL_PROB_PATH=/.../data/external_probs/esm2_3b/bp_predictions.float16.npy \
+python run_eval_weak_ind_test_detr_diagnostics.py
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+EVAL_SCRIPT = ROOT / "experiments" / "eval_weak_ind_test_detr_diagnostics.py"
+
+TASK = os.environ.get("TASK", "bp")  # cc, mf, bp
+MODE = os.environ.get("MODE", "ind_test")
+EPOCH = os.environ.get("EPOCH", "6")
+RUN_TAG = os.environ.get("RUN_TAG", f"{TASK}_weak_detr_v3_expert_prob")
+
+TASK_NUM_CLASSES = {
+    "cc": 2903,
+    "mf": 7038,
+    "bp": 21312,
+}
+
+MODEL_CONFIG = ROOT / "data" / "msa_models" / "configs" / "model_opts" / f"{TASK}_msa_model_config.pkl"
+INIT_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
+FILE_ADDRESS = ROOT / "data" / "unidata_with_exp_train_pseudo.pkl"
+WORKING_ADDRESS = ROOT / "data" / "ind_MSA_bin" / "index.pkl"
+
+DEFAULT_CKPT = ROOT / "outputs" / "weak_exp_train_detr" / RUN_TAG / f"weak_detr_decoder_epoch{EPOCH}.pt"
+CHECKPOINT = Path(os.environ.get("CHECKPOINT", str(DEFAULT_CKPT)))
+
+EXTERNAL_PROB_PATH = Path(
+    os.environ.get(
+        "EXTERNAL_PROB_PATH",
+        str(ROOT / "data" / "external_probs" / "esm2_3b" / f"{TASK}_predictions.prop.float16.npy"),
+    )
+)
+
+ORIGINAL_PROB_PATH = os.environ.get("ORIGINAL_PROB_PATH", "")
+
+DECODER_PROB_SOURCES = os.environ.get(
+    "DECODER_PROB_SOURCES",
+    "expert,mix_expert_base,mix_expert_original",
+)
+
+DECODER_PROB_MIX_ALPHAS = os.environ.get(
+    "DECODER_PROB_MIX_ALPHAS",
+    "0.5,0.7,0.8,0.9",
+)
+
+SKIP_LEGACY_QUERY_SOURCES = os.environ.get("SKIP_LEGACY_QUERY_SOURCES", "0") == "1"
+
+# Important: include decoderprob, otherwise mixed decoder-prob results will not be ensembled.
+ENSEMBLE_QUERY_MODES = os.environ.get(
+    "ENSEMBLE_QUERY_MODES",
+    "external_topk,blend_topk,decoderprob,anchorlogit",
+)
+
+OUTPUT_DIR = Path(
+    os.environ.get(
+        "OUTPUT_DIR",
+        str(ROOT / "outputs" / "weak_exp_train_detr_diagnostics" / RUN_TAG / f"epoch{EPOCH}_{MODE}"),
+    )
+)
+
+EVAL_BATCH_SIZE = int(os.environ.get("EVAL_BATCH_SIZE", "8"))
+NUM_WORKERS = int(os.environ.get("DATALOADER_NUM_WORKERS", "4"))
+MAX_BATCHES = os.environ.get("MAX_BATCHES", "")
+DEVICE = os.environ.get("DEVICE", "auto")
+
+QUERY_MODES = os.environ.get("QUERY_MODES", "base_topk,external_topk,blend_topk")
+DELTA_SCALES = os.environ.get("DELTA_SCALES", "0,0.25,0.5,0.75,1.0")
+ENSEMBLE_ALPHAS = os.environ.get("ENSEMBLE_ALPHAS", "0.1,0.3,0.5,0.7,0.9")
+ENSEMBLE_QUERY_MODES = os.environ.get("ENSEMBLE_QUERY_MODES", "external_topk,blend_topk")
+ENSEMBLE_DELTA_SCALES = os.environ.get("ENSEMBLE_DELTA_SCALES", "0.5,1.0")
+
+# hist is fast and enough for diagnosis. Use AUROC_MODE=exact if you need a
+# closer micro average-precision value, but it can be slower/more memory heavy.
+AUPRC_MODE = os.environ.get("AUPRC_MODE", "hist")  # hist, exact, none
+THRESHOLD_STEP = os.environ.get("THRESHOLD_STEP", "0.01")
+COMPUTE_SAMPLE_FMAX = os.environ.get("COMPUTE_SAMPLE_FMAX", "0") == "1"
+DO_RARE_ANALYSIS = os.environ.get("DO_RARE_ANALYSIS", "1")
+
+# For eval, do not pass y_hint to the decoder unless deliberately doing an
+# oracle/leakage ablation.
+ALLOW_EVAL_LABEL_BOOST = os.environ.get("ALLOW_EVAL_LABEL_BOOST", "0") == "1"
+
+# Decoder defaults. The eval script will auto-load checkpoint_dir/args.json and
+# use the training-time decoder config unless overridden by CLI/env here.
+cmd = [
+    sys.executable,
+    str(EVAL_SCRIPT),
+    "--checkpoint", str(CHECKPOINT),
+    "--task", TASK,
+    "--mode", MODE,
+    "--num_classes", str(TASK_NUM_CLASSES[TASK]),
+    "--model_config", str(MODEL_CONFIG),
+    "--init_ckpt", str(INIT_CKPT),
+    "--file_address", str(FILE_ADDRESS),
+    "--working_address", str(WORKING_ADDRESS),
+    "--external_prob_path", str(EXTERNAL_PROB_PATH),
+    "--decoder_prob_sources", str(DECODER_PROB_SOURCES),
+    "--decoder_prob_mix_alphas", str(DECODER_PROB_MIX_ALPHAS),
+    "--ensemble_query_modes", str(ENSEMBLE_QUERY_MODES),
+    "--output_dir", str(OUTPUT_DIR),
+    "--eval_batch_size", str(EVAL_BATCH_SIZE),
+    "--dataloader_num_workers", str(NUM_WORKERS),
+    "--device", DEVICE,
+    "--query_modes", QUERY_MODES,
+    "--delta_scales", DELTA_SCALES,
+    "--ensemble_alphas", ENSEMBLE_ALPHAS,
+    "--ensemble_query_modes", ENSEMBLE_QUERY_MODES,
+    "--ensemble_delta_scales", ENSEMBLE_DELTA_SCALES,
+    "--auprc_mode", AUPRC_MODE,
+    "--threshold_step", str(THRESHOLD_STEP),
+    "--do_rare_analysis", DO_RARE_ANALYSIS,
+]
+
+if NUM_WORKERS <= 0:
+    cmd.extend(["--persistent_workers", "0"])
+if MAX_BATCHES.strip():
+    cmd.extend(["--max_batches", MAX_BATCHES.strip()])
+if COMPUTE_SAMPLE_FMAX:
+    cmd.append("--compute_sample_fmax")
+if ALLOW_EVAL_LABEL_BOOST:
+    cmd.append("--allow_eval_label_boost")
+
+print("[Command]")
+print(" ".join(cmd))
+subprocess.run(cmd, check=True)

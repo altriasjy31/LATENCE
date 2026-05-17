@@ -117,7 +117,7 @@ TASK_CONFIGS = {
         "query_topk": 100,
         "selector_topm": 1024,
         "delta_max": 0.5,
-        "max_steps": 1000,
+        "max_steps": None,
     },
     "mf": {
         "batch_size": 8,
@@ -128,7 +128,7 @@ TASK_CONFIGS = {
         "query_topk": 100,
         "selector_topm": 512,
         "delta_max": 0.5,
-        "max_steps": 1000,
+        "max_steps": None,
     },
     "cc": {
         "batch_size": 8,
@@ -139,7 +139,7 @@ TASK_CONFIGS = {
         "query_topk": 100,
         "selector_topm": 512,
         "delta_max": 0.5,
-        "max_steps": 1000,
+        "max_steps": None,
     },
 }
 
