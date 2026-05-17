@@ -34,6 +34,7 @@ Do not use ind_test probability arrays as pseudo training supervision.
 
 from __future__ import annotations
 
+import math
 import argparse
 import contextlib
 import os
@@ -365,6 +366,146 @@ def build_pseudo_supervision(
 
     return target, mask, conf, stats
 
+def prob_to_logit(prob: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    p = prob.float().clamp(float(eps), 1.0 - float(eps))
+    return torch.log(p) - torch.log1p(-p)
+
+
+def build_anchor_logits_from_prob(
+    base_logits: torch.Tensor,
+    external_prob: Optional[torch.Tensor],
+    has_external_prob: Optional[torch.Tensor],
+    mode: str = "base_residual",
+    mix_alpha: float = 0.8,
+    eps: float = 1e-6,
+):
+    base_prob = torch.sigmoid(base_logits.float())
+
+    if mode == "base_residual" or external_prob is None:
+        return base_logits.float(), base_prob
+
+    ext_prob = external_prob.float().clamp(0.0, 1.0)
+
+    if mode == "expert_base":
+        anchor_prob = ext_prob
+    elif mode in {"mix_expert_base", "anchor_delta", "mix_expert_base_anchor"}:
+        a = float(mix_alpha)
+        anchor_prob = (a * ext_prob + (1.0 - a) * base_prob).clamp(0.0, 1.0)
+    else:
+        raise ValueError(f"Unknown query_decoder_logit_base_mode: {mode}")
+
+    anchor_logits = prob_to_logit(anchor_prob, eps=eps)
+
+    # true rows have no expert prob; fallback to base.
+    if has_external_prob is not None:
+        hp = has_external_prob.bool().view(-1, 1)
+        anchor_logits = torch.where(hp, anchor_logits, base_logits.float())
+        anchor_prob = torch.where(hp, anchor_prob, base_prob)
+
+    return anchor_logits, anchor_prob
+
+def compute_anchor_kd_loss(
+    qout: dict,
+    topm: int = 512,
+    conf_power: float = 0.5,
+    neg_weight: float = 0.25,
+    true_batch_size: int = 0,
+) -> torch.Tensor:
+    """
+    Preserve strong anchor on pseudo rows only.
+
+    In anchor mode:
+        anchor_prob = mix(expert_prob, base_prob)
+        refined logits should not destroy this strong anchor.
+    """
+
+    logits = qout.get("logits", None)
+    anchor_prob = qout.get("anchor_prob", None)
+    topk_idx = qout.get("topk_idx", None)
+
+    if logits is None or anchor_prob is None or topk_idx is None:
+        device = logits.device if logits is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return torch.tensor(0.0, device=device)
+
+    start = int(true_batch_size)
+
+    logits_u = logits[start:]
+    anchor_prob_u = anchor_prob[start:].float().clamp(0.0, 1.0).detach()
+    idx_u = topk_idx[start:]
+
+    if logits_u.numel() == 0:
+        return torch.tensor(0.0, device=logits.device)
+
+    k = min(int(topm), idx_u.shape[1])
+    if k <= 0:
+        return torch.tensor(0.0, device=logits.device)
+
+    idx = idx_u[:, :k]
+
+    logits_sel = torch.gather(logits_u.float(), dim=1, index=idx)
+    target_sel = torch.gather(anchor_prob_u, dim=1, index=idx)
+
+    raw = F.binary_cross_entropy_with_logits(
+        logits_sel,
+        target_sel,
+        reduction="none",
+    )
+
+    weight = (
+        target_sel.pow(float(conf_power))
+        + (1.0 - target_sel).pow(float(conf_power)) * float(neg_weight)
+    )
+
+    return (raw * weight).sum() / weight.sum().clamp_min(1.0)
+
+def compute_topk_expert_kd_loss(
+    logits_u: torch.Tensor,
+    prob_u: Optional[torch.Tensor],
+    topm: int = 512,
+    conf_power: float = 0.5,
+    neg_weight: float = 0.25,
+    idx: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    BCE KD from expert probabilities to logits on selected terms.
+
+    If idx is None:
+        use expert top-M terms.
+    If idx is provided:
+        use given [B, K] selected indices, e.g. qout["topk_idx"] for pseudo rows.
+    """
+
+    if prob_u is None:
+        return torch.tensor(0.0, device=logits_u.device)
+
+    p = prob_u.float().clamp(0.0, 1.0)
+
+    if idx is None:
+        k = min(int(topm), p.shape[1])
+        if k <= 0:
+            return torch.tensor(0.0, device=logits_u.device)
+        idx = torch.topk(p, k=k, dim=1).indices
+    else:
+        k = min(int(topm), idx.shape[1])
+        if k <= 0:
+            return torch.tensor(0.0, device=logits_u.device)
+        idx = idx[:, :k]
+
+    logits_sel = torch.gather(logits_u.float(), dim=1, index=idx)
+    target_sel = torch.gather(p, dim=1, index=idx).detach()
+
+    raw = F.binary_cross_entropy_with_logits(
+        logits_sel,
+        target_sel,
+        reduction="none",
+    )
+
+    weight = (
+        target_sel.pow(float(conf_power))
+        + (1.0 - target_sel).pow(float(conf_power)) * float(neg_weight)
+    )
+
+    return (raw * weight).sum() / weight.sum().clamp_min(1.0)
 
 # -----------------------------------------------------------------------------
 # DETR-style ontology query decoder V3
@@ -463,6 +604,30 @@ def find_classifier_linear(arch_model: nn.Module, num_classes: int) -> nn.Linear
 
     return candidates[-1]
 
+def summarize_delta_gate(qout: dict, device: torch.device) -> Dict[str, torch.Tensor]:
+    gate = qout.get("delta_gate", None)
+    if gate is None:
+        z = torch.tensor(0.0, device=device)
+        return {
+            "delta_gate_mean": z,
+            "delta_gate_p50": z,
+            "delta_gate_p95": z,
+        }
+
+    g = gate.detach().float().flatten()
+    if g.numel() == 0:
+        z = torch.tensor(0.0, device=device)
+        return {
+            "delta_gate_mean": z,
+            "delta_gate_p50": z,
+            "delta_gate_p95": z,
+        }
+
+    return {
+        "delta_gate_mean": g.mean(),
+        "delta_gate_p50": torch.quantile(g, 0.50),
+        "delta_gate_p95": torch.quantile(g, 0.95),
+    }
 
 class LightweightCandidateSelector(nn.Module):
     """
@@ -875,6 +1040,11 @@ class ExpertGuidedOntologyQueryDecoder(nn.Module):
         use_query_score_features: bool = True,
         query_score_embed_scale: float = 0.1,
         query_score_detach: bool = True,
+        # query anchor
+        query_decoder_logit_base_mode: str = "base_residual",
+        expert_base_mix_alpha: float = 0.8,
+        anchor_delta_gate_init: float = 0.1,
+
         use_learnable_selector: bool = True,
         selector_prefilter_topm: int = 1024,
         selector_static_source: str = "blend",
@@ -900,6 +1070,24 @@ class ExpertGuidedOntologyQueryDecoder(nn.Module):
         self.memory_grid_h = int(memory_grid_h)
         self.memory_grid_w = int(memory_grid_w)
         self.selector_detach_base_logits = bool(selector_detach_base_logits)
+
+        # query anchor
+        self.query_decoder_logit_base_mode = str(query_decoder_logit_base_mode)
+        self.expert_base_mix_alpha = float(expert_base_mix_alpha)
+
+        self.delta_gate_head = nn.Sequential(
+            nn.LayerNorm(query_dim),
+            nn.Linear(query_dim, 1),
+        )
+        
+        # gate controls residual magnitude. Start small to preserve anchor.
+        g0 = float(anchor_delta_gate_init)
+        g0 = min(max(g0, 1e-4), 1.0 - 1e-4)
+        gate_bias = math.log(g0 / (1.0 - g0))
+        
+        last_gate = self.delta_gate_head[-1]
+        nn.init.zeros_(last_gate.weight)
+        nn.init.constant_(last_gate.bias, gate_bias)
 
         if self.mode not in {"residual", "replace"}:
             raise ValueError(f"Unknown query decoder mode: {self.mode}")
@@ -1011,9 +1199,45 @@ class ExpertGuidedOntologyQueryDecoder(nn.Module):
         else:
             delta = raw_delta
 
+        selected_logits = None
+
         if self.mode == "residual":
-            refined_logits = base_logits.clone()
-            refined_logits.scatter_add_(dim=1, index=topk_idx, src=delta)
+            anchor_logits, anchor_prob = build_anchor_logits_from_prob(
+                base_logits=base_logits,
+                external_prob=external_prob,
+                has_external_prob=has_external_prob,
+                mode=self.query_decoder_logit_base_mode,
+                mix_alpha=self.expert_base_mix_alpha,
+            )
+            
+            if self.query_decoder_logit_base_mode == "base_residual":
+                refined_logits = base_logits.float().clone()
+                refined_logits.scatter_add_(
+                    dim=1,
+                    index=topk_idx,
+                    src=delta,
+                )
+            
+                delta_gate = torch.ones_like(delta)
+                selected_anchor_logits = torch.gather(base_logits.float(), 1, topk_idx)
+            
+            else:
+                # Strong-anchor mode:
+                #   final = anchor + gated residual on selected top-k.
+                refined_logits = anchor_logits.float().clone()
+            
+                selected_anchor_logits = torch.gather(anchor_logits.float(), 1, topk_idx)
+            
+                raw_delta_gate = self.delta_gate_head(decoded).squeeze(-1)
+                delta_gate = torch.sigmoid(raw_delta_gate)
+            
+                selected_logits = selected_anchor_logits + delta_gate * delta
+            
+                refined_logits.scatter_(
+                    dim=1,
+                    index=topk_idx,
+                    src=selected_logits,
+                )
         else:
             # Not recommended. Kept only as an ablation-compatible mode.
             refined_logits = base_logits.clone()
@@ -1030,6 +1254,12 @@ class ExpertGuidedOntologyQueryDecoder(nn.Module):
             "prefilter_idx": selector_out.get("prefilter_idx"),
             "prefilter_score": selector_out.get("prefilter_score"),
             "selector_logits": selector_out.get("selector_logits"),
+            "anchor_logits": anchor_logits,
+            "anchor_prob": anchor_prob,
+            "selected_anchor_logits": selected_anchor_logits,
+            "selected_logits": selected_logits if self.query_decoder_logit_base_mode != "base_residual" else None,
+            "delta_gate": delta_gate,
+            "query_decoder_logit_base_mode": self.query_decoder_logit_base_mode,
         }
 
 
@@ -1070,6 +1300,16 @@ class WeakMSAGOWithDETRDecoder(nn.Module):
             use_query_score_features=bool(getattr(args, "use_query_score_features", True)),
             query_score_embed_scale=float(getattr(args, "query_score_embed_scale", 0.1)),
             query_score_detach=bool(getattr(args, "query_score_detach", True)),
+            # anchor / gated residual mode
+            query_decoder_logit_base_mode=str(
+                getattr(args, "query_decoder_logit_base_mode", "base_residual")
+            ),
+            expert_base_mix_alpha=float(
+                getattr(args, "expert_base_mix_alpha", 0.8)
+            ),
+            anchor_delta_gate_init=float(
+                getattr(args, "anchor_delta_gate_init", 0.1)
+            ),
             use_learnable_selector=bool(getattr(args, "use_learnable_selector", True)),
             selector_prefilter_topm=int(getattr(args, "selector_prefilter_topm", 1024)),
             selector_static_source=str(getattr(args, "selector_static_source", args.query_decoder_topk_source)),
@@ -1435,6 +1675,17 @@ def train_one_task(args: argparse.Namespace):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    args.lambda_pseudo_base = (
+        float(args.lambda_pseudo)
+        if getattr(args, "lambda_pseudo_base", None) is None
+        else float(args.lambda_pseudo_base)
+    )
+    args.lambda_pseudo_query = (
+        float(args.lambda_pseudo)
+        if getattr(args, "lambda_pseudo_query", None) is None
+        else float(args.lambda_pseudo_query)
+    )
+
     if bool(getattr(args, "use_learnable_selector", False)) and float(getattr(args, "lambda_selector", 0.0)) <= 0:
         rank0_print("[Warning] use_learnable_selector=True but lambda_selector<=0. Selector may not learn meaningful routing.")
 
@@ -1648,6 +1899,10 @@ def train_one_task(args: argparse.Namespace):
                         return_dict=True,
                     )
                     logits = out["logits"]
+                    refined_logits = logits
+                    base_logits_all = out["base_logits"]
+
+                    gate_stats = summarize_delta_gate(out, device=device)
                 else:
                     y_hint = torch.cat([y_t, y_u], dim=0)
                     logits = model(X, permute_dims=permute_dims)
@@ -1655,6 +1910,10 @@ def train_one_task(args: argparse.Namespace):
                         logits = logits["logits"]
                     elif isinstance(logits, (tuple, list)):
                         logits = logits[0]
+                    refined_logits = logits
+                    base_logits_all = logits
+
+                    gate_stats = summarize_delta_gate({}, device=device)
 
                 if is_main_process() and global_step == 0 and bool(args.use_query_decoder):
                     print("[DETR] topk_idx shape:", tuple(out["topk_idx"].shape))
@@ -1663,19 +1922,26 @@ def train_one_task(args: argparse.Namespace):
                     if out.get("delta", None) is not None:
                         print("[DETR] delta shape:", tuple(out["delta"].shape))
 
-                logits_t = logits[:b_t]
-                logits_u = logits[b_t:]
+                base_logits_t = base_logits_all[:b_t]
+                base_logits_u = base_logits_all[b_t:]
 
-                loss_true_raw = true_asl(logits_t.float(), y_t.float())
+                refined_logits_t = refined_logits[:b_t]
+                refined_logits_u = refined_logits[b_t:]
+
+                # True full ASL should train backbone/base logits.
+                # In anchor mode, applying full true ASL to refined anchor logits would treat many
+                # unknown GO terms as negatives and can destroy the expert/base anchor.
+                loss_true_raw = true_asl(base_logits_t.float(), y_t.float())
+
                 if args.true_asl_reduction == "batch_mean":
-                    loss_true = loss_true_raw / max(int(logits_t.shape[0]), 1)
+                    loss_true = loss_true_raw / max(int(base_logits_t.shape[0]), 1)
                 elif args.true_asl_reduction == "raw":
                     loss_true = loss_true_raw
                 else:
                     raise ValueError(f"Unknown true_asl_reduction: {args.true_asl_reduction}")
 
                 target_u, mask_u, conf_u, pseudo_stats = build_pseudo_supervision(
-                    logits_u=logits_u,
+                    logits_u=base_logits_u,
                     y_u=y_u,
                     prob_u=prob_u,
                     args=args,
@@ -1683,8 +1949,8 @@ def train_one_task(args: argparse.Namespace):
                 )
 
                 if args.pseudo_loss_type == "asl":
-                    loss_pseudo = masked_asl_with_logits(
-                        logits=logits_u,
+                    loss_pseudo_base = masked_asl_with_logits(
+                        logits=base_logits_u,
                         target=target_u,
                         mask=mask_u,
                         conf=conf_u,
@@ -1693,18 +1959,47 @@ def train_one_task(args: argparse.Namespace):
                         clip=args.pseudo_asl_clip,
                         reduction=args.pseudo_asl_reduction,
                     )
+
+                    if bool(args.use_query_decoder):
+                        loss_pseudo_query = masked_asl_with_logits(
+                            logits=refined_logits_u,
+                            target=target_u,
+                            mask=mask_u,
+                            conf=conf_u,
+                            gamma_neg=args.pseudo_asl_gamma_neg,
+                            gamma_pos=args.pseudo_asl_gamma_pos,
+                            clip=args.pseudo_asl_clip,
+                            reduction=args.pseudo_asl_reduction,
+                        )
+                    else:
+                        loss_pseudo_query = torch.tensor(0.0, device=device)
+
                 elif args.pseudo_loss_type == "bce":
-                    loss_pseudo = masked_bce_with_logits(
-                        logits=logits_u,
+                    loss_pseudo_base = masked_bce_with_logits(
+                        logits=base_logits_u,
                         target=target_u,
                         mask=mask_u,
                         conf=conf_u,
                         reduction_mode=args.pseudo_asl_reduction,
                     )
+
+                    if bool(args.use_query_decoder):
+                        loss_pseudo_query = masked_bce_with_logits(
+                            logits=refined_logits_u,
+                            target=target_u,
+                            mask=mask_u,
+                            conf=conf_u,
+                            reduction_mode=args.pseudo_asl_reduction,
+                        )
+                    else:
+                        loss_pseudo_query = torch.tensor(0.0, device=device)
+
                 else:
                     raise ValueError(f"Unknown pseudo_loss_type: {args.pseudo_loss_type}")
 
-                loss_hier = hierarchy_violation_loss(logits, go_edges)
+                loss_pseudo = loss_pseudo_base + loss_pseudo_query
+
+                loss_hier = hierarchy_violation_loss(base_logits_all, go_edges)
 
                 if bool(args.use_query_decoder):
                     selector_target = torch.cat([y_t.float(), target_u.detach().float()], dim=0)
@@ -1719,10 +2014,40 @@ def train_one_task(args: argparse.Namespace):
                         pos_weight=float(args.selector_pos_weight),
                     )
                     loss_delta_l2 = compute_delta_l2_loss(out, device=device)
-                    if float(getattr(args, "lambda_external_kd", 0.0)) > 0:
-                        loss_external_kd = compute_external_kd_loss(logits_u, prob_u, args)
+
+                    if prob_u is not None:
+                        loss_base_expert_kd = compute_topk_expert_kd_loss(
+                            logits_u=base_logits_u,
+                            prob_u=prob_u,
+                            topm=int(getattr(args, "base_kd_topm", 512)),
+                            conf_power=float(getattr(args, "base_kd_conf_power", 0.5)),
+                            neg_weight=float(getattr(args, "base_kd_neg_weight", 0.25)),
+                            idx=None,  # expert top-M
+                        )
+
+                        if bool(args.use_query_decoder):
+                            idx_query = out.get("topk_idx", None)
+                            if idx_query is not None:
+                                idx_query_u = idx_query[b_t:]
+                            else:
+                                idx_query_u = None
+
+                            loss_query_expert_kd = compute_topk_expert_kd_loss(
+                                logits_u=refined_logits_u,
+                                prob_u=prob_u,
+                                topm=int(getattr(args, "query_kd_topm", 512)),
+                                conf_power=float(getattr(args, "query_kd_conf_power", 0.5)),
+                                neg_weight=float(getattr(args, "query_kd_neg_weight", 0.25)),
+                                idx=idx_query_u,
+                            )
+                        else:
+                            loss_query_expert_kd = torch.tensor(0.0, device=device)
                     else:
-                        loss_external_kd = torch.tensor(0.0, device=device)
+                        loss_base_expert_kd = torch.tensor(0.0, device=device)
+                        loss_query_expert_kd = torch.tensor(0.0, device=device)
+
+                    # For backward-compatible logging.
+                    loss_external_kd = loss_base_expert_kd + loss_query_expert_kd
 
                     topk_cov = topk_positive_coverage(out.get("topk_idx"), y_hint)
                     prefilter_cov = topk_positive_coverage(out.get("prefilter_idx"), y_hint)
@@ -1739,13 +2064,27 @@ def train_one_task(args: argparse.Namespace):
                     selector_prefilter_cov = torch.tensor(0.0, device=device)
                     delta_stats = summarize_delta(None, device=device)
 
+                if bool(args.use_query_decoder):
+                    loss_anchor_kd = compute_anchor_kd_loss(
+                        qout=out,
+                        topm=int(getattr(args, "anchor_kd_topm", 512)),
+                        conf_power=float(getattr(args, "anchor_kd_conf_power", 0.5)),
+                        neg_weight=float(getattr(args, "anchor_kd_neg_weight", 0.25)),
+                        true_batch_size=b_t,
+                    )
+                else:
+                    loss_anchor_kd = torch.tensor(0.0, device=device)
+
                 loss = (
                     args.lambda_true * loss_true
-                    + args.lambda_pseudo * loss_pseudo
+                    + args.lambda_pseudo_base * loss_pseudo_base
+                    + args.lambda_pseudo_query * loss_pseudo_query
+                    + args.lambda_base_expert_kd * loss_base_expert_kd
+                    + args.lambda_query_expert_kd * loss_query_expert_kd
+                    + args.lambda_anchor_kd * loss_anchor_kd
                     + args.lambda_h * loss_hier
                     + args.lambda_selector * loss_selector
                     + args.lambda_delta_l2 * loss_delta_l2
-                    + args.lambda_external_kd * loss_external_kd
                 )
                 loss_for_backward = loss / int(args.accum_steps)
 
@@ -1767,16 +2106,25 @@ def train_one_task(args: argparse.Namespace):
             running["loss"] += float(loss.detach().cpu())
             running["loss_true"] += float(loss_true.detach().cpu())
             running["loss_pseudo"] += float(loss_pseudo.detach().cpu())
+            running["loss_pseudo_base"] += float(loss_pseudo_base.detach().cpu())
+            running["loss_pseudo_query"] += float(loss_pseudo_query.detach().cpu())
+            running["loss_base_expert_kd"] += float(loss_base_expert_kd.detach().cpu())
+            running["loss_query_expert_kd"] += float(loss_query_expert_kd.detach().cpu())
+            running["loss_anchor_kd"] += float(loss_anchor_kd.detach().cpu())
             running["loss_hier"] += float(loss_hier.detach().cpu())
             running["loss_selector"] += float(loss_selector.detach().cpu())
             running["loss_delta_l2"] += float(loss_delta_l2.detach().cpu())
             running["loss_external_kd"] += float(loss_external_kd.detach().cpu())
             running["contrib_true"] += float((args.lambda_true * loss_true).detach().cpu())
             running["contrib_pseudo"] += float((args.lambda_pseudo * loss_pseudo).detach().cpu())
+            running["contrib_pseudo_base"] += float((args.lambda_pseudo_base * loss_pseudo_base).detach().cpu())
+            running["contrib_pseudo_query"] += float((args.lambda_pseudo_query * loss_pseudo_query).detach().cpu())
+            running["contrib_base_expert_kd"] += float((args.lambda_base_expert_kd * loss_base_expert_kd).detach().cpu())
+            running["contrib_query_expert_kd"] += float((args.lambda_query_expert_kd * loss_query_expert_kd).detach().cpu())
+            running["contrib_anchor_kd"] += float((args.lambda_anchor_kd * loss_anchor_kd).detach().cpu())
             running["contrib_hier"] += float((args.lambda_h * loss_hier).detach().cpu())
             running["contrib_selector"] += float((args.lambda_selector * loss_selector).detach().cpu())
             running["contrib_delta_l2"] += float((args.lambda_delta_l2 * loss_delta_l2).detach().cpu())
-            running["contrib_external_kd"] += float((args.lambda_external_kd * loss_external_kd).detach().cpu())
             running["topk_pos_coverage"] += float(topk_cov.detach().cpu())
             running["prefilter_pos_coverage"] += float(prefilter_cov.detach().cpu())
             running["selector_target_topk_coverage"] += float(selector_topk_cov.detach().cpu())
@@ -1785,6 +2133,8 @@ def train_one_task(args: argparse.Namespace):
                 running[k] += float(v.detach().cpu())
             for k, v in pseudo_stats.items():
                 running[k] += float(v)
+            for k, v in gate_stats.items():
+                running[k] += float(v.detach().cpu())
 
             if is_main_process() and step % args.log_interval == 0:
                 denom = step + 1
@@ -1797,6 +2147,7 @@ def train_one_task(args: argparse.Namespace):
                     "tcov": running["topk_pos_coverage"] / denom,
                     "pcov": running["prefilter_pos_coverage"] / denom,
                     "lr": scheduler.get_last_lr()[0],
+                    "gate": running["delta_gate_mean"] / denom,
                 })
 
         local_means = {k: v / max(1, steps_per_epoch) for k, v in running.items()}
@@ -1903,10 +2254,12 @@ def build_argparser():
 
     p.add_argument("--lambda_true", type=float, default=0.75)
     p.add_argument("--lambda_pseudo", type=float, default=0.8)
+    p.add_argument("--lambda_pseudo_base", type=float, default=None)
+    p.add_argument("--lambda_pseudo_query", type=float, default=None)
+
     p.add_argument("--lambda_h", type=float, default=0.0005)
     p.add_argument("--lambda_selector", type=float, default=0.05)
     p.add_argument("--lambda_delta_l2", type=float, default=1e-4)
-    p.add_argument("--lambda_external_kd", type=float, default=0.0)
 
     p.add_argument("--true_asl_gamma_neg", type=float, default=4.0)
     p.add_argument("--true_asl_gamma_pos", type=float, default=0.0)
@@ -1961,6 +2314,21 @@ def build_argparser():
     p.add_argument("--query_decoder_memory_mode", type=str, default="tokens_plus_pooled", choices=["pooled", "tokens", "tokens_plus_pooled"])
     p.add_argument("--query_decoder_memory_grid_h", type=int, default=0)
     p.add_argument("--query_decoder_memory_grid_w", type=int, default=0)
+
+    p.add_argument(
+        "--query_decoder_logit_base_mode",
+        type=str,
+        default="base_residual",
+        choices=["base_residual", "expert_base", "mix_expert_base", "anchor_delta", "mix_expert_base_anchor"],
+    )
+    
+    p.add_argument("--expert_base_mix_alpha", type=float, default=0.8)
+    p.add_argument("--anchor_delta_gate_init", type=float, default=0.1)
+    
+    p.add_argument("--lambda_anchor_kd", type=float, default=0.0)
+    p.add_argument("--anchor_kd_topm", type=int, default=512)
+    p.add_argument("--anchor_kd_conf_power", type=float, default=0.5)
+    p.add_argument("--anchor_kd_neg_weight", type=float, default=0.25)
 
     p.add_argument("--use_trainable_query_embedding", action="store_true")
     p.add_argument("--no_trainable_query_embedding", dest="use_trainable_query_embedding", action="store_false")

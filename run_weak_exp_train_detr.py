@@ -116,7 +116,7 @@ TASK_CONFIGS = {
         "lr": 2e-4,
         "query_topk": 100,
         "selector_topm": 1024,
-        "delta_max": 0.5,
+        "delta_max": 1.0,
         "max_steps": None,
     },
     "mf": {
@@ -127,7 +127,7 @@ TASK_CONFIGS = {
         "lr": 2e-4,
         "query_topk": 100,
         "selector_topm": 512,
-        "delta_max": 0.5,
+        "delta_max": 1.0,
         "max_steps": None,
     },
     "cc": {
@@ -138,7 +138,7 @@ TASK_CONFIGS = {
         "lr": 1.5e-4,
         "query_topk": 100,
         "selector_topm": 512,
-        "delta_max": 0.5,
+        "delta_max": 1.0,
         "max_steps": None,
     },
 }
@@ -238,6 +238,38 @@ QUERY_EMBED_RESIDUAL_SCALE = 0.1
 USE_QUERY_SCORE_FEATURES = True
 QUERY_SCORE_EMBED_SCALE = 0.1
 QUERY_SCORE_DETACH = True
+
+QUERY_DECODER_LOGIT_BASE_MODE = os.environ.get(
+    "QUERY_DECODER_LOGIT_BASE_MODE",
+    "mix_expert_base_anchor",
+)
+
+EXPERT_BASE_MIX_ALPHA = float(os.environ.get("EXPERT_BASE_MIX_ALPHA", "0.8"))
+
+ANCHOR_DELTA_GATE_INIT = float(os.environ.get("ANCHOR_DELTA_GATE_INIT", "0.1"))
+
+LAMBDA_ANCHOR_KD = float(os.environ.get("LAMBDA_ANCHOR_KD", "0.3"))
+ANCHOR_KD_TOPM = int(os.environ.get("ANCHOR_KD_TOPM", "512"))
+ANCHOR_KD_CONF_POWER = float(os.environ.get("ANCHOR_KD_CONF_POWER", "0.5"))
+ANCHOR_KD_NEG_WEIGHT = float(os.environ.get("ANCHOR_KD_NEG_WEIGHT", "0.25"))
+
+# Split pseudo supervision: expert pseudo should train both backbone/base and query/refined.
+# LAMBDA_PSEUDO_BASE = float(os.environ.get("LAMBDA_PSEUDO_BASE", str(LAMBDA_PSEUDO)))
+# LAMBDA_PSEUDO_QUERY = float(os.environ.get("LAMBDA_PSEUDO_QUERY", str(LAMBDA_PSEUDO)))
+LAMBDA_PSEUDO_BASE = LAMBDA_PSEUDO
+LAMBDA_PSEUDO_QUERY = 0.5 * LAMBDA_PSEUDO
+
+# Expert KD for backbone/base logits.
+LAMBDA_BASE_EXPERT_KD = float(os.environ.get("LAMBDA_BASE_EXPERT_KD", "0.1"))
+BASE_KD_TOPM = int(os.environ.get("BASE_KD_TOPM", "512"))
+BASE_KD_CONF_POWER = float(os.environ.get("BASE_KD_CONF_POWER", "0.5"))
+BASE_KD_NEG_WEIGHT = float(os.environ.get("BASE_KD_NEG_WEIGHT", "0.25"))
+
+# Expert KD for query/refined logits.
+LAMBDA_QUERY_EXPERT_KD = float(os.environ.get("LAMBDA_QUERY_EXPERT_KD", "0.1"))
+QUERY_KD_TOPM = int(os.environ.get("QUERY_KD_TOPM", "512"))
+QUERY_KD_CONF_POWER = float(os.environ.get("QUERY_KD_CONF_POWER", "0.5"))
+QUERY_KD_NEG_WEIGHT = float(os.environ.get("QUERY_KD_NEG_WEIGHT", "0.25"))
 
 USE_LEARNABLE_SELECTOR = True
 SELECTOR_HIDDEN_DIM = 64
@@ -509,6 +541,13 @@ def build_args() -> argparse.Namespace:
         use_query_score_features=bool(USE_QUERY_SCORE_FEATURES),
         query_score_embed_scale=float(QUERY_SCORE_EMBED_SCALE),
         query_score_detach=bool(QUERY_SCORE_DETACH),
+        query_decoder_logit_base_mode=str(QUERY_DECODER_LOGIT_BASE_MODE),
+        expert_base_mix_alpha=float(EXPERT_BASE_MIX_ALPHA),
+        anchor_delta_gate_init=float(ANCHOR_DELTA_GATE_INIT),
+        lambda_anchor_kd=float(LAMBDA_ANCHOR_KD),
+        anchor_kd_topm=int(ANCHOR_KD_TOPM),
+        anchor_kd_conf_power=float(ANCHOR_KD_CONF_POWER),
+        anchor_kd_neg_weight=float(ANCHOR_KD_NEG_WEIGHT),
         use_learnable_selector=bool(USE_LEARNABLE_SELECTOR),
         selector_prefilter_topm=int(SELECTOR_PREFILTER_TOPM),
         selector_hidden_dim=int(SELECTOR_HIDDEN_DIM),
@@ -562,6 +601,18 @@ def build_args() -> argparse.Namespace:
         freeze_bn_affine=bool(FREEZE_BN_AFFINE),
         lambda_true=float(LAMBDA_TRUE),
         lambda_pseudo=float(LAMBDA_PSEUDO),
+        lambda_pseudo_base=float(LAMBDA_PSEUDO_BASE),
+        lambda_pseudo_query=float(LAMBDA_PSEUDO_QUERY),
+
+        lambda_base_expert_kd=float(LAMBDA_BASE_EXPERT_KD),
+        base_kd_topm=int(BASE_KD_TOPM),
+        base_kd_conf_power=float(BASE_KD_CONF_POWER),
+        base_kd_neg_weight=float(BASE_KD_NEG_WEIGHT),
+
+        lambda_query_expert_kd=float(LAMBDA_QUERY_EXPERT_KD),
+        query_kd_topm=int(QUERY_KD_TOPM),
+        query_kd_conf_power=float(QUERY_KD_CONF_POWER),
+        query_kd_neg_weight=float(QUERY_KD_NEG_WEIGHT),
         lambda_h=float(LAMBDA_H),
         lambda_selector=float(LAMBDA_SELECTOR),
         lambda_delta_l2=float(LAMBDA_DELTA_L2),
@@ -600,6 +651,12 @@ def print_run_summary(args: argparse.Namespace):
     print(f"SELECTOR_LR             = {args.selector_lr}")
     print(f"LAMBDA_TRUE             = {args.lambda_true}")
     print(f"LAMBDA_PSEUDO           = {args.lambda_pseudo}")
+    print(f"LAMBDA_PSEUDO_BASE       = {args.lambda_pseudo_base}")
+    print(f"LAMBDA_PSEUDO_QUERY      = {args.lambda_pseudo_query}")
+    print(f"LAMBDA_BASE_EXPERT_KD    = {args.lambda_base_expert_kd}")
+    print(f"BASE_KD_TOPM             = {args.base_kd_topm}")
+    print(f"LAMBDA_QUERY_EXPERT_KD   = {args.lambda_query_expert_kd}")
+    print(f"QUERY_KD_TOPM            = {args.query_kd_topm}")
     print(f"LAMBDA_SELECTOR         = {args.lambda_selector}")
     print(f"LAMBDA_DELTA_L2         = {args.lambda_delta_l2}")
     print(f"LAMBDA_EXTERNAL_KD      = {args.lambda_external_kd}")
@@ -614,6 +671,11 @@ def print_run_summary(args: argparse.Namespace):
     print(f"QUERY_DECODER_DELTA_MAX = {args.query_decoder_delta_max}")
     print(f"TRAINABLE_QUERY_EMB     = {args.use_trainable_query_embedding}")
     print(f"QUERY_EMBED_INIT        = {args.query_embed_init}")
+    print(f"QUERY_DECODER_LOGIT_BASE_MODE = {args.query_decoder_logit_base_mode}")
+    print(f"EXPERT_BASE_MIX_ALPHA         = {args.expert_base_mix_alpha}")
+    print(f"ANCHOR_DELTA_GATE_INIT        = {args.anchor_delta_gate_init}")
+    print(f"LAMBDA_ANCHOR_KD              = {args.lambda_anchor_kd}")
+    print(f"ANCHOR_KD_TOPM                = {args.anchor_kd_topm}")
     print(f"LEARNABLE_SELECTOR      = {args.use_learnable_selector}")
     print(f"SELECTOR_PREFILTER_TOPM = {args.selector_prefilter_topm}")
     print(f"SELECTOR_AFFINITY       = {args.selector_use_protein_term_affinity}")
