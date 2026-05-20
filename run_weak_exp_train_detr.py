@@ -114,8 +114,8 @@ TASK_CONFIGS = {
         "lambda_true": 0.75,
         "lambda_pseudo": 0.8,
         "lr": 2e-4,
-        "query_topk": 100,
-        "selector_topm": 1024,
+        "query_topk": 200,
+        "selector_topm": 2048,
         "delta_max": 1.0,
         "max_steps": None,
     },
@@ -125,8 +125,8 @@ TASK_CONFIGS = {
         "lambda_true": 0.75,
         "lambda_pseudo": 0.8,
         "lr": 2e-4,
-        "query_topk": 100,
-        "selector_topm": 512,
+        "query_topk": 150,
+        "selector_topm": 1024,
         "delta_max": 1.0,
         "max_steps": None,
     },
@@ -246,7 +246,7 @@ QUERY_DECODER_LOGIT_BASE_MODE = os.environ.get(
 
 EXPERT_BASE_MIX_ALPHA = float(os.environ.get("EXPERT_BASE_MIX_ALPHA", "0.8"))
 
-ANCHOR_DELTA_GATE_INIT = float(os.environ.get("ANCHOR_DELTA_GATE_INIT", "0.1"))
+ANCHOR_DELTA_GATE_INIT = float(os.environ.get("ANCHOR_DELTA_GATE_INIT", "0.3"))
 
 LAMBDA_ANCHOR_KD = float(os.environ.get("LAMBDA_ANCHOR_KD", "0.3"))
 ANCHOR_KD_TOPM = int(os.environ.get("ANCHOR_KD_TOPM", "512"))
@@ -260,13 +260,13 @@ LAMBDA_PSEUDO_BASE = LAMBDA_PSEUDO
 LAMBDA_PSEUDO_QUERY = 0.5 * LAMBDA_PSEUDO
 
 # Expert KD for backbone/base logits.
-LAMBDA_BASE_EXPERT_KD = float(os.environ.get("LAMBDA_BASE_EXPERT_KD", "0.1"))
+LAMBDA_BASE_EXPERT_KD = float(os.environ.get("LAMBDA_BASE_EXPERT_KD", "0.15"))
 BASE_KD_TOPM = int(os.environ.get("BASE_KD_TOPM", "512"))
 BASE_KD_CONF_POWER = float(os.environ.get("BASE_KD_CONF_POWER", "0.5"))
 BASE_KD_NEG_WEIGHT = float(os.environ.get("BASE_KD_NEG_WEIGHT", "0.25"))
 
 # Expert KD for query/refined logits.
-LAMBDA_QUERY_EXPERT_KD = float(os.environ.get("LAMBDA_QUERY_EXPERT_KD", "0.1"))
+LAMBDA_QUERY_EXPERT_KD = float(os.environ.get("LAMBDA_QUERY_EXPERT_KD", "0.25"))
 QUERY_KD_TOPM = int(os.environ.get("QUERY_KD_TOPM", "512"))
 QUERY_KD_CONF_POWER = float(os.environ.get("QUERY_KD_CONF_POWER", "0.5"))
 QUERY_KD_NEG_WEIGHT = float(os.environ.get("QUERY_KD_NEG_WEIGHT", "0.25"))

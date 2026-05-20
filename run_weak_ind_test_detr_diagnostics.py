@@ -89,8 +89,11 @@ DEVICE = os.environ.get("DEVICE", "auto")
 QUERY_MODES = os.environ.get("QUERY_MODES", "base_topk,external_topk,blend_topk")
 DELTA_SCALES = os.environ.get("DELTA_SCALES", "0,0.25,0.5,0.75,1.0")
 ENSEMBLE_ALPHAS = os.environ.get("ENSEMBLE_ALPHAS", "0.1,0.3,0.5,0.7,0.9")
-ENSEMBLE_QUERY_MODES = os.environ.get("ENSEMBLE_QUERY_MODES", "external_topk,blend_topk")
 ENSEMBLE_DELTA_SCALES = os.environ.get("ENSEMBLE_DELTA_SCALES", "0.5,1.0")
+
+QUERY_DECODER_LOGIT_BASE_MODE = os.environ.get("QUERY_DECODER_LOGIT_BASE_MODE", "")
+EXPERT_BASE_MIX_ALPHA = os.environ.get("EXPERT_BASE_MIX_ALPHA", "")
+ANCHOR_DELTA_GATE_INIT = os.environ.get("ANCHOR_DELTA_GATE_INIT", "")
 
 # hist is fast and enough for diagnosis. Use AUROC_MODE=exact if you need a
 # closer micro average-precision value, but it can be slower/more memory heavy.
@@ -127,12 +130,38 @@ cmd = [
     "--query_modes", QUERY_MODES,
     "--delta_scales", DELTA_SCALES,
     "--ensemble_alphas", ENSEMBLE_ALPHAS,
-    "--ensemble_query_modes", ENSEMBLE_QUERY_MODES,
     "--ensemble_delta_scales", ENSEMBLE_DELTA_SCALES,
     "--auprc_mode", AUPRC_MODE,
     "--threshold_step", str(THRESHOLD_STEP),
     "--do_rare_analysis", DO_RARE_ANALYSIS,
 ]
+
+if ORIGINAL_PROB_PATH:
+    cmd.extend([
+        "--original_prob_path",
+        str(ORIGINAL_PROB_PATH),
+    ])
+
+if SKIP_LEGACY_QUERY_SOURCES:
+    cmd.append("--skip_legacy_query_sources")
+
+if QUERY_DECODER_LOGIT_BASE_MODE:
+    cmd.extend([
+        "--query_decoder_logit_base_mode",
+        str(QUERY_DECODER_LOGIT_BASE_MODE),
+    ])
+
+if EXPERT_BASE_MIX_ALPHA:
+    cmd.extend([
+        "--expert_base_mix_alpha",
+        str(float(EXPERT_BASE_MIX_ALPHA)),
+    ])
+
+if ANCHOR_DELTA_GATE_INIT:
+    cmd.extend([
+        "--anchor_delta_gate_init",
+        str(float(ANCHOR_DELTA_GATE_INIT)),
+    ])
 
 if NUM_WORKERS <= 0:
     cmd.extend(["--persistent_workers", "0"])
