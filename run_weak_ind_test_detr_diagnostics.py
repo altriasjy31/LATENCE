@@ -95,6 +95,45 @@ QUERY_DECODER_LOGIT_BASE_MODE = os.environ.get("QUERY_DECODER_LOGIT_BASE_MODE", 
 EXPERT_BASE_MIX_ALPHA = os.environ.get("EXPERT_BASE_MIX_ALPHA", "")
 ANCHOR_DELTA_GATE_INIT = os.environ.get("ANCHOR_DELTA_GATE_INIT", "")
 
+# IC Fusion
+ENABLE_IC_FUSION = os.environ.get("ENABLE_IC_FUSION", "0") == "1"
+IC_FUSION_ALPHA_RARE = float(os.environ.get("IC_FUSION_ALPHA_RARE", "0.5"))
+IC_FUSION_ALPHA_MEDIUM = float(os.environ.get("IC_FUSION_ALPHA_MEDIUM", "0.8"))
+IC_FUSION_ALPHA_COMMON = float(os.environ.get("IC_FUSION_ALPHA_COMMON", "0.8"))
+IC_FUSION_SOURCE = os.environ.get("IC_FUSION_SOURCE", "base")
+
+ENABLE_SIMULATED_IC = os.environ.get("ENABLE_SIMULATED_IC", "0") == "1"
+
+SIMULATED_IC_SOURCE_KEY = os.environ.get(
+    "SIMULATED_IC_SOURCE_KEY",
+    "backbone_base",
+)
+
+SIMULATED_IC_THRESHOLD_MIN = float(os.environ.get(
+    "SIMULATED_IC_THRESHOLD_MIN",
+    "0.01",
+))
+
+SIMULATED_IC_THRESHOLD_MAX = float(os.environ.get(
+    "SIMULATED_IC_THRESHOLD_MAX",
+    "1.0",
+))
+
+SIMULATED_IC_THRESHOLD_STEP = float(os.environ.get(
+    "SIMULATED_IC_THRESHOLD_STEP",
+    "0.01",
+))
+
+SIMULATED_IC_INCLUDE_ZERO_THRESHOLD = os.environ.get(
+    "SIMULATED_IC_INCLUDE_ZERO_THRESHOLD",
+    "0",
+) == "1"
+
+SIMULATED_IC_SAVE_COUNTS = os.environ.get(
+    "SIMULATED_IC_SAVE_COUNTS",
+    "0",
+) == "1"
+
 # hist is fast and enough for diagnosis. Use AUROC_MODE=exact if you need a
 # closer micro average-precision value, but it can be slower/more memory heavy.
 AUPRC_MODE = os.environ.get("AUPRC_MODE", "hist")  # hist, exact, none
@@ -136,6 +175,8 @@ cmd = [
     "--do_rare_analysis", DO_RARE_ANALYSIS,
 ]
 
+cmd.append("--enable_ic_fusion")
+
 if ORIGINAL_PROB_PATH:
     cmd.extend([
         "--original_prob_path",
@@ -162,6 +203,34 @@ if ANCHOR_DELTA_GATE_INIT:
         "--anchor_delta_gate_init",
         str(float(ANCHOR_DELTA_GATE_INIT)),
     ])
+
+if ENABLE_IC_FUSION:
+    cmd.append("--enable_ic_fusion")
+    cmd.extend([
+        "--ic_fusion_alpha_rare", str(IC_FUSION_ALPHA_RARE),
+        "--ic_fusion_alpha_medium", str(IC_FUSION_ALPHA_MEDIUM),
+        "--ic_fusion_alpha_common", str(IC_FUSION_ALPHA_COMMON),
+        "--ic_fusion_source", str(IC_FUSION_SOURCE),
+    ])
+
+if ENABLE_SIMULATED_IC:
+    cmd.append("--enable_simulated_ic")
+    cmd.extend([
+        "--simulated_ic_source_key",
+        str(SIMULATED_IC_SOURCE_KEY),
+        "--simulated_ic_threshold_min",
+        str(float(SIMULATED_IC_THRESHOLD_MIN)),
+        "--simulated_ic_threshold_max",
+        str(float(SIMULATED_IC_THRESHOLD_MAX)),
+        "--simulated_ic_threshold_step",
+        str(float(SIMULATED_IC_THRESHOLD_STEP)),
+    ])
+
+    if SIMULATED_IC_INCLUDE_ZERO_THRESHOLD:
+        cmd.append("--simulated_ic_include_zero_threshold")
+
+    if SIMULATED_IC_SAVE_COUNTS:
+        cmd.append("--simulated_ic_save_counts")
 
 if NUM_WORKERS <= 0:
     cmd.extend(["--persistent_workers", "0"])

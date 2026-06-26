@@ -111,11 +111,11 @@ TASK_CONFIGS = {
     "bp": {
         "batch_size": 8,
         "pseudo_batch_size": 56,
-        "lambda_true": 0.75,
-        "lambda_pseudo": 0.8,
-        "lr": 2e-4,
-        "query_topk": 200,
-        "selector_topm": 2048,
+        "lambda_true": 0.65,
+        "lambda_pseudo": 1.0,
+        "lr": 2.5e-4,
+        "query_topk": 768,
+        "selector_topm": 6144,
         "delta_max": 1.0,
         "max_steps": None,
     },
@@ -125,8 +125,8 @@ TASK_CONFIGS = {
         "lambda_true": 0.75,
         "lambda_pseudo": 0.8,
         "lr": 2e-4,
-        "query_topk": 150,
-        "selector_topm": 1024,
+        "query_topk": 512,
+        "selector_topm": 2048,
         "delta_max": 1.0,
         "max_steps": None,
     },
@@ -136,8 +136,8 @@ TASK_CONFIGS = {
         "lambda_true": 0.65,
         "lambda_pseudo": 1.0,
         "lr": 1.5e-4,
-        "query_topk": 100,
-        "selector_topm": 512,
+        "query_topk": 512,
+        "selector_topm": 2048,
         "delta_max": 1.0,
         "max_steps": None,
     },
@@ -156,7 +156,7 @@ SELECTOR_PREFILTER_TOPM = _cfg["selector_topm"]
 MAX_STEPS_PER_EPOCH = _cfg["max_steps"]
 
 SEED = 3407
-EPOCHS = 60
+EPOCHS = 400
 DATALOADER_NUM_WORKERS = 8
 PIN_MEMORY = True
 DROP_LAST = False
@@ -176,7 +176,7 @@ DDP_FIND_UNUSED_PARAMETERS = False
 OPTIM = "adamw"
 OPTIM_EPS = 1e-6
 LR_POLICY = "cycle"
-LR_PCT_START = 0.1
+LR_PCT_START = 0.05 # bp using 0.05
 LR_CYCLE_THREE_PHASE = False
 LR_DIV_FACTOR = 25.0
 LR_FINAL_DIV_FACTOR = 120.0
@@ -260,8 +260,8 @@ LAMBDA_PSEUDO_BASE = LAMBDA_PSEUDO
 LAMBDA_PSEUDO_QUERY = 0.5 * LAMBDA_PSEUDO
 
 # Expert KD for backbone/base logits.
-LAMBDA_BASE_EXPERT_KD = float(os.environ.get("LAMBDA_BASE_EXPERT_KD", "0.15"))
-BASE_KD_TOPM = int(os.environ.get("BASE_KD_TOPM", "512"))
+LAMBDA_BASE_EXPERT_KD = float(os.environ.get("LAMBDA_BASE_EXPERT_KD", "0.2"))
+BASE_KD_TOPM = int(os.environ.get("BASE_KD_TOPM", "2048")) # mf 512
 BASE_KD_CONF_POWER = float(os.environ.get("BASE_KD_CONF_POWER", "0.5"))
 BASE_KD_NEG_WEIGHT = float(os.environ.get("BASE_KD_NEG_WEIGHT", "0.25"))
 
@@ -320,7 +320,7 @@ IC_ALPHA = 1.0
 IC_MIN_COUNT = 2
 
 LOG_INTERVAL = 20
-SAVE_INTERVAL = 2
+SAVE_INTERVAL = 10
 NEED_PROTEINS = False
 DRY_RUN = False
 PRINT_CONFIG = True

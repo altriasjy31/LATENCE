@@ -64,6 +64,16 @@ from experiments.weak_exp_train_detr import (  # noqa: E402
     WeakMSAGOWithDETRDecoder,
     build_weak_opt_from_config,
 )
+from utils.util_functions import (
+    make_frequency_bins, 
+    compute_simulated_ic,
+    compute_ic_from_pred_map,
+    resolve_pred_map_source_key,
+    compute_simulated_counts_from_scores,
+    compute_simulated_bins_from_pred_map,
+    sanitize_key_for_filename,
+)
+
 from experiments.msaprob import PseudoProbDataset  # noqa: E402
 from experiments.exp_train import (  # noqa: E402
     normalize_task,
@@ -969,31 +979,45 @@ def load_train_label_counts(file_address: str | Path, task: str, num_classes: in
     return np.zeros(num_classes, dtype=np.float64), 0, "none"
 
 
+def build_ic_alpha_vector(
+    num_classes: int,
+    bins: Dict[str, np.ndarray],
+    alpha_rare: float = 0.5,
+    alpha_medium: float = 0.5,
+    alpha_common: float = 0.8,
+) -> np.ndarray:
+    """
+    Build per-class alpha vector for:
+        p = alpha_i * expert + (1-alpha_i) * base_or_model
 
+    bins values are boolean masks or index arrays from make_frequency_bins().
+    """
 
-def make_frequency_bins(counts: np.ndarray) -> Dict[str, np.ndarray]:
-    counts = np.asarray(counts, dtype=np.float64)
-    pos = counts > 0
-    bins: Dict[str, np.ndarray] = {}
-    bins["zero_train"] = (counts == 0)
+    alpha = np.full((num_classes,), float(alpha_medium), dtype=np.float32)
 
+    def _assign(bin_name: str, value: float):
+        if bin_name not in bins:
+            return
+        m = bins[bin_name]
+        if m.dtype == bool:
+            alpha[m] = float(value)
+        else:
+            alpha[np.asarray(m, dtype=np.int64)] = float(value)
 
-    if pos.sum() == 0:
-        bins["rare"] = np.zeros_like(pos, dtype=bool)
-        bins["medium"] = np.zeros_like(pos, dtype=bool)
-        bins["common"] = np.zeros_like(pos, dtype=bool)
-        return bins
+    _assign("rare", alpha_rare)
+    _assign("medium", alpha_medium)
+    _assign("common", alpha_common)
 
+    # More specific bins override broader bins if present.
+    if "rare_le_5" in bins:
+        m = bins["rare_le_5"]
+        alpha[m if getattr(m, "dtype", None) == bool else np.asarray(m, dtype=np.int64)] = float(alpha_rare)
 
-    pos_counts = counts[pos]
-    q33, q66 = np.quantile(pos_counts, [0.33, 0.66])
-    bins["rare"] = pos & (counts <= q33)
-    bins["medium"] = pos & (counts > q33) & (counts <= q66)
-    bins["common"] = pos & (counts > q66)
-    bins["rare_le_5"] = pos & (counts <= 5)
-    bins["common_ge_50"] = counts >= 50
-    return bins
+    if "common_ge_50" in bins:
+        m = bins["common_ge_50"]
+        alpha[m if getattr(m, "dtype", None) == bool else np.asarray(m, dtype=np.int64)] = float(alpha_common)
 
+    return alpha
 
 
 
@@ -1071,7 +1095,6 @@ def model_forward_once(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     base_logits, h = model.backbone(x, permute_dims=permute_dims, return_embedding=True)
     return base_logits, h
-
 
 
 
@@ -1391,6 +1414,94 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     for key, chunks in pred_chunks.items():
         pred_map[key] = np.concatenate(chunks, axis=0).astype(np.float32, copy=False)
 
+    simulated_ic_meta = None
+
+    if bool(args.enable_ic_fusion):
+        if "external_only" not in pred_map:
+            raise RuntimeError("IC fusion requires external_only in pred_map.")
+        if "backbone_base" not in pred_map:
+            raise RuntimeError("IC fusion requires backbone_base in pred_map.")
+
+        counts, n_train, count_key = load_train_label_counts(args.file_address, task, int(args.num_classes))
+        if n_train <= 0:
+            counts = y_true.sum(axis=0).astype(np.float64)
+            count_key = "eval_labels_fallback"
+            n_train = int(y_true.shape[0])
+            
+        # Build bins using existing frequency bin helper.
+        if bool(args.enable_simulated_ic):
+            bins_to_use, simulated_counts, simulated_ic_meta = compute_simulated_bins_from_pred_map(
+                pred_map=pred_map,
+                source_key=str(args.simulated_ic_source_key),
+                threshold_min=float(args.simulated_ic_threshold_min),
+                threshold_max=float(args.simulated_ic_threshold_max),
+                threshold_step=float(args.simulated_ic_threshold_step),
+                include_zero_threshold=bool(args.simulated_ic_include_zero_threshold),
+            )
+        
+            count_key = simulated_ic_meta["count_source_key"]
+            n_train = simulated_ic_meta["num_samples"]
+        
+            if bool(getattr(args, "simulated_ic_save_counts", False)):
+                sim_name = (
+                    "simulated_ic_counts__"
+                    + sanitize_key_for_filename(simulated_ic_meta["resolved_source_key"])
+                    + ".npy"
+                )
+                np.save(Path(args.output_dir) / sim_name, simulated_counts)
+        
+            print("[ICFusion] using simulated IC bins")
+            print(f"[ICFusion] source_key={args.simulated_ic_source_key}")
+            print(f"[ICFusion] resolved_source_key={simulated_ic_meta['resolved_source_key']}")
+            print(f"[ICFusion] thresholds={simulated_ic_meta['threshold_min']}..{simulated_ic_meta['threshold_max']} "
+                  f"step={simulated_ic_meta['threshold_step']} "
+                  f"n={simulated_ic_meta['num_thresholds']}")
+            print(f"[ICFusion] bin_sizes={simulated_ic_meta['bin_sizes']}")
+        
+        else:
+            bins_to_use = make_frequency_bins(counts)  # 传统训练集 counts
+            simulated_counts = None
+            simulated_ic_meta = None
+        
+        alpha_vec = build_ic_alpha_vector(
+            num_classes=int(args.num_classes),
+            bins=bins_to_use,
+            alpha_rare=args.ic_fusion_alpha_rare,
+            alpha_medium=args.ic_fusion_alpha_medium,
+            alpha_common=args.ic_fusion_alpha_common,
+        )
+        alpha_mat = alpha_vec.reshape(1, -1)
+
+        expert = pred_map["external_only"]
+
+        if args.ic_fusion_source == "base":
+            src = pred_map["backbone_base"]
+            src_name = "base"
+        elif args.ic_fusion_source == "modelout_a05":
+            src_name = "modelout::mix_expert_base_anchor::decoderprob::mix_exp_base_a0.5"
+            src = pred_map[src_name]
+        elif args.ic_fusion_source == "modelout_a08":
+            src_name = "modelout::mix_expert_base_anchor::decoderprob::mix_exp_base_a0.8"
+            src = pred_map[src_name]
+        elif args.ic_fusion_source == "modelanchor_a05":
+            src_name = "modelanchor::mix_expert_base_anchor::decoderprob::mix_exp_base_a0.5"
+            src = pred_map[src_name]
+        elif args.ic_fusion_source == "modelanchor_a08":
+            src_name = "modelanchor::mix_expert_base_anchor::decoderprob::mix_exp_base_a0.8"
+            src = pred_map[src_name]
+        else:
+            raise ValueError(args.ic_fusion_source)
+
+        ic_fused = alpha_mat * expert + (1.0 - alpha_mat) * src
+
+        key = (
+            f"ic_fusion::{args.ic_fusion_source}"
+            f"::rare{args.ic_fusion_alpha_rare:g}"
+            f"_medium{args.ic_fusion_alpha_medium:g}"
+            f"_common{args.ic_fusion_alpha_common:g}"
+        )
+
+        pred_map[key] = ic_fused.astype(np.float32, copy=False)
 
     # Ensembles are computed after prediction collection to avoid extra forward passes.
     if "external_only" in pred_map and ensemble_alphas:
@@ -1466,13 +1577,14 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         if not rare_keys:
             rare_prefixes = (
                 "prob_mix::expert_base::",
-                "modelanchor::",
-                "modelout::",
                 "query::decoderprob::",
                 "anchorlogit::decoderprob::",
+                "modelanchor::",
+                "modelout::",
                 "ensemble_ext_alpha_",
+                "ic_fusion::",
             )
-        
+
             rare_exact = {
                 "backbone_base",
                 "external_only",
@@ -1553,6 +1665,12 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         "query_modes": query_modes,
         "delta_scales": delta_scales,
         "ensemble_alphas": ensemble_alphas,
+
+        "ic_fusion_enabled": bool(args.enable_ic_fusion),
+        "simulated_ic_enabled": bool(args.enable_simulated_ic),
+        "simulated_ic_source_key": str(args.simulated_ic_source_key),
+        "simulated_ic_meta": simulated_ic_meta,
+
         "load_info": load_info,
         "metrics": metric_results,
         "delta_diagnostics": delta_results,
@@ -1634,6 +1752,12 @@ def write_text_summary(result: Dict[str, Any], path: Path) -> None:
         lines.append("")
         lines.append("[Frequency bins]")
         lines.append(json.dumps(result["frequency_info"], ensure_ascii=False))
+
+    lines.append(f"ic_fusion_enabled={result.get('ic_fusion_enabled')}")
+    lines.append(f"simulated_ic_enabled={result.get('simulated_ic_enabled')}")
+    lines.append(f"simulated_ic_source_key={result.get('simulated_ic_source_key')}")
+    if result.get("simulated_ic_meta") is not None:
+        lines.append(f"simulated_ic_meta={json.dumps(result['simulated_ic_meta'], ensure_ascii=False)}")
 
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1879,6 +2003,86 @@ def build_argparser() -> argparse.ArgumentParser:
     # Rare/common GO analysis.
     p.add_argument("--do_rare_analysis", type=str2bool, default=True)
     p.add_argument("--rare_metric_keys", type=str, default="")
+
+    # IC aware fusion
+    p.add_argument(
+        "--enable_ic_fusion",
+        action="store_true",
+    )
+    
+    p.add_argument(
+        "--ic_fusion_alpha_rare",
+        type=float,
+        default=0.5,
+    )
+    
+    p.add_argument(
+        "--ic_fusion_alpha_medium",
+        type=float,
+        default=0.5,
+    )
+    
+    p.add_argument(
+        "--ic_fusion_alpha_common",
+        type=float,
+        default=0.8,
+    )
+    
+    p.add_argument(
+        "--ic_fusion_source",
+        type=str,
+        default="base",
+        choices=["base", "modelout_a05", "modelout_a08", "modelanchor_a05", "modelanchor_a08"],
+    )
+
+    p.add_argument(
+        "--enable_simulated_ic",
+        action="store_true",
+        help="Use pred_map[source] threshold-sweep simulated counts for IC/frequency bins.",
+    )
+
+    p.add_argument(
+        "--simulated_ic_source_key",
+        type=str,
+        default="backbone_base",
+        help=(
+            "Which pred_map key is used to simulate counts. "
+            "Aliases: base, expert, probmix_a08, modelout_a05, modelanchor_a05, etc."
+        ),
+    )
+
+    p.add_argument(
+        "--simulated_ic_threshold_min",
+        type=float,
+        default=0.01,
+    )
+
+    p.add_argument(
+        "--simulated_ic_threshold_max",
+        type=float,
+        default=1.0,
+    )
+
+    p.add_argument(
+        "--simulated_ic_threshold_step",
+        type=float,
+        default=0.01,
+    )
+
+    p.add_argument(
+        "--simulated_ic_include_zero_threshold",
+        action="store_true",
+        help=(
+            "Include threshold 0.0 in simulated IC. Usually not recommended because "
+            "it gives every GO term an artificial positive count."
+        ),
+    )
+
+    p.add_argument(
+        "--simulated_ic_save_counts",
+        action="store_true",
+        help="Save simulated counts as .npy for later inspection.",
+    )
 
 
     return p
