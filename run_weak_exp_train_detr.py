@@ -37,6 +37,7 @@ WEAK_EXP_TRAIN = ROOT / "experiments" / "weak_exp_train_detr.py"
 TASK = os.environ.get("TASK", "bp")  # "cc", "mf", "bp"
 
 MODEL_CONFIG = ROOT / "data" / "msa_models" / "configs" / "model_opts" / f"{TASK}_msa_model_config.pkl"
+WARMSTART_CKPT = os.environ.get("WARMSTART_CKPT", None)
 INIT_CKPT = ROOT / "data" / "msa_models" / "checkpoints" / f"{TASK}_msa_model_rank1.pt"
 FILE_ADDRESS = ROOT / "data" / "unidata_with_exp_train_pseudo.pkl"
 WORKING_ADDRESS = ROOT / "data" / "sprot_2204_MSA_bin" / "index.pkl"
@@ -149,14 +150,15 @@ BATCH_SIZE = _cfg["batch_size"]
 PSEUDO_BATCH_SIZE = _cfg["pseudo_batch_size"]
 LAMBDA_TRUE = _cfg["lambda_true"]
 LAMBDA_PSEUDO = _cfg["lambda_pseudo"]
-LR = _cfg["lr"]
+LR = float(os.environ.get("LR", str(_cfg["lr"])))
+
 QUERY_DECODER_TOPK = _cfg["query_topk"]
 QUERY_DECODER_DELTA_MAX = _cfg["delta_max"]
 SELECTOR_PREFILTER_TOPM = _cfg["selector_topm"]
 MAX_STEPS_PER_EPOCH = _cfg["max_steps"]
 
 SEED = 3407
-EPOCHS = 400
+EPOCHS = int(os.environ.get("EPOCHS", "400"))
 DATALOADER_NUM_WORKERS = 8
 PIN_MEMORY = True
 DROP_LAST = False
@@ -378,6 +380,8 @@ def _validate_paths():
         raise FileNotFoundError(f"Cannot find msa_models: {MSA_ROOT}")
     if not Path(MODEL_CONFIG).is_file():
         raise FileNotFoundError(f"MODEL_CONFIG not found: {MODEL_CONFIG}")
+    if WARMSTART_CKPT is not None and not Path(WARMSTART_CKPT).is_file():
+        raise FileNotFoundError(f"WARMSTART_CKPT not found: {WARMSTART_CKPT}")
     if not Path(INIT_CKPT).is_file():
         raise FileNotFoundError(f"INIT_CKPT not found: {INIT_CKPT}")
     if not Path(FILE_ADDRESS).is_file():
@@ -486,6 +490,7 @@ def build_args() -> argparse.Namespace:
 
     return argparse.Namespace(
         model_config=str(Path(MODEL_CONFIG)),
+        warmstart_ckpt=(str(Path(WARMSTART_CKPT)) if WARMSTART_CKPT else None),
         init_ckpt=str(Path(INIT_CKPT)),
         file_address=str(Path(FILE_ADDRESS)),
         working_address=str(Path(WORKING_ADDRESS)),

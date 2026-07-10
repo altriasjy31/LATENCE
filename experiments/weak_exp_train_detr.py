@@ -43,7 +43,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Optional, Union, Tuple, List
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 import numpy as np
 import torch
@@ -513,7 +513,6 @@ def compute_topk_expert_kd_loss(
 
 
 _PROB_EPS = 1e-6
-
 
 def _unwrap_module(m: nn.Module) -> nn.Module:
     return m.module if hasattr(m, "module") else m
@@ -1423,6 +1422,229 @@ def _needs_detr_param_groups(args: argparse.Namespace) -> bool:
     ]
     return any(getattr(args, n, None) is not None for n in names)
 
+#------------------------------------------------------------------
+# Load Warm up Checkpoint
+#------------------------------------------------------------------
+
+def _unwrap_module(module):
+    if hasattr(module, "module") and isinstance(module.module, nn.Module):
+        return module.module
+    return module
+
+
+def _strip_module_prefix(state_dict):
+    if not isinstance(state_dict, dict):
+        return state_dict
+
+    if any(str(k).startswith("module.") for k in state_dict.keys()):
+        return OrderedDict(
+            (
+                k[len("module."):] if str(k).startswith("module.") else k,
+                v,
+            )
+            for k, v in state_dict.items()
+        )
+
+    return state_dict
+
+
+def _iter_candidate_modules(model=None, scope=None):
+    """
+    Yield candidate nn.Module objects from:
+      1. model itself
+      2. model.named_modules()
+      3. local variables from train_one_task(), i.e. scope=locals()
+      4. named_modules() of those local module variables
+    """
+    seen = set()
+
+    def emit(name, module):
+        module = _unwrap_module(module)
+        if not isinstance(module, nn.Module):
+            return
+        ident = id(module)
+        if ident in seen:
+            return
+        seen.add(ident)
+        yield name, module
+
+    if isinstance(model, nn.Module):
+        yield from emit("model", model)
+        root = _unwrap_module(model)
+        for name, module in root.named_modules():
+            if name:
+                yield from emit(f"model.{name}", module)
+
+    if isinstance(scope, dict):
+        for local_name, obj in scope.items():
+            if isinstance(obj, nn.Module):
+                yield from emit(local_name, obj)
+                root = _unwrap_module(obj)
+                for sub_name, sub_module in root.named_modules():
+                    if sub_name:
+                        yield from emit(f"{local_name}.{sub_name}", sub_module)
+
+
+def _same_shape_score(module, ref_state_dict):
+    module = _unwrap_module(module)
+    module_sd = module.state_dict()
+
+    if not ref_state_dict:
+        return 0.0, 0, 0, 0
+
+    ref_keys = set(ref_state_dict.keys())
+    mod_keys = set(module_sd.keys())
+    common = ref_keys & mod_keys
+
+    same_shape = 0
+    for k in common:
+        ref_v = ref_state_dict[k]
+        mod_v = module_sd[k]
+        if hasattr(ref_v, "shape") and hasattr(mod_v, "shape"):
+            if tuple(ref_v.shape) == tuple(mod_v.shape):
+                same_shape += 1
+        else:
+            same_shape += 1
+
+    score = same_shape / max(1, len(ref_keys))
+    return score, same_shape, len(ref_keys), len(mod_keys)
+
+
+def _find_best_matching_module(ref_state_dict, model=None, scope=None, label="module", min_match_ratio=0.98):
+    best = None
+
+    for name, module in _iter_candidate_modules(model=model, scope=scope):
+        score, same_shape, n_ref, n_mod = _same_shape_score(module, ref_state_dict)
+
+        item = {
+            "name": name,
+            "module": module,
+            "score": score,
+            "same_shape": same_shape,
+            "n_ref": n_ref,
+            "n_mod": n_mod,
+        }
+
+        if best is None or item["score"] > best["score"]:
+            best = item
+
+        # exact / near-exact enough
+        if score >= min_match_ratio:
+            return item
+
+    if best is None:
+        raise RuntimeError(f"[WarmStart] No candidate nn.Module found for {label}.")
+
+    raise RuntimeError(
+        f"[WarmStart] Could not find a good module match for {label}. "
+        f"Best candidate: {best['name']}, "
+        f"score={best['score']:.4f}, "
+        f"same_shape={best['same_shape']}/{best['n_ref']}, "
+        f"candidate_state_keys={best['n_mod']}. "
+        f"Lower min_match_ratio only after checking this is expected."
+    )
+
+
+def _load_into_module(module, state_dict, label, strict_when_exact=True):
+    module = _unwrap_module(module)
+    module_sd = module.state_dict()
+
+    ref_keys = set(state_dict.keys())
+    mod_keys = set(module_sd.keys())
+    exact_key_match = ref_keys == mod_keys
+
+    # 对自动匹配出来的模块：key 完全一致时 strict=True；否则 strict=False 并打印差异。
+    strict = bool(strict_when_exact and exact_key_match)
+
+    result = module.load_state_dict(state_dict, strict=strict)
+
+    missing = getattr(result, "missing_keys", [])
+    unexpected = getattr(result, "unexpected_keys", [])
+
+    print(f"[WarmStart] loaded {label}")
+    print(f"[WarmStart]   target module: {module.__class__.__name__}")
+    print(f"[WarmStart]   strict: {strict}")
+    print(f"[WarmStart]   ckpt keys: {len(ref_keys)}")
+    print(f"[WarmStart]   module keys: {len(mod_keys)}")
+    print(f"[WarmStart]   missing keys: {len(missing)}")
+    print(f"[WarmStart]   unexpected keys: {len(unexpected)}")
+
+    if missing:
+        print(f"[WarmStart]   missing sample: {missing[:20]}")
+    if unexpected:
+        print(f"[WarmStart]   unexpected sample: {unexpected[:20]}")
+
+
+def load_weak_detr_warmstart(path, model, scope=None, min_match_ratio=0.98):
+    """
+    Load warm-start weights saved as:
+      {
+        "backbone": OrderedDict(...),
+        "query_decoder": OrderedDict(...),
+        ...
+      }
+
+    This is NOT optimizer/scheduler resume. It only loads module weights.
+    """
+    path = Path(path)
+    ckpt = torch.load(path, map_location="cpu")
+
+    if not isinstance(ckpt, dict):
+        raise TypeError(f"[WarmStart] Expected dict checkpoint, got {type(ckpt)}: {path}")
+
+    print(f"[WarmStart] Loading checkpoint: {path}")
+    print(f"[WarmStart] top-level keys: {list(ckpt.keys())}")
+
+    if "backbone" not in ckpt:
+        raise KeyError(f"[WarmStart] Missing key 'backbone' in {path}")
+
+    if "query_decoder" not in ckpt:
+        raise KeyError(f"[WarmStart] Missing key 'query_decoder' in {path}")
+
+    backbone_sd = _strip_module_prefix(ckpt["backbone"])
+    query_decoder_sd = _strip_module_prefix(ckpt["query_decoder"])
+
+    # 1. 自动找 backbone 对应模块
+    backbone_match = _find_best_matching_module(
+        ref_state_dict=backbone_sd,
+        model=model,
+        scope=scope,
+        label="backbone",
+        min_match_ratio=min_match_ratio,
+    )
+    print(
+        f"[WarmStart] backbone matched to {backbone_match['name']} "
+        f"score={backbone_match['score']:.4f} "
+        f"same_shape={backbone_match['same_shape']}/{backbone_match['n_ref']}"
+    )
+    _load_into_module(
+        module=backbone_match["module"],
+        state_dict=backbone_sd,
+        label=f"backbone -> {backbone_match['name']}",
+    )
+
+    # 2. 自动找 query_decoder 对应模块
+    query_match = _find_best_matching_module(
+        ref_state_dict=query_decoder_sd,
+        model=model,
+        scope=scope,
+        label="query_decoder",
+        min_match_ratio=min_match_ratio,
+    )
+    print(
+        f"[WarmStart] query_decoder matched to {query_match['name']} "
+        f"score={query_match['score']:.4f} "
+        f"same_shape={query_match['same_shape']}/{query_match['n_ref']}"
+    )
+    _load_into_module(
+        module=query_match["module"],
+        state_dict=query_decoder_sd,
+        label=f"query_decoder -> {query_match['name']}",
+    )
+
+    print("[WarmStart] done.")
+
+#------------------------------------------------------------------
 
 def build_optimizer(model: nn.Module, args: argparse.Namespace):
     opt_name = str(args.optim).lower()
@@ -1799,6 +2021,14 @@ def train_one_task(args: argparse.Namespace):
     permute_dims = tuple(args.permute_dims)
     global_step = 0
     update_step = 0
+
+    if getattr(args, "warmstart_ckpt", None):
+        load_weak_detr_warmstart(
+            path=args.warmstart_ckpt,
+            model=model,
+            scope=locals(),
+            min_match_ratio=0.98,
+        )
 
     if is_main_process():
         print("[Model]", model.__class__.__name__)
