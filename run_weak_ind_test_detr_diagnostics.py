@@ -71,7 +71,7 @@ SKIP_LEGACY_QUERY_SOURCES = os.environ.get("SKIP_LEGACY_QUERY_SOURCES", "0") == 
 # Important: include decoderprob, otherwise mixed decoder-prob results will not be ensembled.
 ENSEMBLE_QUERY_MODES = os.environ.get(
     "ENSEMBLE_QUERY_MODES",
-    "external_topk,blend_topk,decoderprob,anchorlogit",
+    "external_topk,blend_topk,decoderprob,anchorlogit,modelout",
 )
 
 OUTPUT_DIR = Path(
@@ -174,8 +174,6 @@ cmd = [
     "--threshold_step", str(THRESHOLD_STEP),
     "--do_rare_analysis", DO_RARE_ANALYSIS,
 ]
-
-cmd.append("--enable_ic_fusion")
 
 if ORIGINAL_PROB_PATH:
     cmd.extend([

@@ -1239,7 +1239,13 @@ class ExpertGuidedOntologyQueryDecoder(nn.Module):
                 )
         else:
             # Not recommended. Kept only as an ablation-compatible mode.
-            refined_logits = base_logits.clone()
+            anchor_logits = base_logits.float()
+            anchor_prob = torch.sigmoid(anchor_logits)
+            selected_anchor_logits = torch.gather(anchor_logits, 1, topk_idx)
+            delta_gate = torch.ones_like(delta)
+            selected_logits = delta
+
+            refined_logits = base_logits.float().clone()
             refined_logits.scatter_(dim=1, index=topk_idx, src=delta)
 
         return {
@@ -1256,7 +1262,7 @@ class ExpertGuidedOntologyQueryDecoder(nn.Module):
             "anchor_logits": anchor_logits,
             "anchor_prob": anchor_prob,
             "selected_anchor_logits": selected_anchor_logits,
-            "selected_logits": selected_logits if self.query_decoder_logit_base_mode != "base_residual" else None,
+            "selected_logits": selected_logits,
             "delta_gate": delta_gate,
             "query_decoder_logit_base_mode": self.query_decoder_logit_base_mode,
         }
@@ -1267,6 +1273,10 @@ class WeakMSAGOWithDETRDecoder(nn.Module):
 
     def __init__(self, opt: SimpleNamespace, args: argparse.Namespace):
         super().__init__()
+        # Preserve non-tensor construction semantics in future full DETR
+        # checkpoints. Values such as delta_max, anchor mode and expert alpha
+        # cannot be recovered from state_dict shapes alone.
+        self.checkpoint_config = dict(vars(args))
         self.backbone = Arch(opt)
         self.num_classes = int(args.num_classes)
         self.topk = int(args.query_decoder_topk)
@@ -1383,6 +1393,7 @@ def save_weak_model(model: nn.Module, path: Union[str, Path]):
             "checkpoint_type": "weak_detr_decoder_v3",
             "backbone": m.backbone.state_dict(),
             "query_decoder": m.query_decoder.state_dict(),
+            "model_args": dict(getattr(m, "checkpoint_config", {})),
             "num_classes": m.num_classes,
             "query_decoder_topk": m.topk,
             "query_decoder_classifier_weight_shape": tuple(m.classifier.weight.shape),
@@ -2346,7 +2357,13 @@ def train_one_task(args: argparse.Namespace):
             running["loss_delta_l2"] += float(loss_delta_l2.detach().cpu())
             running["loss_external_kd"] += float(loss_external_kd.detach().cpu())
             running["contrib_true"] += float((args.lambda_true * loss_true).detach().cpu())
-            running["contrib_pseudo"] += float((args.lambda_pseudo * loss_pseudo).detach().cpu())
+            # Backward-compatible aggregate that now matches the actual
+            # split base/query weights used in the total loss.
+            pseudo_contrib = (
+                args.lambda_pseudo_base * loss_pseudo_base
+                + args.lambda_pseudo_query * loss_pseudo_query
+            )
+            running["contrib_pseudo"] += float(pseudo_contrib.detach().cpu())
             running["contrib_pseudo_base"] += float((args.lambda_pseudo_base * loss_pseudo_base).detach().cpu())
             running["contrib_pseudo_query"] += float((args.lambda_pseudo_query * loss_pseudo_query).detach().cpu())
             running["contrib_base_expert_kd"] += float((args.lambda_base_expert_kd * loss_base_expert_kd).detach().cpu())

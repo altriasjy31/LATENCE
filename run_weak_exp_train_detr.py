@@ -11,7 +11,7 @@ This runner is configured for the first full V3 DETR run:
     - expert external probability as exp_train pseudo-prob supervision;
     - trainable ontology query embedding;
     - lightweight learnable selector;
-    - residual DETR-style top-k refinement with delta_max=0.5.
+    - residual DETR-style top-k refinement with task-configured delta_max=1.0.
 """
 
 from __future__ import annotations

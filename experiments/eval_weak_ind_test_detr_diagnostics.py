@@ -127,10 +127,20 @@ def parse_csv_strings(s: str) -> List[str]:
 #=============revise probability for adding in query decoder=========
 
 
-def get_prob_batch(prob_np, offset: int, batch_size: int, device: torch.device):
+def get_prob_batch(
+    prob_np,
+    offset: int,
+    batch_size: int,
+    device: torch.device,
+    row_indices: Optional[np.ndarray] = None,
+):
     if prob_np is None:
         return None
-    arr = np.asarray(prob_np[offset: offset + batch_size], dtype=np.float32)
+    if row_indices is None:
+        rows = slice(offset, offset + batch_size)
+    else:
+        rows = row_indices[offset: offset + batch_size]
+    arr = np.asarray(prob_np[rows], dtype=np.float32)
     return torch.from_numpy(arr).to(device=device, non_blocking=True)
 
 
@@ -299,6 +309,32 @@ def load_json_if_exists(path: Optional[str | Path]) -> Dict[str, Any]:
         return json.load(f)
 
 
+def load_checkpoint_model_args(checkpoint: str | Path) -> Tuple[Dict[str, Any], bool]:
+    """Return embedded construction args and whether this is a full DETR checkpoint."""
+    try:
+        try:
+            payload = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+        except TypeError:
+            payload = torch.load(str(checkpoint), map_location="cpu")
+    except Exception:
+        return {}, False
+
+    if not isinstance(payload, dict):
+        return {}, False
+
+    model_args = payload.get("model_args", {})
+    if not isinstance(model_args, dict):
+        model_args = {}
+
+    keys = [str(k) for k in payload.keys()]
+    is_full_detr = (
+        "query_decoder" in payload
+        or any(k.startswith("query_decoder.") for k in keys)
+        or any(k.startswith("module.query_decoder.") for k in keys)
+    )
+    return model_args, is_full_detr
+
+
 
 
 def auto_train_args_path(checkpoint: str | Path) -> Optional[Path]:
@@ -324,8 +360,24 @@ def overlay_train_args(args: argparse.Namespace, cli_keys: set[str]) -> argparse
     train_args = load_json_if_exists(train_args_path)
     if train_args_path is not None and train_args_path.is_file():
         print(f"[Train args] loaded {train_args_path}")
+        args.resolved_train_args_source = str(train_args_path)
     else:
-        print("[Train args] not found; using CLI/default eval arguments")
+        checkpoint_args, is_full_detr = load_checkpoint_model_args(args.checkpoint)
+        if checkpoint_args:
+            train_args = checkpoint_args
+            args.resolved_train_args_source = "checkpoint:model_args"
+            print("[Train args] loaded from checkpoint model_args")
+        elif is_full_detr and not bool(getattr(args, "allow_missing_train_args", False)):
+            raise RuntimeError(
+                "Full DETR checkpoint found, but neither args.json nor embedded model_args "
+                "is available. Refusing to evaluate with silent parser defaults because "
+                "delta_max/anchor mode/expert alpha and selector settings may change model "
+                "semantics. Restore the training args.json, or explicitly use "
+                "--allow_missing_train_args only for a deliberate diagnostic run."
+            )
+        else:
+            args.resolved_train_args_source = None
+            print("[Train args] not found; using CLI/default eval arguments")
 
 
     # Do not override eval-specific keys or keys explicitly passed on CLI.
@@ -338,6 +390,7 @@ def overlay_train_args(args: argparse.Namespace, cli_keys: set[str]) -> argparse
         "skip_legacy_query_sources",
         "auprc_mode", "threshold_step", "compute_sample_fmax",
         "do_rare_analysis", "rare_metric_keys", "max_batches", "train_args_json",
+        "allow_missing_train_args", "resolved_train_args_source",
     }
 
 
@@ -1161,16 +1214,26 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
 
 
     original_np = None
+    original_row_indices = None
     original_path = clean_optional_path(args.original_prob_path)
     if original_path is not None:
+        # Reuse the same protein-name alignment and validation as external
+        # probabilities. Shape equality alone is insufficient when the binary
+        # MSA index has dropped proteins present in metadata.
+        original_alignment = PseudoProbDataset(
+            base_dataset=base_dataset,
+            metadata_file=args.file_address,
+            mode=args.mode,
+            task=task,
+            prob_path=original_path,
+            num_classes=args.num_classes,
+        )
         original_np = np.load(original_path, mmap_mode="r")
-        if original_np.shape != (len(dataset), int(args.num_classes)):
-            raise ValueError(
-                f"original_prob shape mismatch: {original_np.shape}; "
-                f"expected {(len(dataset), int(args.num_classes))}. "
-                "Check mode/order/GO-index alignment."
-            )
-        print(f"[Original prob] {original_path}, shape={original_np.shape}, dtype={original_np.dtype}")
+        original_row_indices = original_alignment.prob_indices
+        print(
+            f"[Original prob] {original_path}, shape={original_np.shape}, "
+            f"dtype={original_np.dtype}, aligned_rows={len(original_row_indices)}"
+        )
 
 
     loader = make_loader(
@@ -1237,7 +1300,13 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             batch_size = int(y.shape[0])
             batch_start = sample_offset
             sample_offset += batch_size
-            orig_prob = get_prob_batch(original_np, batch_start, batch_size, device)
+            orig_prob = get_prob_batch(
+                original_np,
+                batch_start,
+                batch_size,
+                device,
+                row_indices=original_row_indices,
+            )
 
 
             if proteins is not None:
@@ -1423,10 +1492,11 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
             raise RuntimeError("IC fusion requires backbone_base in pred_map.")
 
         counts, n_train, count_key = load_train_label_counts(args.file_address, task, int(args.num_classes))
-        if n_train <= 0:
-            counts = y_true.sum(axis=0).astype(np.float64)
-            count_key = "eval_labels_fallback"
-            n_train = int(y_true.shape[0])
+        if n_train <= 0 and not bool(args.enable_simulated_ic):
+            raise RuntimeError(
+                "IC fusion requires GO label counts from the training split, but no usable "
+                "train annotations were found. Refusing to derive bins from evaluation labels."
+            )
             
         # Build bins using existing frequency bin helper.
         if bool(args.enable_simulated_ic):
@@ -1568,9 +1638,11 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
     if bool(args.do_rare_analysis):
         counts, n_train, count_key = load_train_label_counts(args.file_address, task, int(args.num_classes))
         if n_train <= 0:
-            counts = y_true.sum(axis=0).astype(np.float64)
-            count_key = "eval_labels_fallback"
-            n_train = int(y_true.shape[0])
+            raise RuntimeError(
+                "Rare/common analysis requires GO label counts from the training split, but "
+                "no usable train annotations were found. Refusing to derive bins from "
+                "evaluation labels."
+            )
         bins = make_frequency_bins(counts)
         rare_keys = parse_csv_strings(args.rare_metric_keys)
         
@@ -1617,24 +1689,39 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
                 m = bin_metrics[bin_name]
                 rows.append((key, m["fmax_micro"], m["auprc_micro_hist"]))
         
-            rare_best[bin_name] = {
-                "best_fmax": max(rows, key=lambda x: x[1]),
-                "best_auprc": max(rows, key=lambda x: x[2]),
-            }
+            if rows:
+                rare_best[bin_name] = {
+                    "best_fmax": max(rows, key=lambda x: x[1]),
+                    "best_auprc": max(rows, key=lambda x: x[2]),
+                }
+            else:
+                rare_best[bin_name] = {
+                    "best_fmax": None,
+                    "best_auprc": None,
+                    "reason": "no valid metrics for this bin",
+                }
 
         for bin_name in bins:
             candidates = []
             for key in rare_results:
                 if key.startswith("prob_mix::expert_base::alpha_"):
                     alpha = float(key.split("alpha_")[-1])
-                    if (t := rare_results[key].get(bin_name)):
-                        m = t
+                    m = rare_results[key].get(bin_name)
+                    if m is None:
+                        continue
                     candidates.append((alpha, m["fmax_micro"], m["auprc_micro_hist"]))
 
-            alpha_sweep[bin_name] = {
-                "best_alpha_by_fmax": max(candidates, key=lambda x: x[1]),
-                "best_alpha_by_auprc": max(candidates, key=lambda x: x[2]),
-            }
+            if candidates:
+                alpha_sweep[bin_name] = {
+                    "best_alpha_by_fmax": max(candidates, key=lambda x: x[1]),
+                    "best_alpha_by_auprc": max(candidates, key=lambda x: x[2]),
+                }
+            else:
+                alpha_sweep[bin_name] = {
+                    "best_alpha_by_fmax": None,
+                    "best_alpha_by_auprc": None,
+                    "reason": "no probability-mix metrics for this bin",
+                }
 
         frequency_info = {
             "count_source_key": count_key,
@@ -1688,6 +1775,8 @@ def run_eval(args: argparse.Namespace) -> Dict[str, Any]:
         json.dump(metric_results, f, indent=2, ensure_ascii=False, allow_nan=True)
     with (output_dir / "detr_delta_diagnostics.json").open("w", encoding="utf-8") as f:
         json.dump(delta_results, f, indent=2, ensure_ascii=False, allow_nan=True)
+    with (output_dir / "effective_eval_args.json").open("w", encoding="utf-8") as f:
+        json.dump(vars(args), f, indent=2, ensure_ascii=False, default=str)
     if rare_results:
         with (output_dir / "detr_rare_analysis.json").open("w", encoding="utf-8") as f:
             json.dump(rare_results, f, indent=2, ensure_ascii=False, allow_nan=True)
@@ -1842,6 +1931,11 @@ def build_argparser() -> argparse.ArgumentParser:
     # Checkpoint/eval fields.
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--train_args_json", type=str, default="auto")
+    p.add_argument(
+        "--allow_missing_train_args",
+        action="store_true",
+        help="Allow full DETR evaluation without args.json/embedded model_args. Unsafe by default.",
+    )
     p.add_argument("--output_dir", type=str, required=True)
     p.add_argument("--mode", type=str, default="ind_test")
     p.add_argument("--external_prob_path", type=str, default=None)
@@ -1996,7 +2090,7 @@ def build_argparser() -> argparse.ArgumentParser:
 
     # Ensembles: alpha is weight on external_prob.
     p.add_argument("--ensemble_alphas", type=str, default="0.1,0.3,0.5,0.7,0.9")
-    p.add_argument("--ensemble_query_modes", type=str, default="external_topk,blend_topk,decoderprob")
+    p.add_argument("--ensemble_query_modes", type=str, default="external_topk,blend_topk,decoderprob,anchorlogit,modelout")
     p.add_argument("--ensemble_delta_scales", type=str, default="0.5,1.0")
 
 
@@ -2130,4 +2224,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
