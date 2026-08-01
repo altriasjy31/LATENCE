@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Environment-variable launcher for ``build_pp_edge_types_v2.py``.
+"""Environment-variable launcher for ``build_pp_edge_types.py``.
 
 Typical use::
 
     TASK=bp \
     RUN_TAG=bp_weak_detr_v3_expert_prob_warmstart340_to400 \
     EPOCH=100 \
-    python run_build_pp_edge_types_v2.py
+    python run_build_pp_edge_types.py
 
 The defaults compile:
 
@@ -175,7 +175,7 @@ cmd.extend(sys.argv[1:])
 
 print("[Build evidence-separated Protein-Protein edge types]")
 print(
-    "LAUNCHER=run_build_pp_edge_types_v2.py "
+    "LAUNCHER=run_build_pp_edge_types.py "
     f"BUILDER={BUILD_SCRIPT.name}"
 )
 print(f"TASK={TASK} RUN_TAG={RUN_TAG} EPOCH={EPOCH}")

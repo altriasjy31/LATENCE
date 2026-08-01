@@ -74,7 +74,7 @@ import numpy as np
 
 RELATION_NAMES = ("ppi", "similar_to", "weak_to_core")
 EDGE_ATTR_COLUMNS = ("confidence", "source_score", "reciprocal_rank")
-BUILDER_ID = "build_pp_edge_types_v2"
+BUILDER_ID = "build_pp_edge_types"
 BUILDER_VERSION = "2.1.0-top100-weak-to-core"
 
 
@@ -1289,7 +1289,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "materialized_as_new_evidence_edges": False,
                     "recommended_k": 2,
                     "recommended_edge_dir_from_go_seeds": "in",
-                    "helper_module": "hetero_k_hop_closure_v2.py",
+                    "helper_module": "hetero_k_hop_closure.py",
                 },
             },
             "relations": relation_outputs,

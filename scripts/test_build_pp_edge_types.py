@@ -163,11 +163,12 @@ def main() -> None:
         )
         assert manifest["num_proteins"] == 5
         assert manifest["schema_version"] == 2
-        assert manifest["builder"] == {
-            "id": "build_pp_edge_types_v2",
+        assert (
+            manifest["builder"] == {
+            "id": "build_pp_edge_types",
             "version": "2.1.0-top100-weak-to-core",
-            "file": "build_pp_edge_types_v2.py",
-        }
+            "file": "build_pp_edge_types.py",}
+        )
         assert (
             manifest["source_details"]["weak_to_core"]["graph_message_direction"]
             == "weak-to-core"
@@ -176,11 +177,12 @@ def main() -> None:
             manifest["routing_contract"]["weak_to_core"]["minimum_message_passing_layers"]
             == 2
         )
-        assert [item["relation"] for item in manifest["relations"]] == [
+        assert (
+            [item["relation"] for item in manifest["relations"]] == [
             "ppi",
             "similar_to",
-            "weak_to_core",
-        ]
+            "weak_to_core",]
+        )
 
         for mode, expected in (("directed", 3), ("union", 4), ("mutual", 2)):
             mode_output = root / f"compiled_{mode}"
@@ -268,7 +270,7 @@ def main() -> None:
                 "KNN_WRITE_CHUNK_ROWS": "1",
             }
         )
-        launcher = Path(__file__).with_name("run_build_pp_edge_types_v2.py")
+        launcher = Path(__file__).with_name("run_build_pp_edge_types.py")
         launcher_result = subprocess.run(
             [sys.executable, str(launcher)],
             check=True,
@@ -277,9 +279,9 @@ def main() -> None:
             env=launcher_env,
         )
         assert "--similar-mode directed" in launcher_result.stdout
-        assert "LAUNCHER=run_build_pp_edge_types_v2.py" in launcher_result.stdout
-        assert "BUILDER=build_pp_edge_types_v2.py" in launcher_result.stdout
-        assert "[Implementation] build_pp_edge_types_v2" in launcher_result.stdout
+        assert "LAUNCHER=run_build_pp_edge_types.py" in launcher_result.stdout
+        assert "BUILDER=build_pp_edge_types.py" in launcher_result.stdout
+        assert "[Implementation] build_pp_edge_types" in launcher_result.stdout
         assert "--similar-k 100" in launcher_result.stdout
         assert "--similar-message-direction neighbor-to-query" in launcher_result.stdout
         assert "--weak-k 100" in launcher_result.stdout
@@ -412,7 +414,7 @@ def main() -> None:
         assert top100_details["requested_k"] == 100
         assert top100_details["resolved_k"] == 100
         assert top100_details["graph_message_direction"] == "neighbor-to-query"
-        print("build_pp_edge_types_v2 synthetic regression: PASS")
+        print("build_pp_edge_types synthetic regression: PASS")
 
 
 if __name__ == "__main__":
