@@ -68,17 +68,17 @@ if TASK not in {"bp", "mf", "cc"}:
 if not EPOCH or not RUN_TAG:
     raise ValueError("EPOCH and RUN_TAG must not be empty")
 
-DEFAULT_STAGE2_DIR = (
-    ROOT / "outputs" / "latence_nn_pp" / RUN_TAG / f"epoch{EPOCH}" / TASK
+DEFAULT_NBS_DIR = (
+    ROOT / "outputs" / "latence_nbs" / RUN_TAG / f"epoch{EPOCH}" / TASK
 )
-FEATURE_DIR = env_path("FEATURE_DIR", DEFAULT_STAGE2_DIR / "features")
+FEATURE_DIR = env_path("FEATURE_DIR", DEFAULT_NBS_DIR / "features")
 PP_RELATIONS_DIR = env_path(
-    "PP_RELATIONS_DIR", DEFAULT_STAGE2_DIR / "pp_relations"
+    "PP_RELATIONS_DIR", DEFAULT_NBS_DIR / "pp_relations"
 )
 PPI_PATH = env_path(
     "PPI_PATH", ROOT / "data" / "swiss_filtered_ppi_2204.mapped.tsv"
 )
-OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_STAGE2_DIR / "pp_edge_types")
+OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_NBS_DIR / "pp_edge_types")
 
 RELATIONS = os.environ.get(
     "RELATIONS", "ppi,similar_to,weak_to_core"

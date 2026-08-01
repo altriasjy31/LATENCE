@@ -129,15 +129,15 @@ WEAK_EXTERNAL_PROB_PATH = env_path(
     first_existing_or_first(expert_candidates),
 )
 
-DEFAULT_STAGE2_DIR = (
-    ROOT / "outputs" / "latence_nn_pp" / RUN_TAG / f"epoch{EPOCH}" / TASK
+DEFAULT_NBS_DIR = (
+    ROOT / "outputs" / "latence_nbs" / RUN_TAG / f"epoch{EPOCH}" / TASK
 )
-FEATURE_DIR = env_path("FEATURE_DIR", DEFAULT_STAGE2_DIR / "features")
+FEATURE_DIR = env_path("FEATURE_DIR", DEFAULT_NBS_DIR / "features")
 GO_REGISTRY = env_path(
-    "GO_REGISTRY", DEFAULT_STAGE2_DIR / "gg_relations" / "go_registry.tsv"
+    "GO_REGISTRY", DEFAULT_NBS_DIR / "gg_relations" / "go_registry.tsv"
 )
 OUTPUT_DIR = env_path(
-    "OUTPUT_DIR", DEFAULT_STAGE2_DIR / "weak_graph_predictions"
+    "OUTPUT_DIR", DEFAULT_NBS_DIR / "weak_graph_predictions"
 )
 
 ROLES = os.environ.get("ROLES", "core,weak").strip()

@@ -111,10 +111,10 @@ else:
         )
 
 GO_TERMS_KEY = os.environ.get("GO_TERMS_KEY", "").strip()
-DEFAULT_STAGE2_DIR = (
-    ROOT / "outputs" / "latence_stage2_pp" / RUN_TAG / f"epoch{EPOCH}" / TASK
+DEFAULT_NBS_DIR = (
+    ROOT / "outputs" / "latence_nbs" / RUN_TAG / f"epoch{EPOCH}" / TASK
 )
-OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_STAGE2_DIR / "gg_relations")
+OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_NBS_DIR / "gg_relations")
 
 EXPECTED_NUM_TERMS = int(
     os.environ.get("EXPECTED_NUM_TERMS", str(TASK_NUM_CLASSES[TASK]))

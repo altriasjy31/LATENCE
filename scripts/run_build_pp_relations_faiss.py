@@ -76,11 +76,11 @@ def env_bool(name: str, default: bool = False) -> bool:
     raise ValueError(f"{name} must be a boolean value, got {raw!r}")
 
 
-DEFAULT_NN_DIR = (
-    ROOT / "outputs" / "latence_nn_pp" / RUN_TAG / f"epoch{EPOCH}" / TASK
+DEFAULT_NBS_DIR = (
+    ROOT / "outputs" / "latence_nbs" / RUN_TAG / f"epoch{EPOCH}" / TASK
 )
-FEATURE_DIR = env_path("FEATURE_DIR", DEFAULT_NN_DIR / "features")
-OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_NN_DIR / "pp_relations")
+FEATURE_DIR = env_path("FEATURE_DIR", DEFAULT_NBS_DIR / "features")
+OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_NBS_DIR / "pp_relations")
 
 RELATION = os.environ.get("RELATION", "all").strip()
 QUERY_ROLES = os.environ.get("QUERY_ROLES", "weak").strip()

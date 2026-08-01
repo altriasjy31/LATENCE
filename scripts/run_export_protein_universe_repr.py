@@ -106,10 +106,10 @@ DEFAULT_CHECKPOINT = (
 )
 CHECKPOINT = env_path("CHECKPOINT", DEFAULT_CHECKPOINT)
 
-DEFAULT_NN_DIR = (
-    ROOT / "outputs" / "latence_nn_pp" / RUN_TAG / f"epoch{EPOCH}" / TASK
+DEFAULT_NBS_DIR = (
+    ROOT / "outputs" / "latence_nbs" / RUN_TAG / f"epoch{EPOCH}" / TASK
 )
-OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_NN_DIR / "features")
+OUTPUT_DIR = env_path("OUTPUT_DIR", DEFAULT_NBS_DIR / "features")
 
 ROLES = os.environ.get("ROLES", "core,weak").strip()
 TRAIN_ARGS_JSON = os.environ.get("TRAIN_ARGS_JSON", "auto").strip()
