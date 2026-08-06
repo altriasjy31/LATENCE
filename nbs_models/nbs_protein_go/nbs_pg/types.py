@@ -111,6 +111,10 @@ class ProteinGOQueryBatch:
     mask: Optional[Tensor] = None
     confidence: Optional[Tensor] = None
     pseudo_mask: Optional[Tensor] = None
+    # General supervision weights apply to both gold and pseudo positions.
+    # This supports low-weight sampled-unlabelled negatives without converting
+    # every unknown protein--GO pair into a hard negative.
+    supervision_weight: Optional[Tensor] = None
 
     def to(self, device: torch.device | str) -> "ProteinGOQueryBatch":
         kwargs = {}
@@ -135,6 +139,7 @@ class NBSQueryCondition:
     mask: Optional[Tensor]
     confidence: Optional[Tensor]
     pseudo_mask: Optional[Tensor]
+    supervision_weight: Optional[Tensor] = None
     auxiliary: Optional[Dict[str, Tensor]] = None
 
 
@@ -145,6 +150,7 @@ class NBSMatchOutput:
     mask: Optional[Tensor]
     confidence: Optional[Tensor] = None
     pseudo_mask: Optional[Tensor] = None
+    supervision_weight: Optional[Tensor] = None
     auxiliary: Optional[Dict[str, Tensor]] = None
 
     @property

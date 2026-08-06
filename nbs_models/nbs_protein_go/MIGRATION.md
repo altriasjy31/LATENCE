@@ -30,3 +30,42 @@ such as `torch.nn` and `nn.Module` must remain unchanged.
 
 Compatibility aliases for `TRUE_*` remain, but resolve to the new gold relation
 names rather than recreating the obsolete schema.
+
+## v0.3 training migration
+
+Previous training plans referenced validation-based checkpoint selection.  NBS
+v0.3 instead follows the first-stage LATENCE convention:
+
+```text
+validation loader / best checkpoint / patience
+    -> fixed final epoch and named epoch snapshots
+```
+
+The reference BP configuration uses 150 total epochs and retains epochs 100 and
+150.  Evaluation code should consume these snapshots independently; it must not
+feed evaluation metrics back into the training loop.
+
+Additional API changes:
+
+| v0.2 | v0.3 |
+|---|---|
+| scalar candidate evidence | scalar or full `[probability, selector, rank]` evidence |
+| hierarchy assumed GO columns | explicit `go_axis`; NBS defaults to query rows |
+| confidence mainly pseudo-specific | `supervision_weight` for all selected positions |
+| no trainer | fixed-epoch trainer with atomic snapshots and resume |
+| no episode/store layer | mmap stores and GO-query episode sampler |
+
+## v0.3.1 configuration migration
+
+Use:
+
+```json
+"save_interval_epochs": 10
+```
+
+instead of the older `save_every` field.  The old field is still read for
+compatibility but must not conflict with the new one.
+
+Add the `go_boxsqel` configuration block and set `model_inputs.go_box_dim=512`.
+Run `scripts/nbs/run_prepare_go_boxsqel_for_nbs.py` once before constructing the
+training loader so ontology-class rows are projected into classifier GO order.

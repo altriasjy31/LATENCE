@@ -111,6 +111,7 @@ def remap_query_to_sampled_graph(
         mask=query.mask,
         confidence=query.confidence,
         pseudo_mask=query.pseudo_mask,
+        supervision_weight=query.supervision_weight,
     )
 
 

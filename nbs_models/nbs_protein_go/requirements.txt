@@ -1,3 +1,4 @@
 torch>=2.4
 torch-geometric>=2.5
+numpy>=1.26
 # Large NeighborLoader runs additionally need pyg-lib or torch-sparse.

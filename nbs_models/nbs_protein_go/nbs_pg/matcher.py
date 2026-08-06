@@ -48,6 +48,14 @@ class NBSGatedDeltaAttnRes(nn.Module):
             nn.SiLU(),
             nn.Linear(config.delta_gate_hidden_dim, 1),
         )
+        self.candidate_evidence_residual = nn.Sequential(
+            nn.Linear(config.candidate_evidence_dim, config.candidate_evidence_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(config.candidate_evidence_hidden_dim, 1),
+        )
+        self.candidate_evidence_scale = nn.Parameter(
+            torch.tensor(float(config.candidate_evidence_residual_scale_init))
+        )
 
         nn.init.zeros_(self.source_embedding)
         nn.init.zeros_(self.route_score.weight)
@@ -55,6 +63,8 @@ class NBSGatedDeltaAttnRes(nn.Module):
         nn.init.constant_(self.gate_net[-1].bias, -2.0)
         nn.init.zeros_(self.delta_gate[-1].weight)
         nn.init.constant_(self.delta_gate[-1].bias, float(config.delta_gate_bias_init))
+        nn.init.zeros_(self.candidate_evidence_residual[-1].weight)
+        nn.init.zeros_(self.candidate_evidence_residual[-1].bias)
 
     def _route(
         self,
@@ -160,6 +170,38 @@ class NBSGatedDeltaAttnRes(nn.Module):
             )
         return torch.cat(outputs, dim=1)
 
+
+    def _encode_candidate_evidence(self, evidence: Tensor, base_prob: Tensor) -> Tensor:
+        """Compress candidate evidence to one bounded gate channel.
+
+        A two-dimensional tensor is treated as an already-compressed scalar
+        feature.  The production three-column LATENCE tensor starts exactly
+        from reciprocal rank, while a zero-initialized residual can learn from
+        backbone probability and selector score without duplicating the base
+        probability channel at initialization.
+        """
+        evidence = evidence.to(base_prob.device, base_prob.dtype)
+        if evidence.dim() == 2:
+            if evidence.shape != base_prob.shape:
+                raise ValueError("scalar candidate_evidence must align with base_logits")
+            return evidence.clamp(0.0, 1.0)
+        if evidence.dim() != 3 or evidence.shape[:2] != base_prob.shape:
+            raise ValueError(
+                "candidate_evidence must be [Q,C] or [Q,C,F] aligned with base_logits"
+            )
+        if evidence.size(-1) != self.config.candidate_evidence_dim:
+            raise ValueError(
+                f"candidate_evidence feature dim {evidence.size(-1)} != "
+                f"configured {self.config.candidate_evidence_dim}"
+            )
+        initial_channel = 2 if evidence.size(-1) >= 3 else evidence.size(-1) - 1
+        initial = evidence[..., initial_channel].clamp(1e-5, 1.0 - 1e-5)
+        initial_logit = torch.logit(initial)
+        residual = self.candidate_evidence_residual(evidence).squeeze(-1)
+        return torch.sigmoid(
+            initial_logit + torch.tanh(self.candidate_evidence_scale) * residual
+        )
+
     def _refine_base_logits(
         self,
         graph_logits: Tensor,
@@ -180,11 +222,9 @@ class NBSGatedDeltaAttnRes(nn.Module):
                 if condition.candidate_evidence is None:
                     evidence = torch.zeros_like(base_prob)
                 else:
-                    evidence = condition.candidate_evidence.to(
-                        base_prob.device, base_prob.dtype
+                    evidence = self._encode_candidate_evidence(
+                        condition.candidate_evidence, base_prob
                     )
-                    if evidence.shape != base_prob.shape:
-                        raise ValueError("candidate_evidence must align with base_logits")
             elif mode == "student_only":
                 evidence = torch.zeros_like(base_prob)
             elif mode == "legacy_expert":
@@ -224,7 +264,13 @@ class NBSGatedDeltaAttnRes(nn.Module):
         graph_logits = self._score_candidates(hierarchy, condition, q_out, weights, gates)
         logits, delta_gate = self._refine_base_logits(graph_logits, condition)
 
-        for name, value in (("labels", condition.labels), ("mask", condition.mask)):
+        for name, value in (
+            ("labels", condition.labels),
+            ("mask", condition.mask),
+            ("confidence", condition.confidence),
+            ("pseudo_mask", condition.pseudo_mask),
+            ("supervision_weight", condition.supervision_weight),
+        ):
             if value is not None and value.shape != logits.shape:
                 raise ValueError(
                     f"{name} shape {tuple(value.shape)} != logits shape {tuple(logits.shape)}"
@@ -262,5 +308,6 @@ class NBSGatedDeltaAttnRes(nn.Module):
             mask=condition.mask,
             confidence=condition.confidence,
             pseudo_mask=condition.pseudo_mask,
+            supervision_weight=condition.supervision_weight,
             auxiliary=auxiliary,
         )

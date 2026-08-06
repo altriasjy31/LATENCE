@@ -50,7 +50,7 @@ class NBSConfig:
     go_query_pool: GOPooling = "attention"
 
     # Calibrated box inclusion.  The threshold is an initialization, not a
-    # hard ontology rule and should be fitted only on training/validation data.
+    # hard ontology rule and should be fitted only from training data or fixed before training.
     box_margin_threshold_init: float = -0.15
     box_calibration_scale_init: float = 10.0
     train_box_calibrator: bool = True
@@ -76,6 +76,12 @@ class NBSConfig:
     delta_gate_hidden_dim: int = 16
     delta_gate_bias_init: float = -2.0
     delta_gate_feature_mode: DeltaGateFeatureMode = "student_candidate"
+    # Candidate evidence accepts the exported three-column contract
+    # [backbone_probability, selector_score, reciprocal_rank].  The encoder
+    # starts from reciprocal rank and learns a bounded residual from all three.
+    candidate_evidence_dim: int = 3
+    candidate_evidence_hidden_dim: int = 8
+    candidate_evidence_residual_scale_init: float = 0.0
 
     # Candidate scoring. None scores all candidates in one operation.
     score_chunk_size: Optional[int] = 65536
@@ -106,6 +112,10 @@ class NBSConfig:
             raise ValueError("go_tower_layers cannot be negative")
         if self.delta_gate_hidden_dim <= 0:
             raise ValueError("delta_gate_hidden_dim must be positive")
+        if self.candidate_evidence_dim <= 0:
+            raise ValueError("candidate_evidence_dim must be positive")
+        if self.candidate_evidence_hidden_dim <= 0:
+            raise ValueError("candidate_evidence_hidden_dim must be positive")
         if self.score_chunk_size is not None and self.score_chunk_size <= 0:
             raise ValueError("score_chunk_size must be positive or None")
         if self.pp_edge_dim != 3:
