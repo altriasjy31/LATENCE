@@ -1,0 +1,53 @@
+{
+  "input_file": "data/go.norm",
+  "report": {
+    "total_lines": 122062,
+    "blank_lines": 0,
+    "comment_lines": 0,
+    "ignored_lines": 0,
+    "parsed_lines": 122062,
+    "expanded_axioms": 122062,
+    "unparsed_lines": 0,
+    "nf1": 79740,
+    "nf2": 11614,
+    "nf3": 19117,
+    "nf4": 11582,
+    "disjoint": 0,
+    "role_inclusion": 3,
+    "role_chain": 6
+  },
+  "classes": 44919,
+  "relations": 8,
+  "axiom_shapes": {
+    "nf1": [
+      79740,
+      2
+    ],
+    "nf2": [
+      11614,
+      3
+    ],
+    "nf3": [
+      19117,
+      3
+    ],
+    "nf4": [
+      11582,
+      3
+    ],
+    "disjoint": [
+      0,
+      2
+    ],
+    "role_inclusion": [
+      3,
+      2
+    ],
+    "role_chain": [
+      6,
+      3
+    ]
+  },
+  "unparsed_examples": [],
+  "artificial_disjoint_axioms": 0
+}

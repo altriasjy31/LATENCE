@@ -1,66 +1,62 @@
-# NBS protein–GO
+# LATENCE NBS protein–GO v0.4
 
 **NBS (Neighborhood–BoxSquare)** models the LATENCE weak-to-strong transition as
-functional neighbourhoods being organized inside nested GO boxes.  The boxes
-are implemented with **BoxSquaredEL**; the model name is broader than the
-specific box-embedding method.
+protein functional neighbourhoods being organized inside nested ontology
+boxes. Box geometry is implemented by **BoxSquaredEL**.
 
 ```text
-weak evolutionary / PPI / prediction neighbourhood
-        -> GO-conditioned neighbourhood query
-        -> nested BoxSquaredEL ontology geometry
-        -> gated graph residual over first-stage base logits
-        -> stronger functional neighbourhood
+first-stage protein representation / base logits
+        +
+PPI / similar_to / weak_to_core neighbourhoods
+        +
+gold / backbone-candidate / pseudo Protein–GO evidence
+        +
+full BoxSquaredEL ontology geometry and direct G–G relations
+        ↓
+GO-conditioned NBS query and gated graph residual
+        ↓
+stronger functional neighbourhood prediction
 ```
 
-The package is designed for the second stage of LATENCE.  It is not a renamed
-HGAT and does not merge all graph evidence into one generic relation.
+NBS is not a renamed HGAT. Evidence provenance, relation direction, candidate
+leakage control and the first-stage base-logit anchor are explicit contracts.
 
-## Project location
-
-The intended LATENCE layout is:
+## Project layout
 
 ```text
 latence-project/
 ├── nbs_models/
 │   └── nbs_protein_go/
 │       ├── nbs_pg/
+│       ├── configs/
 │       ├── tests/
-│       ├── examples/
-│       └── pyproject.toml
+│       └── examples/
+├── experiments/
+│   └── nbs/
+│       ├── latence_nbs_components.py
+│       └── latence_nbs_loader.py
 └── scripts/
     └── nbs/
-        ├── build_go_protein_inverted_index.py
-        └── run_build_go_protein_inverted_index.py
 ```
 
-The second-stage data root is expected to be `outputs/latence_nbs/`.
-
-## Core design
+Second-stage data and training outputs use:
 
 ```text
-Protein / GO evidence-aware heterogeneous backbone
-    -> additive per-layer, per-relation neighbourhood sources
-    -> NBSNeighborhoodHierarchy
-    -> GO-query-conditioned NBS-GDAR routing
-    -> base logits + gated graph delta
+outputs/latence_nbs/
+outputs/latence_nbs_train/
 ```
 
-GO nodes retain separate `center`, `log-offset`, static box anchor and propagated
-context channels.  The final graph branch starts exactly at the first-stage
-base logits because `graph_delta_scale=0` at initialization.
+## Evidence-separated graph schema
 
-## Evidence-separated schema
-
-Protein relations:
+Protein relations preserve their upstream message direction:
 
 ```text
 protein --ppi-----------> protein
-protein --similar_to----> protein
-protein --weak_to_core--> protein
+protein --similar_to----> protein       # neighbour -> core query
+protein --weak_to_core--> protein       # weak -> core
 ```
 
-Protein–GO evidence:
+Protein–GO evidence remains separated:
 
 ```text
 protein --gold_annotated_with-------> GO
@@ -73,81 +69,271 @@ protein --pseudo_annotated_with-----> GO
 GO      --has_pseudo_annotation-----> protein
 ```
 
-GO ontology:
+GO relations:
 
 ```text
-GO child  --is_a-------> GO parent
-GO parent --has_child-> GO child
-GO part   --part_of----> GO whole
-GO whole  --has_part---> GO part
+GO class --is_a-------> GO superclass
+GO class --has_child--> GO subclass
+GO part  --part_of----> GO whole
+GO whole --has_part---> GO part
 ```
 
-The default edge dimensions match the current LATENCE manifests:
+## Hundred-million-edge candidate relation
 
-- P–P: `[confidence, source_score, reciprocal_rank]`;
-- gold/pseudo annotation: three provenance-aware columns;
-- backbone candidate: `[backbone_probability, selector_score, reciprocal_rank]`;
-- `is_a/has_child`: 8 BoxSquaredEL features plus
-  `[inverse_hop_weight, is_direct]`;
-- `part_of/has_part`: `[inverse_hop_weight, is_direct]` without pretending that
-  partonomy is identical to class inclusion.
-
-## Hundred-million-scale candidate evidence
-
-For the current BP export, the backbone relation contains **281,457,664 edges**:
+The current BP export contains:
 
 ```text
 549,722 proteins × 512 rare-GO candidates
+= 281,457,664 backbone candidate edges
 ```
 
-This relation is a data-scale contribution of LATENCE and remains a formal NBS
-evidence source.  It must not be loaded as one GPU-resident `HeteroData` edge
-store.  Production training keeps it in mmap storage and materializes only
-batch-local candidate edges.
+This full relation remains a formal NBS data asset. It is memory-mapped and
+indexed on disk; it is never converted into one global PyG `HeteroData` object.
+Only the candidate blocks required by one local episode are materialized.
 
-## GO→Protein inverted index
+## Required data preparation
 
-NBS is GO-query oriented while the exported candidate relation is
-protein-major.  The accompanying builder performs two streaming passes and
-creates GO-major CSR without globally sorting all 281 million edges in memory.
+### 1. GO→Protein and Protein→GO annotation indices
 
-Direct BP run:
+The already generated candidate and pseudo GO-major indices can be retained.
+Gold supervision requires two views:
+
+```text
+GO -> Protein CSR       query/support and positive sampling
+Protein -> GO CSR       local gold messages for sampled core proteins
+```
+
+To add gold indices without rebuilding the 281 million candidate relation:
 
 ```bash
+export GOLD_EDGE_INDEX=/path/to/gold_protein_go_edge_index.i32.npy
+export GOLD_ONLY=1
+export MERGE_EXISTING=1
 python scripts/nbs/run_build_go_protein_inverted_index.py
 ```
 
-Configurable CLI:
+The existing manifest is updated atomically and candidate/pseudo entries are
+preserved. Gold Protein→GO CSR is required to realize the intended:
+
+```text
+weak protein -> core protein -> GO
+```
+
+message route.
+
+### 2. Direction-safe P–P sampling indices
 
 ```bash
-python scripts/nbs/build_go_protein_inverted_index.py \
-  --project-root /path/to/latence-project \
-  --weak-graph-manifest outputs/latence_nbs/<run>/epoch100/bp/weak_graph_predictions/weak_graph_predictions_manifest.json \
-  --protein-registry outputs/latence_nbs/<run>/epoch100/bp/features/protein_registry.csv \
-  --output-dir outputs/latence_nbs/<run>/epoch100/bp/nbs_indices/go_protein
+python scripts/nbs/run_build_pp_sampling_indices.py
 ```
 
-Candidate outputs use compact source ranks after verifying the fixed-512,
-protein-major contract:
+Sampling keys are relation-specific while returned messages retain original
+orientation:
 
 ```text
-candidate_go_indptr.i64.npy
-candidate_protein_idx.i32.npy
-candidate_source_rank.u16.npy
+ppi          keyed by source
+similar_to   keyed by destination, message remains neighbour -> query
+weak_to_core keyed by weak source, message remains weak -> core
 ```
 
-The original candidate edge attributes are retrieved by:
+### 3. Full BoxSquaredEL class space and G–G relations
+
+The NBS ontology node space is the complete BoxSquaredEL checkpoint class map:
 
 ```text
-source_row = (global_protein_idx - source_protein_start) * 512 + source_rank
+44,919 classes
+512-dimensional center
+512-dimensional offset
 ```
 
-Pseudo outputs are also inverted from weak protein-major CSR and converted from
-role-local rows to global protein indices.
+It is not the BP/MF/CC classifier subset and is not rebuilt from `go.obo`
+indices. Both geometry and G–G relation endpoints use the immutable
+BoxSquaredEL checkpoint row.
 
-## Leakage control
+```bash
+python scripts/nbs/run_prepare_boxsqel_full_ontology_for_nbs.py
+python scripts/nbs/run_build_boxsqel_gg_relations.py
+```
 
-Use relation-specific masking:
+Or run the three v0.4 preparation steps together:
+
+```bash
+python scripts/nbs/run_prepare_nbs_v04_training_inputs.py
+```
+
+The G–G builder parses the same normalized `go.norm` used to train
+BoxSquaredEL, validates counts against its parser report, and emits:
+
+```text
+direct NF1 is_a / has_child message edges
+direct NF4 part_of / has_part message edges
+all NF1/NF2/NF3/NF4 arrays
+role inclusion and role chain arrays
+```
+
+Closure is deliberately excluded from default GO message passing. Other
+normal forms are retained for later relation-specific or hypergraph studies.
+
+Task labels remain in the immutable first-stage classifier order. The existing
+BP/MF/CC alignment manifests map each task column into the full 44,919-class
+space, including canonical/alt-ID duplicate handling.
+
+### 4. Audit
+
+```bash
+python scripts/nbs/run_audit_nbs_v04_training_inputs.py
+```
+
+The audit checks:
+
+- candidate, gold and gold Protein→GO indices;
+- task-label to full-ontology mapping;
+- full box and G–G checkpoint consistency;
+- P–P sampling key axes;
+- fixed-epoch/no-validation policy;
+- DDP-local step contract.
+
+## Production train loader
+
+The configured factory is:
+
+```text
+experiments.nbs.latence_nbs_loader:build_train_loader
+```
+
+It constructs a rank-sharded `LatenceNBSLocalBatchLoader`. Every episode:
+
+1. samples task GO queries and episode-disjoint support proteins;
+2. samples held-out gold positives, hard backbone candidates and optional
+   pseudo positives from GO-major CSR;
+3. retrieves base logits and three-column candidate evidence from mmap;
+4. expands relation-specific P–P neighbourhoods with bounded fanout;
+5. materializes gold annotations for sampled non-candidate proteins;
+6. slices only local backbone candidate and optional pseudo edges;
+7. maps task GO columns into the full BoxSquaredEL ontology;
+8. samples direct G–G neighbourhoods;
+9. converts global IDs to local PyG IDs;
+10. removes candidate evidence in both Protein→GO and GO→Protein directions;
+11. returns one `NBSLocalBatch`.
+
+The full candidate relation never becomes a global PyG edge store.
+
+### Local loader smoke test
+
+Run one real batch before training:
+
+```bash
+python scripts/nbs/run_smoke_test_nbs_train_loader.py
+```
+
+It validates PyG structure, relation directions, query/candidate masking, local
+node counts and the 44,919-class global GO graph.
+
+## Single-node multi-GPU DDP
+
+v0.4 uses one process per GPU with `DistributedDataParallel`; it does not use
+`DataParallel`.
+
+```bash
+export NBS_NUM_GPUS=4
+python scripts/nbs/run_train_nbs_fixed_epochs.py
+```
+
+Equivalent explicit launch:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+torchrun --standalone --nproc_per_node=4 \
+  scripts/nbs/train_nbs_fixed_epochs.py \
+  --config nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.json
+```
+
+DDP contracts:
+
+- every rank has the same number of local steps;
+- global episode IDs are interleaved by rank, so rank samples are disjoint and
+  reproducible;
+- model initialization is identical before DDP synchronization;
+- rank-specific randomness is applied only after model synchronization;
+- `find_unused_parameters=true` is the conservative default for sparse
+  relation activation;
+- only rank 0 writes checkpoints, pointers, history and primary logs;
+- epoch losses are reduced across ranks;
+- RNG state is gathered per rank for checkpoint resume;
+- the full GO cache is built after DDP parameter synchronization and refreshed
+  after checkpoint restore.
+
+A short production DDP smoke run can be launched without editing JSON:
+
+```bash
+export NBS_NUM_GPUS=2
+export NBS_EPOCHS=1
+export NBS_SAVE_EPOCHS=1
+export NBS_MAX_STEPS_PER_EPOCH=1
+export NBS_OUTPUT_DIR=outputs/latence_nbs_train/ddp_smoke
+python scripts/nbs/run_train_nbs_fixed_epochs.py
+```
+
+## Fixed-epoch training policy
+
+Training does not use a validation set, best-checkpoint selection or early
+stopping. It runs to the configured final epoch and saves fixed snapshots.
+
+```json
+{
+  "epochs": 150,
+  "save_epochs": [100, 150],
+  "save_interval_epochs": 10,
+  "validation_used": false,
+  "early_stopping": false
+}
+```
+
+The saved epochs are the union of:
+
+```text
+multiples of save_interval_epochs
++ explicit save_epochs
++ final epoch
+```
+
+To save every five epochs:
+
+```bash
+NBS_SAVE_INTERVAL_EPOCHS=5 \
+python scripts/nbs/run_train_nbs_fixed_epochs.py
+```
+
+Checkpoint metadata explicitly records fixed-epoch selection and distributed
+world size. No `best.pt` is produced.
+
+## Default BP stage
+
+`configs/bp_fixed_epoch_v0.4.json` starts with a conservative gold-only stage:
+
+```text
+2 NBS layers
+GO geometry frozen
+pseudo loss disabled
+pseudo message edges disabled
+expert probability absent from forward
+query hierarchy loss disabled initially
+```
+
+Candidate evidence uses:
+
+```text
+[backbone_probability, selector_score, reciprocal_rank]
+```
+
+The initial candidate encoder equals reciprocal-rank evidence and learns a
+bounded residual from the other two fields. Final logits start exactly at the
+first-stage base logits because graph delta scale is zero initialized.
+
+## Leakage protection
+
+The local materializer excludes candidate proteins from gold message lookup and
+then applies relation-specific bidirectional masking:
 
 ```python
 graph = mask_candidate_evidence_edges(
@@ -160,24 +346,9 @@ graph = mask_candidate_evidence_edges(
 )
 ```
 
-Gold and pseudo annotations are removed for candidate proteins.  Only the
-currently scored candidate–query-GO backbone edges are removed, so unrelated
-first-stage candidate evidence can remain as context.
-
-## Expert-free NBS inference
-
-The default candidate delta gate is `student_candidate` and uses:
-
-```text
-base probability
-backbone candidate evidence
-NBS graph score
-GO training frequency
-```
-
-Expert probability is retained only through the explicit
-`delta_gate_feature_mode="legacy_expert"` ablation.  Modelout remains a pseudo
-supervision source and strong reference, not a required NBS inference input.
+Gold and pseudo relations are removed for candidate proteins. Backbone
+candidate edges are removed only for the currently scored query GO set, so
+unrelated first-stage functional context remains available.
 
 ## Tests
 
@@ -185,220 +356,45 @@ Pure PyTorch/NumPy tests:
 
 ```bash
 cd nbs_models/nbs_protein_go
-PYTHONPATH=. pytest -q \
-  tests/test_box_geometry.py \
-  tests/test_go_box_encoder.py \
-  tests/test_matcher_equivalence.py \
-  tests/test_residual_refinement.py \
-  tests/test_global_go_fallback.py \
-  tests/test_inverted_index.py \
-  tests/test_student_gate.py
+PYTHONPATH=. pytest -q tests \
+  --ignore=tests/test_source_additivity.py \
+  --ignore=tests/test_data_leakage.py
 ```
 
-Real PyG integration tests, to be run on the LATENCE server:
+Real PyG tests on the LATENCE server:
 
 ```bash
 PYTHONPATH=. pytest -q \
   tests/test_source_additivity.py \
-  tests/test_data_leakage.py
+  tests/test_data_leakage.py \
+  tests/test_real_local_batch_v04.py
 ```
 
-## v0.3 fixed-epoch training
-
-NBS training now follows the first LATENCE stage and does **not** use a
-validation set for checkpoint selection.  A run always proceeds to its configured
-final epoch and saves explicitly named snapshots, for example:
-
-```text
-nbs_epoch100.pt
-nbs_epoch150.pt
-```
-
-There is no `best.pt`, validation metric monitor, patience, or early stopping.
-The snapshots are evaluated independently after training.  Checkpoint metadata
-records:
-
-```text
-selection_policy = fixed_epoch_snapshots
-validation_used = false
-early_stopping = false
-```
-
-The reference BP schedule is in:
-
-```text
-configs/bp_fixed_epoch_v0.3.json
-```
-
-Validate the policy without constructing the full graph:
+CPU two-process DDP framework smoke:
 
 ```bash
-python scripts/nbs/run_train_nbs_fixed_epochs.py
-# with NBS_VALIDATE_CONFIG_ONLY=1
+NBS_DDP_SMOKE_DIR=/tmp/nbs_ddp_smoke \
+PYTHONPATH=. python -m torch.distributed.run \
+  --standalone --nproc_per_node=2 \
+  examples/ddp_fixed_epoch_smoke.py
 ```
 
-or directly:
+## Future GO versions
 
-```bash
-python scripts/nbs/train_nbs_fixed_epochs.py \
-  --config nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.3.json \
-  --validate-config-only
-```
-
-Production training uses a project-specific component factory:
-
-```bash
-export NBS_COMPONENT_FACTORY=experiments.nbs.latence_nbs_components:build_components
-python scripts/nbs/run_train_nbs_fixed_epochs.py
-```
-
-The component factory builds the model, optimizer and a re-iterable loader of
-`NBSLocalBatch` objects.  The loader must materialize only batch-local graph
-relations from mmap/CSR stores; it must not construct one global PyG object for
-the 281,457,664 candidate edges.
-
-### Training modules
+v0.4 leaves a versioned interface but does not run future-GO experiments yet.
+For a later GO release:
 
 ```text
-nbs_pg/training.py
-    fixed-epoch trainer, atomic checkpoints, resume and training history
-
-nbs_pg/latence_stores.py
-    GO-major CSR, fixed-512 candidate attributes, role-aware base logits,
-    and GO box mmap stores
-
-nbs_pg/episode.py
-    GO-query episode sampling with episode-wide support/candidate separation,
-    gold positives, hard candidates, optional pseudo positives and
-    sampled-unlabelled supervision weights
-
-experiments/nbs/latence_nbs_components.py
-    reference component factory and AdamW parameter groups
+future go.obo
+-> the same normalization pipeline
+-> future go.norm
+-> future BoxSquaredEL checkpoint and class map
+-> full class-row box export
+-> normalized G–G rebuild
+-> task-label-to-future-class mapping
 ```
 
-### Correct NBS hierarchy axis
-
-NBS scores have shape:
-
-```text
-[GO query, candidate protein]
-```
-
-The hierarchy loss therefore constrains child and parent **query rows**.  Use
-`query_hierarchy_violation_loss()` or `hierarchy_go_axis=0`.  The old
-`[protein, GO]` column convention remains available through `go_axis=1` for
-compatibility.
-
-### Three-column candidate evidence
-
-The gate accepts the exported relation attributes:
-
-```text
-[backbone_probability, selector_score, reciprocal_rank]
-```
-
-At initialization, candidate evidence equals reciprocal rank.  A bounded,
-zero-initialized residual can subsequently learn from all three columns.  This
-keeps candidate ranking evidence distinct from the separate base-probability
-channel.
-
-### Open-world supervision weights
-
-`ProteinGOQueryBatch.supervision_weight` applies to both gold and pseudo
-positions.  It supports low-weight sampled-unlabelled candidates without
-turning every unknown protein–GO pair into a hard negative.  Pseudo confidence
-is multiplied only for positions marked by `pseudo_mask`.
-
-The episode sampler's "held-out gold positive" is only a support/query split
-inside the **training episode**.  It is still part of the training objective and
-must not be interpreted as a validation split or used for model selection.
-
-## BoxSquaredEL training contract and GO-index projection
-
-The supplied GO geometry run uses the following verified contract:
-
-```text
-model                         BoxSquaredEL
-embedding dimension           512
-ontology classes              44,919
-relations                     8
-classifier GO columns         21,312 (BP)
-class vector layout           [center(512), abs(offset)(512)]
-selected geometry epoch       1000
-strict parser unparsed lines  0
-```
-
-Reference copies of the source configuration are included under:
-
-```text
-configs/go_boxsqel/go_boxsqel_manifest_512.json
-configs/go_boxsqel/go_boxsqel_parser_report_512.json
-```
-
-The ontology embedding cannot be indexed directly by BP classifier columns,
-because it contains all 44,919 parsed ontology classes.  Before NBS training,
-project the geometry through the immutable `go_registry.tsv`:
-
-```bash
-python scripts/nbs/run_prepare_go_boxsqel_for_nbs.py
-```
-
-Default output:
-
-```text
-outputs/latence_nbs/<RUN_TAG>/epoch100/bp/nbs_indices/go_boxsqel_512/
-├── go_box_center.f32.npy
-├── go_box_offset.f32.npy
-├── go_box_stats.f32.npy
-├── go_box_source_row.i32.npy
-└── go_box_alignment_manifest.json
-```
-
-The projection reads the BoxSquaredEL checkpoint class mapping, normalizes GO
-IRIs and compact identifiers, preserves all 21,312 classifier indices, and
-replicates the same geometry for canonical/alt-ID duplicate columns.  Strict
-mode fails if any classifier GO term lacks BoxSquaredEL geometry.
-
-The BP training template now fixes:
-
-```text
-model_inputs.go_box_dim = 512
-```
-
-and records the BoxSquaredEL manifest, parser report, artifact selection, and
-alignment manifest under `go_boxsqel`.
-
-## Periodic checkpoint interval
-
-In addition to named snapshots such as epochs 100 and 150, training supports:
-
-```json
-"save_interval_epochs": 10
-```
-
-The actual checkpoint epochs are the union of:
-
-```text
-multiples of save_interval_epochs
-+ explicitly listed save_epochs
-+ final epoch when save_final=true
-```
-
-For a 150-epoch run with interval 10, checkpoints are written at epochs
-10, 20, ..., 150.  To save every five epochs without editing JSON:
-
-```bash
-NBS_SAVE_INTERVAL_EPOCHS=5 \
-python scripts/nbs/run_train_nbs_fixed_epochs.py
-```
-
-or directly:
-
-```bash
-python scripts/nbs/train_nbs_fixed_epochs.py \
-  --config nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.3.json \
-  --save-interval-epochs 5
-```
-
-The former `save_every` JSON field is accepted only as a compatibility alias;
-new configurations should use `save_interval_epochs`.
+The protein universe and task classifier columns may remain fixed while the
+ontology version changes. Manifests record ontology version and source hashes,
+so future experiments can separate ontology evolution from new protein
+annotations.

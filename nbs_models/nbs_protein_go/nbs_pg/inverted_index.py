@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 import numpy as np
 
@@ -24,6 +24,19 @@ class InvertedIndexFiles:
     source_layout: str
     lookup_mode: str
     source_protein_start: Optional[int] = None
+
+
+@dataclass
+class ProteinMajorAnnotationFiles:
+    prefix: str
+    indptr: str
+    go_idx: str
+    num_proteins: int
+    num_go: int
+    num_edges: int
+    max_protein_degree: int
+    mean_protein_degree: float
+    source_layout: str = "protein_go_edge_index_[2,E]"
 
 
 def _resolve_path(base: Path, value: str | os.PathLike[str]) -> Path:
@@ -203,6 +216,73 @@ def build_go_inverted_from_edge_index(
     )
 
 
+def build_protein_major_annotation_csr(
+    edge_index_path: str | os.PathLike[str],
+    output_dir: str | os.PathLike[str],
+    *,
+    prefix: str,
+    num_proteins: int,
+    num_go: int,
+    chunk_edges: int = 2_000_000,
+    overwrite: bool = False,
+) -> ProteinMajorAnnotationFiles:
+    """Build global Protein->GO CSR from a Protein-GO COO source.
+
+    This companion index is intentionally generated together with the GO-major
+    gold index.  GO-major CSR drives query/support sampling, while Protein-major
+    CSR materializes gold annotation messages for locally sampled core proteins
+    so the intended weak->core->GO route remains available without loading the
+    full annotation graph into PyG.
+    """
+    if num_proteins <= 0 or num_go <= 0 or chunk_edges <= 0:
+        raise ValueError("num_proteins, num_go and chunk_edges must be positive")
+    source_path = Path(edge_index_path).resolve()
+    edge_index = np.load(source_path, mmap_mode="r")
+    if edge_index.ndim != 2 or edge_index.shape[0] != 2:
+        raise ValueError("edge_index must have shape [2,E]")
+    num_edges = int(edge_index.shape[1])
+    counts = np.zeros(num_proteins, dtype=np.int64)
+    for start in range(0, num_edges, chunk_edges):
+        end = min(start + chunk_edges, num_edges)
+        protein = np.asarray(edge_index[0, start:end], dtype=np.int64)
+        go_idx = np.asarray(edge_index[1, start:end], dtype=np.int64)
+        if protein.size and (protein.min() < 0 or protein.max() >= num_proteins):
+            raise IndexError("gold protein index outside global protein registry")
+        _validate_go_indices(go_idx, num_go, start)
+        counts += np.bincount(protein, minlength=num_proteins).astype(np.int64, copy=False)
+
+    output = Path(output_dir).resolve()
+    indptr_path = output / f"{prefix}_protein_indptr.i64.npy"
+    go_path = output / f"{prefix}_go_idx.i32.npy"
+    _check_output_paths([indptr_path, go_path], overwrite)
+    indptr = _write_indptr(counts, indptr_path)
+    go_out = _open_npy_memmap(go_path, dtype=np.int32, shape=(num_edges,))
+    cursor = np.asarray(indptr[:-1], dtype=np.int64).copy()
+    for start in range(0, num_edges, chunk_edges):
+        end = min(start + chunk_edges, num_edges)
+        protein = np.asarray(edge_index[0, start:end], dtype=np.int64)
+        go_idx = np.asarray(edge_index[1, start:end], dtype=np.int32)
+        _scatter_sorted_chunk(
+            go_idx=protein,
+            values={"go": go_idx},
+            cursor=cursor,
+            outputs={"go": go_out},
+        )
+    if not np.array_equal(cursor, np.asarray(indptr[1:], dtype=np.int64)):
+        raise RuntimeError("Protein-major gold CSR cursor mismatch")
+    go_out.flush()
+    return ProteinMajorAnnotationFiles(
+        prefix=prefix,
+        indptr=str(indptr_path),
+        go_idx=str(go_path),
+        num_proteins=num_proteins,
+        num_go=num_go,
+        num_edges=num_edges,
+        max_protein_degree=int(counts.max(initial=0)),
+        mean_protein_degree=float(counts.mean()),
+    )
+
+
 def load_role_global_indices(
     protein_registry_path: str | os.PathLike[str],
     *,
@@ -334,6 +414,7 @@ def build_latence_go_protein_indices(
     gold_edge_index_path: Optional[str | os.PathLike[str]] = None,
     chunk_edges: int = 2_000_000,
     overwrite: bool = False,
+    merge_existing_manifest: bool = False,
 ) -> dict[str, Any]:
     """Build the production GO->Protein indices from LATENCE manifests."""
     started = time.time()
@@ -342,14 +423,23 @@ def build_latence_go_protein_indices(
     with manifest_path.open("r", encoding="utf-8") as handle:
         source_manifest = json.load(handle)
     num_go = int(source_manifest["go_registry"]["num_terms"])
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "builder": "nbs_pg.inverted_index.build_latence_go_protein_indices",
-        "source_manifest": str(manifest_path),
-        "protein_registry": str(Path(protein_registry_path)),
-        "num_go": num_go,
-        "indices": {},
-    }
+    output_manifest = Path(output_dir) / "go_protein_inverted_index_manifest.json"
+    if merge_existing_manifest and output_manifest.exists():
+        result = json.loads(output_manifest.read_text(encoding="utf-8"))
+        if int(result.get("num_go", -1)) != num_go:
+            raise ValueError("existing inverted-index manifest uses a different GO space")
+        result.setdefault("indices", {})
+        result["schema_version"] = max(2, int(result.get("schema_version", 1)))
+        result["builder"] = "nbs_pg.inverted_index.build_latence_go_protein_indices_v0.4"
+    else:
+        result = {
+            "schema_version": 2,
+            "builder": "nbs_pg.inverted_index.build_latence_go_protein_indices_v0.4",
+            "source_manifest": str(manifest_path),
+            "protein_registry": str(Path(protein_registry_path)),
+            "num_go": num_go,
+            "indices": {},
+        }
 
     if build_candidate:
         candidate = source_manifest["backbone_rare_edges"]
@@ -403,23 +493,47 @@ def build_latence_go_protein_indices(
         result["indices"]["pseudo"]["comparison"] = pseudo["comparison"]
 
     if gold_edge_index_path is not None:
-        gold_result = build_go_inverted_from_edge_index(
-            gold_edge_index_path,
-            output_dir,
-            prefix="gold",
-            num_go=num_go,
-            chunk_edges=chunk_edges,
-            overwrite=overwrite,
-        )
-        result["indices"]["gold"] = asdict(gold_result)
+        with Path(protein_registry_path).open("r", encoding="utf-8", newline="") as handle:
+            num_proteins = sum(1 for _ in csv.DictReader(handle))
+        existing_gold = result.get("indices", {}).get("gold") if merge_existing_manifest else None
+        if isinstance(existing_gold, Mapping) and not overwrite:
+            gold_spec = dict(existing_gold)
+        else:
+            gold_result = build_go_inverted_from_edge_index(
+                gold_edge_index_path,
+                output_dir,
+                prefix="gold",
+                num_go=num_go,
+                chunk_edges=chunk_edges,
+                overwrite=overwrite,
+            )
+            gold_spec = asdict(gold_result)
+        existing_protein_major = gold_spec.get("protein_major")
+        if isinstance(existing_protein_major, Mapping) and not overwrite:
+            protein_major_spec = dict(existing_protein_major)
+        else:
+            gold_protein_major = build_protein_major_annotation_csr(
+                gold_edge_index_path,
+                output_dir,
+                prefix="gold",
+                num_proteins=num_proteins,
+                num_go=num_go,
+                chunk_edges=chunk_edges,
+                overwrite=overwrite,
+            )
+            protein_major_spec = asdict(gold_protein_major)
+        gold_spec["source_edge_index"] = str(Path(gold_edge_index_path).resolve())
+        gold_spec["protein_major"] = protein_major_spec
+        result["indices"]["gold"] = gold_spec
 
     result["elapsed_seconds"] = round(time.time() - started, 3)
-    output_manifest = Path(output_dir) / "go_protein_inverted_index_manifest.json"
-    if output_manifest.exists() and not overwrite:
+    if output_manifest.exists() and not (overwrite or merge_existing_manifest):
         raise FileExistsError(f"manifest already exists: {output_manifest}")
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
-    with output_manifest.open("w", encoding="utf-8") as handle:
+    temporary = output_manifest.with_suffix(".json.tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
+    os.replace(temporary, output_manifest)
     result["manifest"] = str(output_manifest)
     return result

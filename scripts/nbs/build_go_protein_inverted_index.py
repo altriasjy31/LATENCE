@@ -32,6 +32,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-candidate", action="store_true")
     parser.add_argument("--skip-pseudo", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--merge-existing-manifest",
+        action="store_true",
+        help=(
+            "preserve existing candidate/pseudo entries while adding or replacing "
+            "gold indices; use with --skip-candidate --skip-pseudo to avoid rebuilding "
+            "the 281M candidate relation"
+        ),
+    )
     return parser
 
 
@@ -49,6 +58,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         gold_edge_index_path=args.gold_edge_index,
         chunk_edges=args.chunk_edges,
         overwrite=args.overwrite,
+        merge_existing_manifest=args.merge_existing_manifest,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0

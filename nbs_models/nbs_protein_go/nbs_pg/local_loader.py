@@ -1,0 +1,726 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Iterator, Mapping, Optional
+
+import numpy as np
+import torch
+
+try:
+    from .data import PYG_AVAILABLE, build_nbs_protein_go_heterodata, mask_candidate_evidence_edges
+except ModuleNotFoundError as exc:  # lightweight index/DDP tests without PyG
+    if exc.name != "torch_geometric":
+        raise
+    PYG_AVAILABLE = False
+    build_nbs_protein_go_heterodata = None  # type: ignore[assignment]
+    mask_candidate_evidence_edges = None  # type: ignore[assignment]
+from .episode import GOQueryEpisodeSampler, NBSGlobalEpisode, NBSQueryEpisodeConfig
+from .latence_graph_stores import (
+    DirectGORelationStore,
+    EdgeOffsetCSRStore,
+    FixedDegreeProteinGOStore,
+    FullGOBoxStore,
+    GlobalProteinGOCSRStore,
+    ProteinRegistryStore,
+    RoleAwareProteinFeatureStore,
+    RoleLocalProteinGOCSRStore,
+    resolve_data_path,
+)
+from .latence_stores import (
+    FixedDegreeCandidateAttributeStore,
+    GOProteinCSRStore,
+    RoleAwareBaseLogitStore,
+    RoleProbabilitySlice,
+)
+from .training import NBSLocalBatch
+
+
+@dataclass
+class NBSLocalGraphSamplingConfig:
+    steps_per_epoch_per_rank: int = 1000
+    pp_hops: int = 2
+    ppi_fanouts: tuple[int, ...] = (8, 4)
+    similar_to_fanouts: tuple[int, ...] = (8, 4)
+    weak_to_core_fanouts: tuple[int, ...] = (16, 0)
+    candidate_message_topk: int = 32
+    pseudo_message_topk: int = 32
+    gold_message_topk: Optional[int] = 64
+    go_hops: int = 1
+    go_is_a_fanout: int = 16
+    go_has_child_fanout: int = 16
+    go_part_of_fanout: int = 8
+    go_has_part_fanout: int = 8
+    include_pseudo_messages: bool = False
+    base_seed: int = 3407
+
+    @classmethod
+    def from_mapping(cls, value: Optional[Mapping[str, Any]]) -> "NBSLocalGraphSamplingConfig":
+        raw = dict(value or {})
+        for name in ("ppi_fanouts", "similar_to_fanouts", "weak_to_core_fanouts"):
+            if name in raw:
+                raw[name] = tuple(int(x) for x in raw[name])
+        if "gold_message_topk" in raw and raw["gold_message_topk"] is not None:
+            raw["gold_message_topk"] = int(raw["gold_message_topk"])
+        result = cls(**raw)
+        result.validate()
+        return result
+
+    def validate(self) -> None:
+        if self.steps_per_epoch_per_rank <= 0:
+            raise ValueError("steps_per_epoch_per_rank must be positive")
+        if self.pp_hops <= 0 or self.go_hops < 0:
+            raise ValueError("invalid P-P/GO hop count")
+        if self.gold_message_topk is not None and self.gold_message_topk <= 0:
+            raise ValueError("gold_message_topk must be positive or None")
+        if self.candidate_message_topk <= 0:
+            raise ValueError("candidate_message_topk must be positive")
+        if self.pseudo_message_topk <= 0:
+            raise ValueError("pseudo_message_topk must be positive")
+        for name in ("ppi_fanouts", "similar_to_fanouts", "weak_to_core_fanouts"):
+            values = getattr(self, name)
+            if len(values) < self.pp_hops:
+                raise ValueError(f"{name} must provide at least pp_hops entries")
+            if any(value < 0 for value in values):
+                raise ValueError(f"{name} cannot contain negative fanouts")
+
+
+def _load_json(path: str | Path) -> dict[str, Any]:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _resolve_index_spec(manifest_path: Path, spec: Mapping[str, Any]) -> GOProteinCSRStore:
+    payload_paths = {
+        name: resolve_data_path(manifest_path.parent, value)
+        for name, value in dict(spec.get("payloads", {})).items()
+    }
+    return GOProteinCSRStore(
+        resolve_data_path(manifest_path.parent, spec["indptr"]),
+        resolve_data_path(manifest_path.parent, spec["protein_idx"]),
+        payload_paths=payload_paths,
+    )
+
+
+
+
+def _validate_supervision_provenance(
+    config: Mapping[str, Any],
+    *,
+    weak_manifest: Mapping[str, Any],
+    weak_manifest_path: Path,
+    inverted: Mapping[str, Any],
+    inverted_manifest: Path,
+) -> None:
+    """Enforce the LATENCE stage-2 supervision source contract at runtime.
+
+    Core supervision must come from ``train.prop_annotations``.  Weak-set
+    supervision must come exclusively from first-stage expert-assisted
+    ``modelout`` annotations with probability > 0.5; ``exp_train`` metadata
+    labels are never accepted as NBS weak supervision.
+    """
+    contract = config.get("supervision_contract")
+    if not isinstance(contract, Mapping):
+        raise ValueError(
+            "training config lacks supervision_contract; NBS refuses to infer "
+            "core/weak label provenance implicitly"
+        )
+    core = contract.get("core_gold")
+    weak = contract.get("weak_pseudo")
+    if not isinstance(core, Mapping) or not isinstance(weak, Mapping):
+        raise ValueError("supervision_contract must define core_gold and weak_pseudo")
+
+    role_specs = {str(item.get("role")): item for item in weak_manifest.get("roles", [])}
+    core_role = str(core.get("role", "core"))
+    weak_role = str(weak.get("role", "weak"))
+    if core_role not in role_specs or weak_role not in role_specs:
+        raise ValueError("weak-graph manifest does not contain configured core/weak roles")
+    if str(role_specs[core_role].get("dataset_mode")) != str(core.get("dataset_mode", "train")):
+        raise ValueError("core role is not aligned with dataset_mode=train")
+    if str(role_specs[weak_role].get("dataset_mode")) != str(weak.get("dataset_mode", "exp_train")):
+        raise ValueError("weak role is not aligned with dataset_mode=exp_train")
+
+    expected_gold_key = str(core.get("metadata_label_key", "prop_annotations"))
+    rare = weak_manifest.get("rare_definition", {})
+    if str(rare.get("training_annotation_key")) != expected_gold_key:
+        raise ValueError(
+            "first-stage train annotation key does not match NBS core gold contract: "
+            f"manifest={rare.get('training_annotation_key')!r}, expected={expected_gold_key!r}"
+        )
+
+    semantics = weak_manifest.get("model_semantics", {}).get("modelout", {})
+    expected_prediction_key = str(
+        weak.get("prediction_key", "modelout::mix_expert_base_anchor::decoderprob::expert")
+    )
+    if str(semantics.get("prediction_key")) != expected_prediction_key:
+        raise ValueError("weak pseudo supervision is not sourced from the configured modelout prediction")
+    if str(semantics.get("decoder_prob_source")) != str(weak.get("decoder_prob_source", "expert")):
+        raise ValueError("weak modelout decoder probability source is not expert")
+    if bool(semantics.get("external_probability_used")) is not bool(
+        weak.get("external_probability_used", True)
+    ):
+        raise ValueError("weak modelout external-probability provenance disagrees with contract")
+
+    pseudo_targets = weak_manifest.get("weak_pseudo_targets", {})
+    if str(pseudo_targets.get("role")) != weak_role:
+        raise ValueError("weak pseudo target role is not 'weak'")
+    if str(pseudo_targets.get("comparison")) != str(weak.get("comparison", ">")):
+        raise ValueError("weak pseudo comparison operator disagrees with supervision contract")
+    if float(pseudo_targets.get("threshold", float("nan"))) != float(weak.get("threshold", 0.5)):
+        raise ValueError("weak pseudo threshold must be exactly 0.5")
+    if list(pseudo_targets.get("edge_attr_columns", [])) != ["modelout_probability"]:
+        raise ValueError("weak pseudo edge payload must be modelout_probability")
+    if not bool(weak.get("use_probability_as_soft_target", True)):
+        raise ValueError("NBS weak supervision requires modelout probability as a soft target")
+    if str(weak.get("negative_policy", "none")) != "none":
+        raise ValueError("NBS weak supervision contract requires negative_policy='none'")
+    if not bool(weak.get("forbid_exp_train_prop_annotations", True)):
+        raise ValueError("NBS must forbid exp_train.prop_annotations as weak supervision")
+
+    indices = inverted.get("indices", {})
+    pseudo_spec = indices.get("pseudo")
+    if not isinstance(pseudo_spec, Mapping):
+        raise ValueError("GO->Protein inverted index lacks weak pseudo supervision")
+    if "probability" not in dict(pseudo_spec.get("payloads", {})):
+        raise ValueError("pseudo inverted index lacks modelout probability payload")
+
+    gold_spec = indices.get("gold")
+    if not isinstance(gold_spec, Mapping):
+        raise ValueError("GO->Protein inverted index lacks core gold supervision")
+    source_edge = gold_spec.get("source_edge_index")
+    if not isinstance(source_edge, str):
+        raise ValueError("gold index does not record source_edge_index provenance")
+    gold_edge_path = resolve_data_path(inverted_manifest.parent, source_edge)
+    gold_manifest_path = gold_edge_path.parent / "gold_annotations_manifest.json"
+    if not gold_manifest_path.is_file():
+        raise FileNotFoundError(
+            f"gold provenance manifest is missing: {gold_manifest_path}; "
+            "re-export gold edges with export_gold_protein_go_edges.py"
+        )
+    gold_manifest = _load_json(gold_manifest_path)
+    if str(gold_manifest.get("task")) != str(config.get("task")):
+        raise ValueError("gold annotation manifest task disagrees with training task")
+    if str(gold_manifest.get("role")) != core_role:
+        raise ValueError("gold annotation manifest role is not core")
+    if str(gold_manifest.get("mode")) != str(core.get("dataset_mode", "train")):
+        raise ValueError("gold annotation manifest mode is not train")
+    if str(gold_manifest.get("source", {}).get("label_key")) != expected_gold_key:
+        raise ValueError("gold annotation manifest is not sourced from train.prop_annotations")
+
+def _dedupe_edges(edge: np.ndarray, attr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if edge.shape[1] == 0:
+        return edge.astype(np.int64, copy=False), attr.astype(np.float32, copy=False)
+    key = edge[0].astype(np.int64) * (int(edge[1].max(initial=0)) + 1) + edge[1].astype(np.int64)
+    order = np.lexsort((-attr[:, 0], key))
+    sorted_key = key[order]
+    keep = np.ones(order.size, dtype=bool)
+    keep[1:] = sorted_key[1:] != sorted_key[:-1]
+    chosen = order[keep]
+    return edge[:, chosen].astype(np.int64, copy=False), attr[chosen].astype(np.float32, copy=False)
+
+
+def _map_edge(edge: np.ndarray, source_nodes: np.ndarray, destination_nodes: Optional[np.ndarray] = None) -> np.ndarray:
+    destination_nodes = source_nodes if destination_nodes is None else destination_nodes
+    if edge.shape[1] == 0:
+        return np.empty((2, 0), dtype=np.int64)
+    source = np.searchsorted(source_nodes, edge[0])
+    destination = np.searchsorted(destination_nodes, edge[1])
+    if np.any(source_nodes[source] != edge[0]) or np.any(destination_nodes[destination] != edge[1]):
+        raise RuntimeError("global/local edge mapping failed")
+    return np.stack([source, destination], axis=0).astype(np.int64)
+
+
+@dataclass
+class LatenceNBSStores:
+    registry: ProteinRegistryStore
+    features: RoleAwareProteinFeatureStore
+    episode_sampler: GOQueryEpisodeSampler
+    candidate_messages: FixedDegreeProteinGOStore
+    gold_messages: GlobalProteinGOCSRStore
+    pseudo_messages: Optional[RoleLocalProteinGOCSRStore]
+    pp: dict[str, EdgeOffsetCSRStore]
+    full_boxes: FullGOBoxStore
+    go_relations: dict[str, DirectGORelationStore]
+    task_to_ontology: np.ndarray
+    feature_dim: int
+    num_task_go: int
+
+
+class LatenceNBSLocalGraphMaterializer:
+    def __init__(self, stores: LatenceNBSStores, config: NBSLocalGraphSamplingConfig) -> None:
+        self.stores = stores
+        self.config = config
+
+    def _sample_pp(
+        self,
+        roots: np.ndarray,
+        rng: np.random.Generator,
+    ) -> tuple[np.ndarray, dict[str, tuple[np.ndarray, np.ndarray]]]:
+        known = np.unique(roots.astype(np.int64))
+        frontier = known.copy()
+        relation_edges: dict[str, list[np.ndarray]] = {name: [] for name in self.stores.pp}
+        relation_attrs: dict[str, list[np.ndarray]] = {name: [] for name in self.stores.pp}
+        fanout_map = {
+            "ppi": self.config.ppi_fanouts,
+            "similar_to": self.config.similar_to_fanouts,
+            "weak_to_core": self.config.weak_to_core_fanouts,
+        }
+        for hop in range(self.config.pp_hops):
+            next_nodes: list[np.ndarray] = []
+            for name, store in self.stores.pp.items():
+                fanout = fanout_map[name][hop]
+                edge, attr = store.sample(frontier, fanout, rng=rng)
+                if edge.shape[1]:
+                    relation_edges[name].append(edge)
+                    relation_attrs[name].append(attr)
+                    next_nodes.extend([edge[0], edge[1]])
+            if not next_nodes:
+                break
+            combined = np.unique(np.concatenate(next_nodes))
+            frontier = np.setdiff1d(combined, known, assume_unique=False)
+            known = np.unique(np.concatenate([known, combined]))
+            if frontier.size == 0:
+                break
+        result: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for name in self.stores.pp:
+            if relation_edges[name]:
+                result[name] = (
+                    np.concatenate(relation_edges[name], axis=1),
+                    np.concatenate(relation_attrs[name], axis=0),
+                )
+            else:
+                result[name] = (np.empty((2, 0), np.int64), np.empty((0, 3), np.float32))
+        return known, result
+
+    def _sample_go(
+        self,
+        initial: np.ndarray,
+        rng: np.random.Generator,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        known = np.unique(initial.astype(np.int64))
+        frontier = known.copy()
+        is_a_edges: list[np.ndarray] = []
+        part_edges: list[np.ndarray] = []
+        fanouts = {
+            "is_a": self.config.go_is_a_fanout,
+            "has_child": self.config.go_has_child_fanout,
+            "part_of": self.config.go_part_of_fanout,
+            "has_part": self.config.go_has_part_fanout,
+        }
+        for _hop in range(self.config.go_hops):
+            next_nodes: list[np.ndarray] = []
+            for name, store in self.stores.go_relations.items():
+                rows = store.sample(frontier, fanouts[name], rng=rng)
+                if not rows.size:
+                    continue
+                next_nodes.extend([rows[:, 0], rows[:, 1]])
+                if name == "is_a":
+                    is_a_edges.append(rows)
+                elif name == "has_child":
+                    is_a_edges.append(rows[:, [1, 0]])
+                elif name == "part_of":
+                    part_edges.append(rows)
+                elif name == "has_part":
+                    part_edges.append(rows[:, [1, 0]])
+            if not next_nodes:
+                break
+            combined = np.unique(np.concatenate(next_nodes))
+            frontier = np.setdiff1d(combined, known, assume_unique=False)
+            known = np.unique(np.concatenate([known, combined]))
+            if frontier.size == 0:
+                break
+        is_a = np.unique(np.concatenate(is_a_edges, axis=0), axis=0) if is_a_edges else np.empty((0, 2), np.int64)
+        part = np.unique(np.concatenate(part_edges, axis=0), axis=0) if part_edges else np.empty((0, 2), np.int64)
+        return known, is_a, part
+
+    def materialize(self, episode: NBSGlobalEpisode, *, seed: int) -> NBSLocalBatch:
+        if not PYG_AVAILABLE or build_nbs_protein_go_heterodata is None or mask_candidate_evidence_edges is None:
+            raise ModuleNotFoundError("torch_geometric is required for local graph materialization")
+        rng = np.random.default_rng(int(seed))
+        roots = np.unique(np.concatenate([episode.seed_protein_idx, episode.candidate_protein_idx]))
+        protein_nodes, pp = self._sample_pp(roots, rng)
+
+        # Message evidence remains source-major on disk and is only sliced for
+        # local proteins.  This is the critical boundary preventing the 281M
+        # candidate relation from becoming a monolithic PyG graph.
+        candidate_task_edge, candidate_attr = self.stores.candidate_messages.gather(
+            protein_nodes, topk=self.config.candidate_message_topk
+        )
+        pseudo_task_edge = np.empty((2, 0), np.int64)
+        pseudo_prob = np.empty(0, np.float32)
+        if self.config.include_pseudo_messages and self.stores.pseudo_messages is not None:
+            pseudo_task_edge, pseudo_prob = self.stores.pseudo_messages.gather(
+                protein_nodes, topk=self.config.pseudo_message_topk
+            )
+
+        # Materialize true annotations for every locally sampled non-candidate
+        # protein.  This preserves the intended weak->core->GO route without
+        # loading the complete gold graph.  Explicit support edges are unioned
+        # afterwards so a configurable top-k cap can never remove the query
+        # support relation itself.
+        gold_message_proteins = np.setdiff1d(
+            protein_nodes, episode.candidate_protein_idx, assume_unique=False
+        )
+        gold_task_edge = self.stores.gold_messages.gather(
+            gold_message_proteins, topk=self.config.gold_message_topk
+        )
+        support_task_go = episode.query_go_idx[episode.seed_query_idx]
+        support_edge = np.stack([episode.seed_protein_idx, support_task_go], axis=0)
+        gold_task_edge = np.unique(
+            np.concatenate([gold_task_edge, support_edge], axis=1), axis=1
+        )
+
+        def to_ontology(edge: np.ndarray) -> np.ndarray:
+            if edge.shape[1] == 0:
+                return edge.copy()
+            mapped = edge.copy()
+            mapped[1] = self.stores.task_to_ontology[edge[1]]
+            return mapped
+
+        gold_edge = to_ontology(gold_task_edge)
+        candidate_edge = to_ontology(candidate_task_edge)
+        pseudo_edge = to_ontology(pseudo_task_edge)
+        go_initial = np.unique(
+            np.concatenate(
+                [
+                    episode.query_ontology_go_idx,
+                    gold_edge[1],
+                    candidate_edge[1],
+                    pseudo_edge[1],
+                ]
+            )
+        )
+        go_nodes, is_a_global_rows, part_global_rows = self._sample_go(go_initial, rng)
+
+        protein_nodes = np.unique(
+            np.concatenate(
+                [
+                    protein_nodes,
+                    gold_edge[0],
+                    candidate_edge[0],
+                    pseudo_edge[0],
+                ]
+            )
+        )
+        protein_x = self.stores.features.gather(protein_nodes)
+        boxes = self.stores.full_boxes.gather(go_nodes)
+
+        ppi_edge, ppi_attr = pp["ppi"]
+        similar_edge, similar_attr = pp["similar_to"]
+        weak_edge, weak_attr = pp["weak_to_core"]
+        ppi_local = _map_edge(ppi_edge, protein_nodes)
+        similar_local = _map_edge(similar_edge, protein_nodes)
+        weak_local = _map_edge(weak_edge, protein_nodes)
+        gold_local = _map_edge(gold_edge, protein_nodes, go_nodes)
+        candidate_edge, candidate_attr = _dedupe_edges(candidate_edge, candidate_attr)
+        candidate_local = _map_edge(candidate_edge, protein_nodes, go_nodes)
+        pseudo_attr = np.stack(
+            [pseudo_prob, np.zeros_like(pseudo_prob), np.ones_like(pseudo_prob)], axis=1
+        ).astype(np.float32) if pseudo_prob.size else np.empty((0, 3), np.float32)
+        pseudo_edge, pseudo_attr = _dedupe_edges(pseudo_edge, pseudo_attr)
+        pseudo_local = _map_edge(pseudo_edge, protein_nodes, go_nodes)
+        is_a_local = _map_edge(is_a_global_rows.T, go_nodes) if is_a_global_rows.size else np.empty((2, 0), np.int64)
+        part_local = _map_edge(part_global_rows.T, go_nodes) if part_global_rows.size else np.empty((2, 0), np.int64)
+        topology_is_a = np.ones((is_a_local.shape[1], 2), dtype=np.float32)
+        topology_part = np.ones((part_local.shape[1], 2), dtype=np.float32)
+
+        graph = build_nbs_protein_go_heterodata(
+            torch.as_tensor(protein_x, dtype=torch.float32),
+            torch.as_tensor(boxes["center"], dtype=torch.float32),
+            torch.as_tensor(boxes["offset"], dtype=torch.float32),
+            torch.as_tensor(is_a_local, dtype=torch.long),
+            go_part_of_edge_index=torch.as_tensor(part_local, dtype=torch.long),
+            ppi_edge_index=torch.as_tensor(ppi_local, dtype=torch.long),
+            similarity_edge_index=torch.as_tensor(similar_local, dtype=torch.long),
+            weak_to_core_edge_index=torch.as_tensor(weak_local, dtype=torch.long),
+            gold_protein_go_edge_index=torch.as_tensor(gold_local, dtype=torch.long),
+            backbone_candidate_protein_go_edge_index=torch.as_tensor(candidate_local, dtype=torch.long),
+            pseudo_protein_go_edge_index=torch.as_tensor(pseudo_local, dtype=torch.long),
+            ppi_edge_attr=torch.as_tensor(ppi_attr, dtype=torch.float32),
+            similarity_edge_attr=torch.as_tensor(similar_attr, dtype=torch.float32),
+            weak_to_core_edge_attr=torch.as_tensor(weak_attr, dtype=torch.float32),
+            backbone_candidate_edge_attr=torch.as_tensor(candidate_attr, dtype=torch.float32),
+            pseudo_annotation_edge_attr=torch.as_tensor(pseudo_attr, dtype=torch.float32),
+            go_is_a_topology=torch.as_tensor(topology_is_a, dtype=torch.float32),
+            go_part_of_topology=torch.as_tensor(topology_part, dtype=torch.float32),
+            go_stats=torch.as_tensor(boxes["stats"], dtype=torch.float32),
+            protein_ids=torch.as_tensor(protein_nodes, dtype=torch.long),
+            go_ids=torch.as_tensor(go_nodes, dtype=torch.long),
+        )
+
+        seed_local = torch.as_tensor(np.searchsorted(protein_nodes, episode.seed_protein_idx), dtype=torch.long)
+        candidate_local_idx = torch.as_tensor(np.searchsorted(protein_nodes, episode.candidate_protein_idx), dtype=torch.long)
+        query_go_local = torch.as_tensor(np.searchsorted(go_nodes, episode.query_ontology_go_idx), dtype=torch.long)
+        graph = mask_candidate_evidence_edges(
+            graph,
+            candidate_local_idx,
+            query_go_index=query_go_local,
+            gold_mode="all",
+            pseudo_mode="all",
+            candidate_mode="query_only",
+            inplace=True,
+        )
+        query = episode.to_query_batch(
+            seed_protein_local=seed_local,
+            candidate_protein_local=candidate_local_idx,
+            query_go_local=query_go_local,
+        )
+
+        query_position = {int(value): row for row, value in enumerate(episode.query_ontology_go_idx.tolist())}
+        hierarchy: list[tuple[int, int]] = []
+        for child, parent in is_a_global_rows.tolist():
+            if child in query_position and parent in query_position:
+                hierarchy.append((query_position[child], query_position[parent]))
+        hierarchy_edges = None
+        if hierarchy:
+            hierarchy_edges = torch.as_tensor(np.asarray(hierarchy, np.int64).T, dtype=torch.long)
+
+        return NBSLocalBatch(
+            graph=graph,
+            query=query,
+            hierarchy_edges=hierarchy_edges,
+            metadata={
+                "global_seed": int(seed),
+                "protein_nodes": int(protein_nodes.size),
+                "go_nodes": int(go_nodes.size),
+                "candidate_edges_materialized": int(candidate_local.shape[1]),
+                "candidate_edges_global_total": int(
+                    getattr(self.stores.candidate_messages, "num_edges", -1)
+                ),
+                "direction_safe": True,
+            },
+        )
+
+    def build_global_go_graph(self):
+        if not PYG_AVAILABLE or build_nbs_protein_go_heterodata is None:
+            raise ModuleNotFoundError("torch_geometric is required for the full GO cache graph")
+        go_nodes = np.arange(self.stores.full_boxes.num_go, dtype=np.int64)
+        boxes = self.stores.full_boxes.gather(go_nodes)
+        # Direct relation arrays are small enough to materialize once per rank;
+        # protein and candidate relations remain excluded.
+        def all_edges(name: str) -> np.ndarray:
+            store = self.stores.go_relations[name]
+            return store.edge
+        is_a = all_edges("is_a")
+        part = all_edges("part_of")
+        return build_nbs_protein_go_heterodata(
+            torch.empty((0, self.stores.feature_dim), dtype=torch.float32),
+            torch.as_tensor(boxes["center"], dtype=torch.float32),
+            torch.as_tensor(boxes["offset"], dtype=torch.float32),
+            torch.as_tensor(is_a.T, dtype=torch.long),
+            go_part_of_edge_index=torch.as_tensor(part.T, dtype=torch.long),
+            go_is_a_topology=torch.ones((is_a.shape[0], 2), dtype=torch.float32),
+            go_part_of_topology=torch.ones((part.shape[0], 2), dtype=torch.float32),
+            go_stats=torch.as_tensor(boxes["stats"], dtype=torch.float32),
+            protein_ids=torch.empty(0, dtype=torch.long),
+            go_ids=torch.arange(self.stores.full_boxes.num_go, dtype=torch.long),
+        )
+
+
+class LatenceNBSLocalBatchLoader:
+    """Rank-sharded, deterministic, re-iterable NBS loader."""
+
+    def __init__(
+        self,
+        sampler: GOQueryEpisodeSampler,
+        materializer: LatenceNBSLocalGraphMaterializer,
+        *,
+        rank: int,
+        world_size: int,
+        steps_per_epoch_per_rank: int,
+        base_seed: int,
+    ) -> None:
+        self.sampler = sampler
+        self.materializer = materializer
+        self.rank = int(rank)
+        self.world_size = int(world_size)
+        self.steps = int(steps_per_epoch_per_rank)
+        self.base_seed = int(base_seed)
+        self.epoch = 1
+        self.global_go_graph = materializer.build_global_go_graph()
+        if self.steps <= 0 or self.world_size <= 0 or not 0 <= self.rank < self.world_size:
+            raise ValueError("invalid DDP loader shard")
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def __len__(self) -> int:
+        return self.steps
+
+    def __iter__(self) -> Iterator[NBSLocalBatch]:
+        for local_step in range(self.steps):
+            global_episode = self.rank + local_step * self.world_size
+            seed = (
+                self.base_seed
+                + self.epoch * 1_000_003
+                + global_episode * 97
+            )
+            episode = self.sampler.sample(seed=seed)
+            yield self.materializer.materialize(episode, seed=seed + 31)
+
+
+def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
+    data = dict(config["data"])
+    root = Path(data["root"]).resolve()
+    registry = ProteinRegistryStore(root / "features/protein_registry.csv")
+    representation_manifest = root / data.get("representation_manifest", "features/representation_manifest.json")
+    features = RoleAwareProteinFeatureStore(representation_manifest, registry)
+
+    inverted_manifest = root / data["go_protein_inverted_index_manifest"]
+    inverted = _load_json(inverted_manifest)
+    indices = inverted["indices"]
+    if "gold" not in indices:
+        raise ValueError(
+            "GO->Protein inverted index lacks gold supervision. Rebuild it with "
+            "--gold-edge-index before starting NBS training."
+        )
+    gold_spec = indices["gold"]
+    gold = _resolve_index_spec(inverted_manifest, gold_spec)
+    protein_major_gold = gold_spec.get("protein_major")
+    if not isinstance(protein_major_gold, Mapping):
+        raise ValueError(
+            "gold inverted index lacks Protein->GO CSR required for weak->core->GO "
+            "messages. Re-run run_build_go_protein_inverted_index.py with "
+            "GOLD_EDGE_INDEX and MERGE_EXISTING=1."
+        )
+    gold_messages = GlobalProteinGOCSRStore(
+        resolve_data_path(inverted_manifest.parent, protein_major_gold["indptr"]),
+        resolve_data_path(inverted_manifest.parent, protein_major_gold["go_idx"]),
+        num_go=int(protein_major_gold["num_go"]),
+    )
+    candidate = _resolve_index_spec(inverted_manifest, indices["candidate"])
+    pseudo = _resolve_index_spec(inverted_manifest, indices["pseudo"]) if "pseudo" in indices else None
+
+    weak_manifest_path = root / data["weak_graph_predictions_manifest"]
+    weak_manifest = _load_json(weak_manifest_path)
+    _validate_supervision_provenance(
+        config,
+        weak_manifest=weak_manifest,
+        weak_manifest_path=weak_manifest_path,
+        inverted=inverted,
+        inverted_manifest=inverted_manifest,
+    )
+    num_task_go = int(weak_manifest["go_registry"]["num_terms"])
+    train_counts = np.load(resolve_data_path(weak_manifest_path.parent, weak_manifest["rare_definition"]["train_counts_file"]), mmap_mode="r")
+    role_slices = []
+    for role in weak_manifest["roles"]:
+        role_slices.append(RoleProbabilitySlice(
+            role=str(role["role"]),
+            global_start=int(role["global_protein_idx_min"]),
+            global_end=int(role["global_protein_idx_max"]) + 1,
+            probability_path=str(resolve_data_path(weak_manifest_path.parent, role["backbone_dense_file"])),
+        ))
+    base_logits = RoleAwareBaseLogitStore(role_slices, num_go=num_task_go)
+
+    alignment_path = Path(config["go_boxsqel"]["alignment_manifest"])
+    if not alignment_path.is_absolute():
+        alignment_path = Path.cwd() / alignment_path
+    alignment = _load_json(alignment_path)
+    task_to_ontology = np.load(alignment_path.parent / alignment["arrays"]["source_row"]["file"], mmap_mode="r")
+
+    candidate_spec = indices["candidate"]
+    candidate_source = weak_manifest["backbone_rare_edges"]
+    candidate_attributes = FixedDegreeCandidateAttributeStore(
+        resolve_data_path(weak_manifest_path.parent, candidate_source["edge_attr_file"]),
+        fixed_degree=int(candidate_spec["fixed_degree"]),
+        source_protein_start=int(candidate_spec["source_protein_start"] or 0),
+    )
+    episode_cfg = NBSQueryEpisodeConfig(**dict(config.get("episode", {})))
+    episode_sampler = GOQueryEpisodeSampler(
+        gold=gold,
+        candidate=candidate,
+        pseudo=pseudo,
+        base_logits=base_logits,
+        train_go_counts=np.asarray(train_counts),
+        task_to_ontology_go=np.asarray(task_to_ontology),
+        candidate_attributes=candidate_attributes,
+        config=episode_cfg,
+        seed=int(config.get("training", {}).get("seed", 3407)),
+    )
+
+    candidate_messages = FixedDegreeProteinGOStore(
+        resolve_data_path(weak_manifest_path.parent, candidate_source["edge_index_file"]),
+        resolve_data_path(weak_manifest_path.parent, candidate_source["edge_attr_file"]),
+        fixed_degree=int(candidate_spec["fixed_degree"]),
+        source_protein_start=int(candidate_spec["source_protein_start"] or 0),
+    )
+    pseudo_messages = None
+    if "weak_pseudo_targets" in weak_manifest:
+        spec = weak_manifest["weak_pseudo_targets"]
+        pseudo_messages = RoleLocalProteinGOCSRStore(
+            resolve_data_path(weak_manifest_path.parent, spec["csr_indptr_file"]),
+            resolve_data_path(weak_manifest_path.parent, spec["csr_indices_file"]),
+            role=str(spec["role"]),
+            registry=registry,
+            probability_path=resolve_data_path(weak_manifest_path.parent, spec["csr_probability_file"]),
+        )
+
+    sampling_manifest_path = root / data["pp_sampling_indices_manifest"]
+    sampling = _load_json(sampling_manifest_path)
+    pp: dict[str, EdgeOffsetCSRStore] = {}
+    for name, spec in sampling["relations"].items():
+        pp[name] = EdgeOffsetCSRStore(
+            indptr_path=resolve_data_path(sampling_manifest_path.parent, spec["indptr"]),
+            edge_offset_path=resolve_data_path(sampling_manifest_path.parent, spec["edge_offset"]),
+            edge_index_path=resolve_data_path(sampling_manifest_path.parent, spec["edge_index"]),
+            edge_attr_path=resolve_data_path(sampling_manifest_path.parent, spec["edge_attr"]),
+            key_axis=int(spec["key_axis"]),
+        )
+
+    full_manifest_path = Path(data["full_go_box_manifest"])
+    if not full_manifest_path.is_absolute():
+        full_manifest_path = Path.cwd() / full_manifest_path
+    full_boxes = FullGOBoxStore.from_manifest(full_manifest_path)
+    if task_to_ontology.shape != (num_task_go,):
+        raise ValueError("task-to-ontology mapping does not align with classifier GO columns")
+    if task_to_ontology.size and (
+        int(np.min(task_to_ontology)) < 0
+        or int(np.max(task_to_ontology)) >= full_boxes.num_go
+    ):
+        raise IndexError("task-to-ontology mapping leaves the full BoxSquaredEL class space")
+    if gold_messages.num_proteins != registry.num_proteins:
+        raise ValueError("gold Protein->GO CSR does not align with protein registry")
+    gg_manifest_path = Path(data["boxsqel_gg_relations_manifest"])
+    if not gg_manifest_path.is_absolute():
+        gg_manifest_path = Path.cwd() / gg_manifest_path
+    gg = _load_json(gg_manifest_path)
+    if int(gg.get("num_classes", -1)) != full_boxes.num_go:
+        raise ValueError("BoxSquaredEL G-G node space differs from full GO box rows")
+    go_relations = {
+        name: DirectGORelationStore(
+            gg_manifest_path.parent / gg["relations"][name]["file"],
+            num_go=full_boxes.num_go,
+        )
+        for name in ("is_a", "has_child", "part_of", "has_part")
+    }
+    return LatenceNBSStores(
+        registry=registry,
+        features=features,
+        episode_sampler=episode_sampler,
+        candidate_messages=candidate_messages,
+        gold_messages=gold_messages,
+        pseudo_messages=pseudo_messages,
+        pp=pp,
+        full_boxes=full_boxes,
+        go_relations=go_relations,
+        task_to_ontology=np.asarray(task_to_ontology, dtype=np.int64),
+        feature_dim=features.feature_dim,
+        num_task_go=num_task_go,
+    )
+
+
+def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocalBatchLoader:
+    runtime = dict(config.get("_distributed_runtime", {}))
+    rank = int(runtime.get("rank", 0))
+    world_size = int(runtime.get("world_size", 1))
+    sampling_cfg = NBSLocalGraphSamplingConfig.from_mapping(config.get("local_sampling"))
+    stores = build_latence_nbs_stores(config)
+    materializer = LatenceNBSLocalGraphMaterializer(stores, sampling_cfg)
+    return LatenceNBSLocalBatchLoader(
+        stores.episode_sampler,
+        materializer,
+        rank=rank,
+        world_size=world_size,
+        steps_per_epoch_per_rank=sampling_cfg.steps_per_epoch_per_rank,
+        base_seed=sampling_cfg.base_seed,
+    )

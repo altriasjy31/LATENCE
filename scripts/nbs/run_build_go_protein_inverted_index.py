@@ -21,6 +21,9 @@ RUN_TAG = os.environ.get(
 EPOCH = int(os.environ.get("EPOCH", "100"))
 CHUNK_EDGES = int(os.environ.get("CHUNK_EDGES", "2000000"))
 OVERWRITE = os.environ.get("OVERWRITE", "0") == "1"
+GOLD_EDGE_INDEX = os.environ.get("GOLD_EDGE_INDEX")
+MERGE_EXISTING = os.environ.get("MERGE_EXISTING", "1") == "1"
+GOLD_ONLY = os.environ.get("GOLD_ONLY", "1") == "1"
 
 # Renamed NBS data root.  The runner deliberately does not fall back silently
 # to outputs/latence_nn_pp after the project-wide migration.
@@ -52,6 +55,12 @@ def run() -> int:
         "--chunk-edges",
         str(CHUNK_EDGES),
     ]
+    if GOLD_EDGE_INDEX:
+        argv.extend(["--gold-edge-index", GOLD_EDGE_INDEX])
+        if GOLD_ONLY:
+            argv.extend(["--skip-candidate", "--skip-pseudo"])
+    if MERGE_EXISTING and (OUTPUT_DIR / "go_protein_inverted_index_manifest.json").exists():
+        argv.append("--merge-existing-manifest")
     if OVERWRITE:
         argv.append("--overwrite")
     return main(argv)

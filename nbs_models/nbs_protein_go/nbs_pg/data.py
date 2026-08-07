@@ -8,11 +8,13 @@ from torch import Tensor
 try:
     from torch_geometric.data import HeteroData
     from torch_geometric.utils import coalesce
+    PYG_AVAILABLE = True
 except ModuleNotFoundError as exc:  # pragma: no cover
     if exc.name != "torch_geometric":
         raise
     HeteroData = object  # type: ignore[misc,assignment]
     coalesce = None
+    PYG_AVAILABLE = False
 
 from .box_geometry import (
     append_go_topology_features,

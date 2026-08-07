@@ -1,38 +1,28 @@
-# Validation status for NBS v0.3
+# Validation status for NBS v0.4
 
-Completed in the artifact environment:
+Validated in the artifact build environment:
 
-- Python syntax compilation for package, examples, tests and NBS scripts;
-- all pure PyTorch/NumPy tests in the v0.3 suite;
-- fixed-epoch snapshot policy and checkpoint metadata;
-- rejection of validation-set selection and early stopping;
-- query-axis GO hierarchy consistency;
-- three-column candidate evidence initialization;
-- open-world supervision weights;
-- GO-query episode support/candidate disjointness;
-- BoxSquaredEL geometry, residual initialization, global GO fallback,
-  inverted-index construction and expert-free student gate.
+- Python compilation for package, experiments and scripts;
+- 29 pure PyTorch/NumPy tests passed; one real-PyG local-batch test was skipped because PyG is unavailable;
+- two-process CPU/Gloo DDP training, metric reduction and rank-0 checkpoint
+  writing;
+- direction-keyed P-P CSR construction;
+- GO-major and Protein-major annotation index construction;
+- normalized BoxSquaredEL relation parsing on synthetic contracts;
+- rank-disjoint/reproducible episode generation;
+- local materializer contract with mocked PyG construction.
 
-The artifact environment does not contain `torch_geometric`, so these retained
-real-PyG tests must be rerun after deployment:
+The build environment does not provide `torch_geometric` or the production
+LATENCE arrays. The following must be rerun on the server:
 
 ```bash
 PYTHONPATH=. pytest -q \
   tests/test_source_additivity.py \
-  tests/test_data_leakage.py
+  tests/test_data_leakage.py \
+  tests/test_real_local_batch_v04.py
+
+python scripts/nbs/run_audit_nbs_v04_training_inputs.py
+python scripts/nbs/run_smoke_test_nbs_train_loader.py
 ```
 
-The production 281,457,664-edge files are not bundled.  The already-built
-GO→Protein inverted index remains the source for GO-query candidate sampling.
-
-## BoxSquaredEL alignment and checkpoint interval
-
-```bash
-PYTHONPATH=. pytest -q \
-  tests/test_boxsqel_manifest.py \
-  tests/test_fixed_epoch_training.py
-```
-
-These tests verify GO identifier normalization, checkpoint class-map alignment,
-canonical/alt-ID geometry replication, aligned mmap loading, periodic epoch
-unions, and the legacy `save_every` compatibility alias.
+Then perform the one-step two-GPU production smoke described in README.

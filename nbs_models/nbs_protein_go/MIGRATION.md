@@ -69,3 +69,15 @@ compatibility but must not conflict with the new one.
 Add the `go_boxsqel` configuration block and set `model_inputs.go_box_dim=512`.
 Run `scripts/nbs/run_prepare_go_boxsqel_for_nbs.py` once before constructing the
 training loader so ontology-class rows are projected into classifier GO order.
+
+## v0.4 training integration
+
+v0.4 replaces the placeholder loader contract with a production mmap/CSR local
+loader and adds single-node DDP. Existing candidate/pseudo inverted indices are
+retained. Add gold Protein-major CSR incrementally with `GOLD_ONLY=1` and
+`MERGE_EXISTING=1`.
+
+Task-projected BoxSquaredEL files remain required for task-to-full mapping, but
+GO message passing now uses a separate full class-row ontology export and
+normalized G–G manifest. Do not point v0.4 training at the old BP/MF/CC-only
+`gg_relations_manifest.json`.

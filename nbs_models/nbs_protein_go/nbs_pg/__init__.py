@@ -1,12 +1,13 @@
 """Neighborhood--BoxSquare (NBS) with BoxSquaredEL protein--GO geometry."""
 
-__version__ = "0.3.1"
+__version__ = "0.4.5"
 
 from .boxsqel_manifest import (
     BoxSquaredELTrainingContract,
     align_boxsqel_to_go_registry,
     load_boxsqel_training_contract,
     normalize_go_identifier,
+    export_boxsqel_full_ontology,
 )
 from .box_geometry import (
     ANNOTATION_EDGE_FEATURE_DIM,
@@ -19,15 +20,29 @@ from .box_geometry import (
     build_go_box_edge_features,
 )
 from .config import NBSConfig
+from .distributed import (
+    NBSDistributedConfig,
+    NBSDistributedContext,
+    distributed_seed,
+    unwrap_distributed_model,
+)
 from .go_encoder import BoxSquaredGOEncoder
+from .boxsqel_relations import (
+    BoxSquaredELNormalizedAxioms,
+    build_boxsqel_gg_relations,
+    parse_boxsqel_normalized_axioms,
+)
 from .inverted_index import (
     InvertedIndexFiles,
+    ProteinMajorAnnotationFiles,
     build_go_inverted_from_edge_index,
     build_go_inverted_from_protein_csr,
     build_latence_go_protein_indices,
+    build_protein_major_annotation_csr,
     load_role_global_indices,
 )
 from .losses import (
+    NBSASLConfig,
     NBSLossWeights,
     hierarchy_violation_loss,
     query_hierarchy_violation_loss,
@@ -45,6 +60,7 @@ from .latence_stores import (
     RoleProbabilitySlice,
     load_go_protein_stores,
 )
+from .sampling_indices import build_edge_offset_csr, build_pp_sampling_indices
 from .training import (
     NBSFixedEpochTrainer,
     NBSFixedEpochTrainingConfig,
@@ -87,6 +103,16 @@ __all__ = [
     "load_boxsqel_training_contract",
     "align_boxsqel_to_go_registry",
     "normalize_go_identifier",
+    "export_boxsqel_full_ontology",
+    "BoxSquaredELNormalizedAxioms",
+    "build_boxsqel_gg_relations",
+    "parse_boxsqel_normalized_axioms",
+    "NBSDistributedConfig",
+    "NBSDistributedContext",
+    "distributed_seed",
+    "unwrap_distributed_model",
+    "build_edge_offset_csr",
+    "build_pp_sampling_indices",
     "NBSFixedEpochTrainer",
     "NBSFixedEpochTrainingConfig",
     "NBSLocalBatch",
@@ -103,10 +129,13 @@ __all__ = [
     "NBSGlobalEpisode",
     "GOQueryEpisodeSampler",
     "InvertedIndexFiles",
+    "ProteinMajorAnnotationFiles",
     "build_go_inverted_from_edge_index",
     "build_go_inverted_from_protein_csr",
     "build_latence_go_protein_indices",
+    "build_protein_major_annotation_csr",
     "load_role_global_indices",
+    "NBSASLConfig",
     "NBSLossWeights",
     "NBSGatedDeltaAttnRes",
     "NBSNeighborhoodHierarchy",
