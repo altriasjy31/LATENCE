@@ -14,6 +14,11 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - optional UI dependency fallback
+    tqdm = None
+
 from .distributed import (
     NBSDistributedConfig,
     NBSDistributedContext,
@@ -139,6 +144,8 @@ class NBSFixedEpochTrainingConfig:
     amp: bool = True
     amp_dtype: str = "bfloat16"
     log_interval: int = 20
+    progress_bar: bool = True
+    progress_mininterval: float = 0.5
     max_steps_per_epoch: Optional[int] = None
     scheduler_step: str = "batch"
     seed: int = 3407
@@ -182,6 +189,8 @@ class NBSFixedEpochTrainingConfig:
             raise ValueError("accumulation_steps must be positive")
         if self.log_interval <= 0:
             raise ValueError("log_interval must be positive")
+        if self.progress_mininterval <= 0:
+            raise ValueError("progress_mininterval must be positive")
         if self.max_steps_per_epoch is not None and self.max_steps_per_epoch <= 0:
             raise ValueError("max_steps_per_epoch must be positive or None")
         if self.save_interval_epochs is not None and self.save_interval_epochs <= 0:
@@ -245,7 +254,7 @@ def default_nbs_forward_loss(
     hierarchy_probabilities = None
     if batch.hierarchy_edges is not None:
         hierarchy_probabilities = torch.sigmoid(output.logits)
-    return nbs_training_loss(
+    loss, parts = nbs_training_loss(
         output,
         primary=loss_config.primary,
         weights=loss_config.weights,
@@ -257,6 +266,11 @@ def default_nbs_forward_loss(
         hierarchy_edge_weight=batch.hierarchy_edge_weight,
         hierarchy_go_axis=loss_config.hierarchy_go_axis,
     )
+    parts = dict(parts)
+    parts["hierarchy_pairs"] = output.logits.new_tensor(
+        0.0 if batch.hierarchy_edges is None else float(batch.hierarchy_edges.shape[1])
+    )
+    return loss, parts
 
 
 def _rng_state() -> dict[str, Any]:
@@ -407,8 +421,8 @@ class NBSFixedEpochTrainer:
     ) -> dict[str, Any]:
         model_config = getattr(self.base_model, "config", None)
         payload: dict[str, Any] = {
-            "checkpoint_type": "latence_nbs_fixed_epoch_v0.4",
-            "nbs_version": "0.4.0",
+            "checkpoint_type": "latence_nbs_fixed_epoch_v0.4.6",
+            "nbs_version": "0.4.6",
             "epoch": int(epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.base_model.state_dict(),
@@ -539,6 +553,24 @@ class NBSFixedEpochTrainer:
                 else min(effective_steps, self.config.max_steps_per_epoch)
             )
 
+        if self.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(self.device)
+        batch_totals: dict[str, float] = {}
+        progress = None
+        if (
+            self.config.progress_bar
+            and self.distributed.is_main_process
+            and tqdm is not None
+            and effective_steps is not None
+        ):
+            progress = tqdm(
+                total=int(effective_steps),
+                desc=f"NBS epoch {epoch}/{self.config.epochs}",
+                dynamic_ncols=True,
+                mininterval=float(self.config.progress_mininterval),
+                leave=True,
+            )
+
         for step, raw_batch in enumerate(loader, start=1):
             if (
                 self.config.max_steps_per_epoch is not None
@@ -546,6 +578,15 @@ class NBSFixedEpochTrainer:
             ):
                 break
             batch = raw_batch.to(self.device)
+            for key in (
+                "protein_nodes",
+                "go_nodes",
+                "candidate_edges_materialized",
+                "hierarchy_query_edges",
+            ):
+                value = raw_batch.metadata.get(key) if isinstance(raw_batch.metadata, Mapping) else None
+                if value is not None:
+                    batch_totals[key] = batch_totals.get(key, 0.0) + float(value)
             if batch.global_go_cache is None and self.global_go_cache is not None:
                 batch.global_go_cache = self.global_go_cache
             is_last = effective_steps is not None and step >= effective_steps
@@ -586,31 +627,59 @@ class NBSFixedEpochTrainer:
                 last_grad_norm = self._optimizer_step()
                 optimizer_steps += 1
 
-            if step % self.config.log_interval == 0:
+            if progress is not None:
+                progress.update(1)
+
+            if step % self.config.log_interval == 0 or is_last:
                 graph_scale = getattr(getattr(self.base_model, "matcher", None), "graph_delta_scale", None)
                 scale_value = (
                     float(torch.tanh(graph_scale).detach().cpu())
                     if isinstance(graph_scale, Tensor)
                     else float("nan")
                 )
+
                 def _part(name: str) -> float:
                     value = parts.get(name)
                     return float(value.detach().cpu()) if isinstance(value, Tensor) else float("nan")
 
-                self.logger(
-                    f"epoch={epoch} step={step} global_step={self.global_step} "
-                    f"loss={float(loss.detach().cpu()):.6f} "
-                    f"gold_asl={_part('gold_asl'):.6f} "
-                    f"pseudo_asl={_part('pseudo_asl'):.6f} "
-                    f"c_gold={_part('contrib_gold_asl'):.6f} "
-                    f"c_pseudo={_part('contrib_pseudo_asl'):.6f} "
-                    f"c_anchor={_part('contrib_base_anchor'):.6f} "
-                    f"c_hier={_part('contrib_hierarchy'):.6f} "
-                    f"pseudo_pairs={_part('pseudo_supervised_pairs'):.0f} "
-                    f"graph_delta_scale={scale_value:.6f} "
-                    f"world_size={self.distributed.world_size}"
+                memory_gb = (
+                    float(torch.cuda.memory_allocated(self.device)) / (1024 ** 3)
+                    if self.device.type == "cuda"
+                    else 0.0
                 )
+                status = {
+                    "loss": f"{float(loss.detach().cpu()):.4f}",
+                    "gold": f"{_part('gold_asl'):.3g}",
+                    "pseudo": f"{_part('pseudo_asl'):.3g}",
+                    "g_pairs": int(_part('gold_supervised_pairs')),
+                    "p_pairs": int(_part('pseudo_supervised_pairs')),
+                    "h_pairs": int(_part('hierarchy_pairs')),
+                    "gscale": f"{scale_value:.4f}",
+                }
+                if self.device.type == "cuda":
+                    status["mem"] = f"{memory_gb:.1f}G"
+                if progress is not None:
+                    progress.set_postfix(status, refresh=False)
+                else:
+                    self.logger(
+                        f"epoch={epoch} step={step} global_step={self.global_step} "
+                        f"loss={float(loss.detach().cpu()):.6f} "
+                        f"gold_asl={_part('gold_asl'):.6f} "
+                        f"pseudo_asl={_part('pseudo_asl'):.6f} "
+                        f"c_gold={_part('contrib_gold_asl'):.6f} "
+                        f"c_pseudo={_part('contrib_pseudo_asl'):.6f} "
+                        f"c_anchor={_part('contrib_base_anchor'):.6f} "
+                        f"hier={_part('hierarchy'):.6f} "
+                        f"c_hier={_part('contrib_hierarchy'):.6f} "
+                        f"hier_pairs={_part('hierarchy_pairs'):.0f} "
+                        f"gold_pairs={_part('gold_supervised_pairs'):.0f} "
+                        f"pseudo_pairs={_part('pseudo_supervised_pairs'):.0f} "
+                        f"graph_delta_scale={scale_value:.6f} "
+                        f"world_size={self.distributed.world_size}"
+                    )
 
+        if progress is not None:
+            progress.close()
         if steps == 0:
             raise RuntimeError("train_loader produced zero batches")
         if effective_steps is None and steps % self.config.accumulation_steps != 0:
@@ -620,6 +689,7 @@ class NBSFixedEpochTrainer:
             self.scheduler.step()
 
         reduction = {f"loss/{name}": value for name, value in totals.items()}
+        reduction.update({f"batch/{name}": value for name, value in batch_totals.items()})
         reduction.update({"steps": float(steps), "optimizer_steps": float(optimizer_steps)})
         reduced = self.distributed.reduce_scalar_mapping(reduction, device=self.device)
         global_steps = max(1.0, reduced.pop("steps"))
@@ -636,9 +706,19 @@ class NBSFixedEpochTrainer:
             "learning_rates": [float(group["lr"]) for group in self.optimizer.param_groups],
             "world_size": self.distributed.world_size,
         }
-        metrics.update(
-            {name.removeprefix("loss/"): value / global_steps for name, value in reduced.items()}
-        )
+        for name, value in reduced.items():
+            if name.startswith("loss/"):
+                metrics[name.removeprefix("loss/")] = value / global_steps
+            elif name.startswith("batch/"):
+                metrics[f"avg_{name.removeprefix('batch/')}"] = value / global_steps
+        if self.device.type == "cuda":
+            local_peak_alloc = float(torch.cuda.max_memory_allocated(self.device)) / (1024 ** 3)
+            local_peak_reserved = float(torch.cuda.max_memory_reserved(self.device)) / (1024 ** 3)
+            gathered = self.distributed.all_gather_object(
+                {"allocated": local_peak_alloc, "reserved": local_peak_reserved}
+            )
+            metrics["gpu_peak_allocated_gb"] = max(float(item["allocated"]) for item in gathered)
+            metrics["gpu_peak_reserved_gb"] = max(float(item["reserved"]) for item in gathered)
         graph_scale = getattr(getattr(self.base_model, "matcher", None), "graph_delta_scale", None)
         if isinstance(graph_scale, Tensor):
             metrics["graph_delta_scale"] = float(torch.tanh(graph_scale).detach().cpu())
@@ -682,8 +762,12 @@ class NBSFixedEpochTrainer:
                 f"c_gold={metrics.get('contrib_gold_asl', float('nan')):.6f} "
                 f"c_pseudo={metrics.get('contrib_pseudo_asl', float('nan')):.6f} "
                 f"c_anchor={metrics.get('contrib_base_anchor', float('nan')):.6f} "
+                f"hier={metrics.get('hierarchy', float('nan')):.6f} "
                 f"c_hier={metrics.get('contrib_hierarchy', float('nan')):.6f} "
+                f"hier_pairs={metrics.get('hierarchy_pairs', float('nan')):.1f} "
+                f"gold_pairs={metrics.get('gold_supervised_pairs', float('nan')):.1f} "
                 f"pseudo_pairs={metrics.get('pseudo_supervised_pairs', float('nan')):.1f} "
+                f"peak_mem={metrics.get('gpu_peak_allocated_gb', float('nan')):.2f}GB "
                 f"elapsed={metrics['elapsed_seconds']:.3f}s"
             )
             if epoch in save_epochs:

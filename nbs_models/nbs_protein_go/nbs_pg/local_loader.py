@@ -487,6 +487,7 @@ class LatenceNBSLocalGraphMaterializer:
                 "candidate_edges_global_total": int(
                     getattr(self.stores.candidate_messages, "num_edges", -1)
                 ),
+                "hierarchy_query_edges": 0 if hierarchy_edges is None else int(hierarchy_edges.shape[1]),
                 "direction_safe": True,
             },
         )
@@ -625,11 +626,37 @@ def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
         fixed_degree=int(candidate_spec["fixed_degree"]),
         source_protein_start=int(candidate_spec["source_protein_start"] or 0),
     )
+
+    # Build task-level direct is_a pairs from the full BoxSquaredEL ontology.
+    # This lets the query sampler deliberately co-sample child/parent rows so
+    # the query-axis hierarchy objective is not almost always empty.
+    gg_manifest_path = Path(data["boxsqel_gg_relations_manifest"])
+    if not gg_manifest_path.is_absolute():
+        gg_manifest_path = Path.cwd() / gg_manifest_path
+    gg = _load_json(gg_manifest_path)
+    full_is_a_path = gg_manifest_path.parent / gg["relations"]["is_a"]["file"]
+    full_is_a = np.load(full_is_a_path, mmap_mode="r")
+    ontology_to_task: dict[int, int] = {}
+    for task_go_idx, ontology_go_idx in enumerate(np.asarray(task_to_ontology, dtype=np.int64).tolist()):
+        ontology_to_task.setdefault(int(ontology_go_idx), int(task_go_idx))
+    task_hierarchy_pairs: list[tuple[int, int]] = []
+    for child_ontology, parent_ontology in np.asarray(full_is_a[:, :2], dtype=np.int64).tolist():
+        child_task = ontology_to_task.get(int(child_ontology))
+        parent_task = ontology_to_task.get(int(parent_ontology))
+        if child_task is not None and parent_task is not None and child_task != parent_task:
+            task_hierarchy_pairs.append((child_task, parent_task))
+    hierarchy_pairs = (
+        np.asarray(task_hierarchy_pairs, dtype=np.int64).T
+        if task_hierarchy_pairs
+        else np.empty((2, 0), dtype=np.int64)
+    )
+
     episode_cfg = NBSQueryEpisodeConfig(**dict(config.get("episode", {})))
     episode_sampler = GOQueryEpisodeSampler(
         gold=gold,
         candidate=candidate,
         pseudo=pseudo,
+        hierarchy_pairs=hierarchy_pairs,
         base_logits=base_logits,
         train_go_counts=np.asarray(train_counts),
         task_to_ontology_go=np.asarray(task_to_ontology),
@@ -680,10 +707,6 @@ def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
         raise IndexError("task-to-ontology mapping leaves the full BoxSquaredEL class space")
     if gold_messages.num_proteins != registry.num_proteins:
         raise ValueError("gold Protein->GO CSR does not align with protein registry")
-    gg_manifest_path = Path(data["boxsqel_gg_relations_manifest"])
-    if not gg_manifest_path.is_absolute():
-        gg_manifest_path = Path.cwd() / gg_manifest_path
-    gg = _load_json(gg_manifest_path)
     if int(gg.get("num_classes", -1)) != full_boxes.num_go:
         raise ValueError("BoxSquaredEL G-G node space differs from full GO box rows")
     go_relations = {

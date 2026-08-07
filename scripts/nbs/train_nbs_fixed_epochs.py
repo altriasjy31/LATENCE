@@ -64,6 +64,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-steps-per-epoch", type=int, default=None)
     parser.add_argument("--log-interval", type=int, default=None)
+    parser.add_argument("--progress-bar", type=int, choices=[0, 1], default=None)
+    parser.add_argument("--num-queries", type=int, default=None)
+    parser.add_argument("--max-candidates", type=int, default=None)
+    parser.add_argument("--hard-candidate-per-query", type=int, default=None)
+    parser.add_argument("--pseudo-positive-per-query", type=int, default=None)
+    parser.add_argument("--support-per-query", type=int, default=None)
+    parser.add_argument("--gold-positive-per-query", type=int, default=None)
+    parser.add_argument("--hierarchy-pairs-per-episode", type=int, default=None)
+    parser.add_argument("--candidate-message-topk", type=int, default=None)
+    parser.add_argument("--pseudo-message-topk", type=int, default=None)
+    parser.add_argument("--steps-per-epoch-per-rank", type=int, default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--distributed", action="store_true", help="enable DDP even when WORLD_SIZE is not preset")
     parser.add_argument(
@@ -119,6 +130,33 @@ def main() -> None:
         training_raw["max_steps_per_epoch"] = int(args.max_steps_per_epoch)
     if args.log_interval is not None:
         training_raw["log_interval"] = int(args.log_interval)
+    if args.progress_bar is not None:
+        training_raw["progress_bar"] = bool(args.progress_bar)
+
+    episode_raw = config.setdefault("episode", {})
+    episode_overrides = {
+        "num_queries": args.num_queries,
+        "max_candidates": args.max_candidates,
+        "hard_candidate_per_query": args.hard_candidate_per_query,
+        "pseudo_positive_per_query": args.pseudo_positive_per_query,
+        "support_per_query": args.support_per_query,
+        "gold_positive_per_query": args.gold_positive_per_query,
+        "hierarchy_pairs_per_episode": args.hierarchy_pairs_per_episode,
+    }
+    for key, value in episode_overrides.items():
+        if value is not None:
+            episode_raw[key] = int(value)
+
+    sampling_raw = config.setdefault("local_sampling", {})
+    sampling_overrides = {
+        "candidate_message_topk": args.candidate_message_topk,
+        "pseudo_message_topk": args.pseudo_message_topk,
+        "steps_per_epoch_per_rank": args.steps_per_epoch_per_rank,
+    }
+    for key, value in sampling_overrides.items():
+        if value is not None:
+            sampling_raw[key] = int(value)
+
     if args.output_dir is not None:
         training_raw["output_dir"] = args.output_dir
     training_config = NBSFixedEpochTrainingConfig.from_mapping(training_raw)
@@ -132,6 +170,15 @@ def main() -> None:
             f"world_size={distributed.world_size}, "
             "validation=False, early_stopping=False"
         )
+        resolved_output = Path(training_config.output_dir)
+        if not resolved_output.is_absolute():
+            resolved_output = project_root / resolved_output
+        resolved_output.mkdir(parents=True, exist_ok=True)
+        (resolved_output / "resolved_config.json").write_text(
+            json.dumps(config, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    distributed.barrier()
     if args.validate_config_only:
         distributed.cleanup()
         return

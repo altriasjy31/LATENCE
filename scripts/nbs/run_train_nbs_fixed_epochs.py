@@ -18,7 +18,7 @@ def main() -> None:
             / "nbs_models"
             / "nbs_protein_go"
             / "configs"
-            / "bp_fixed_epoch_v0.4.json",
+            / "bp_fixed_epoch_v0.4.6.json",
         )
     )
     train_script = project_root / "scripts" / "nbs" / "train_nbs_fixed_epochs.py"
@@ -51,6 +51,23 @@ def main() -> None:
         command.extend(["--log-interval", os.environ["NBS_LOG_INTERVAL"]])
     if os.environ.get("NBS_OUTPUT_DIR"):
         command.extend(["--output-dir", os.environ["NBS_OUTPUT_DIR"]])
+    env_arg_map = {
+        "NBS_NUM_QUERIES": "--num-queries",
+        "NBS_MAX_CANDIDATES": "--max-candidates",
+        "NBS_HARD_CANDIDATE_PER_QUERY": "--hard-candidate-per-query",
+        "NBS_PSEUDO_POSITIVE_PER_QUERY": "--pseudo-positive-per-query",
+        "NBS_SUPPORT_PER_QUERY": "--support-per-query",
+        "NBS_GOLD_POSITIVE_PER_QUERY": "--gold-positive-per-query",
+        "NBS_HIERARCHY_PAIRS_PER_EPISODE": "--hierarchy-pairs-per-episode",
+        "NBS_CANDIDATE_MESSAGE_TOPK": "--candidate-message-topk",
+        "NBS_PSEUDO_MESSAGE_TOPK": "--pseudo-message-topk",
+        "NBS_STEPS_PER_EPOCH_PER_RANK": "--steps-per-epoch-per-rank",
+        "NBS_PROGRESS_BAR": "--progress-bar",
+    }
+    for env_name, flag in env_arg_map.items():
+        value = os.environ.get(env_name)
+        if value not in (None, ""):
+            command.extend([flag, value])
     if os.environ.get("NBS_RESUME"):
         command.extend(["--resume", os.environ["NBS_RESUME"]])
     if num_gpus == 1 and os.environ.get("NBS_DEVICE"):

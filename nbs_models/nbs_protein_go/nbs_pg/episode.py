@@ -25,6 +25,10 @@ class NBSQueryEpisodeConfig:
     max_candidates: int = 256
     sampled_unlabelled_weight: float = 0.2
     pseudo_confidence_power: float = 1.0
+    # Number of direct child-parent query pairs that must be co-sampled in one
+    # episode.  This makes the query-axis hierarchy loss observable instead of
+    # relying on an extremely unlikely random co-occurrence.
+    hierarchy_pairs_per_episode: int = 0
     max_query_resample_attempts: int = 100
 
     def validate(self) -> None:
@@ -40,6 +44,12 @@ class NBSQueryEpisodeConfig:
                 raise ValueError(f"{name} must be positive")
         if self.pseudo_positive_per_query < 0:
             raise ValueError("pseudo_positive_per_query cannot be negative")
+        if self.hierarchy_pairs_per_episode < 0:
+            raise ValueError("hierarchy_pairs_per_episode cannot be negative")
+        if 2 * self.hierarchy_pairs_per_episode > self.num_queries:
+            raise ValueError(
+                "2 * hierarchy_pairs_per_episode cannot exceed num_queries"
+            )
         if not 0.0 <= self.sampled_unlabelled_weight <= 1.0:
             raise ValueError("sampled_unlabelled_weight must lie in [0,1]")
         if self.pseudo_confidence_power < 0:
@@ -164,6 +174,7 @@ class GOQueryEpisodeSampler:
         task_to_ontology_go: Optional[np.ndarray] = None,
         candidate_attributes: Optional[FixedDegreeCandidateAttributeStore] = None,
         pseudo: Optional[GOProteinCSRStore] = None,
+        hierarchy_pairs: Optional[np.ndarray] = None,
         config: Optional[NBSQueryEpisodeConfig] = None,
         seed: int = 3407,
     ) -> None:
@@ -173,6 +184,13 @@ class GOQueryEpisodeSampler:
         self.base_logit_store = base_logits
         self.candidate_attributes = candidate_attributes
         self.train_go_counts = np.asarray(train_go_counts, dtype=np.float64)
+        if hierarchy_pairs is None:
+            self.hierarchy_pairs = np.empty((2, 0), dtype=np.int64)
+        else:
+            pairs = np.asarray(hierarchy_pairs, dtype=np.int64)
+            if pairs.ndim != 2 or pairs.shape[0] != 2:
+                raise ValueError("hierarchy_pairs must have shape [2,E]")
+            self.hierarchy_pairs = pairs
         if task_to_ontology_go is None:
             self.task_to_ontology_go = np.arange(self.gold.num_go, dtype=np.int64)
         else:
@@ -194,14 +212,88 @@ class GOQueryEpisodeSampler:
         self.eligible_go = np.flatnonzero(degree >= min_gold).astype(np.int64)
         if self.eligible_go.size < self.config.num_queries:
             raise ValueError("not enough GO terms with support and held-out gold proteins")
+        eligible_mask = np.zeros(self.gold.num_go, dtype=bool)
+        eligible_mask[self.eligible_go] = True
+        if self.hierarchy_pairs.size:
+            keep = (
+                eligible_mask[self.hierarchy_pairs[0]]
+                & eligible_mask[self.hierarchy_pairs[1]]
+                & (self.hierarchy_pairs[0] != self.hierarchy_pairs[1])
+            )
+            self.hierarchy_pairs = self.hierarchy_pairs[:, keep]
+            if self.hierarchy_pairs.size:
+                # Remove exact duplicate task-level edges while keeping direction.
+                self.hierarchy_pairs = np.unique(self.hierarchy_pairs.T, axis=0).T
+        if (
+            self.config.hierarchy_pairs_per_episode > 0
+            and self.hierarchy_pairs.shape[1] < self.config.hierarchy_pairs_per_episode
+        ):
+            raise ValueError(
+                "not enough eligible task-level hierarchy pairs for "
+                f"hierarchy_pairs_per_episode={self.config.hierarchy_pairs_per_episode}"
+            )
         self.rng = np.random.default_rng(seed)
+
+    def _sample_query_indices(self) -> np.ndarray:
+        """Sample task GO columns, optionally forcing direct hierarchy pairs."""
+        cfg = self.config
+        n_pairs = int(cfg.hierarchy_pairs_per_episode)
+        if n_pairs <= 0:
+            return self.rng.choice(
+                self.eligible_go, size=cfg.num_queries, replace=False
+            ).astype(np.int64)
+
+        order = self.rng.permutation(self.hierarchy_pairs.shape[1])
+        chosen: list[int] = []
+        chosen_ontology: set[int] = set()
+        used_edges = 0
+        for edge_index in order.tolist():
+            child = int(self.hierarchy_pairs[0, edge_index])
+            parent = int(self.hierarchy_pairs[1, edge_index])
+            ontology_rows = (
+                int(self.task_to_ontology_go[child]),
+                int(self.task_to_ontology_go[parent]),
+            )
+            if child in chosen or parent in chosen:
+                continue
+            if ontology_rows[0] == ontology_rows[1]:
+                continue
+            if ontology_rows[0] in chosen_ontology or ontology_rows[1] in chosen_ontology:
+                continue
+            chosen.extend([child, parent])
+            chosen_ontology.update(ontology_rows)
+            used_edges += 1
+            if used_edges >= n_pairs:
+                break
+        if used_edges < n_pairs:
+            raise RuntimeError(
+                "could not sample the requested number of disjoint hierarchy pairs"
+            )
+
+        remaining = int(cfg.num_queries) - len(chosen)
+        if remaining > 0:
+            candidates = [
+                int(go_idx)
+                for go_idx in self.eligible_go.tolist()
+                if int(go_idx) not in chosen
+                and int(self.task_to_ontology_go[int(go_idx)]) not in chosen_ontology
+            ]
+            if len(candidates) < remaining:
+                raise RuntimeError("not enough GO terms to complete hierarchy-aware episode")
+            extra = self.rng.choice(
+                np.asarray(candidates, dtype=np.int64),
+                size=remaining,
+                replace=False,
+            ).astype(np.int64)
+            chosen.extend(extra.tolist())
+        query = np.asarray(chosen, dtype=np.int64)
+        # Shuffle row order; hierarchy edge recovery later is index-based.
+        return query[self.rng.permutation(query.size)]
 
     def _sample_queries_and_support(self) -> tuple[np.ndarray, list[np.ndarray]]:
         cfg = self.config
         for _ in range(cfg.max_query_resample_attempts):
-            query = self.rng.choice(
-                self.eligible_go, size=cfg.num_queries, replace=False
-            ).astype(np.int64)
+            query = self._sample_query_indices()
             # Canonical/alt-ID classifier columns may map to the same full
             # BoxSquaredEL class. Keep ontology queries unique inside an
             # episode while preserving the immutable task label space.
