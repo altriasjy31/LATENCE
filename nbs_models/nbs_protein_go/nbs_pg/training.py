@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import random
 import time
@@ -26,6 +27,79 @@ from .distributed import (
 )
 from .losses import NBSASLConfig, NBSLossWeights, nbs_training_loss
 from .types import NBSGOBoxCache, ProteinGOQueryBatch
+
+
+_PROTEIN_COVERAGE_METADATA_KEYS: dict[str, str] = {
+    "root": "root_protein_idx",
+    "local": "local_protein_idx",
+    "support": "support_protein_idx",
+    "candidate": "candidate_protein_idx",
+    "gold_target": "gold_target_protein_idx",
+    "hard_target": "hard_target_protein_idx",
+    "pseudo_target": "pseudo_target_protein_idx",
+    "root_core": "root_core_protein_idx",
+    "root_weak": "root_weak_protein_idx",
+    "local_core": "local_core_protein_idx",
+    "local_weak": "local_weak_protein_idx",
+}
+
+
+def _update_protein_coverage_bitmap(
+    bitmap: np.ndarray,
+    values: Any,
+    *,
+    field_name: str,
+) -> None:
+    if values is None:
+        return
+    indices = np.asarray(values, dtype=np.int64).reshape(-1)
+    if indices.size == 0:
+        return
+    if int(indices.min()) < 0 or int(indices.max()) >= bitmap.size:
+        raise IndexError(
+            f"{field_name} contains a protein index outside [0,{bitmap.size})"
+        )
+    bitmap[indices] = True
+
+
+def _merge_ddp_protein_coverage(
+    context: NBSDistributedContext,
+    bitmaps: Mapping[str, np.ndarray],
+) -> dict[str, int]:
+    """Merge per-rank boolean coverage with compact packed bitsets.
+
+    A 549,722-protein bitmap occupies about 67 KiB after ``packbits``.  This is
+    substantially cheaper and more deterministic than gathering Python sets of
+    hundreds of thousands of node IDs.
+    """
+
+    if not bitmaps:
+        return {}
+    sizes = {int(value.size) for value in bitmaps.values()}
+    if len(sizes) != 1:
+        raise ValueError("protein coverage bitmaps must share one universe size")
+    num_proteins = sizes.pop()
+    local_payload = {
+        name: np.packbits(value, bitorder="little").tobytes()
+        for name, value in bitmaps.items()
+    }
+    gathered = context.all_gather_object(local_payload)
+    packed_size = (num_proteins + 7) // 8
+    counts: dict[str, int] = {}
+    for name in bitmaps:
+        merged = np.zeros(packed_size, dtype=np.uint8)
+        for payload in gathered:
+            raw = payload.get(name, b"")
+            current = np.frombuffer(raw, dtype=np.uint8)
+            if current.size != packed_size:
+                raise RuntimeError(
+                    f"DDP protein coverage payload for {name} has size "
+                    f"{current.size}, expected {packed_size}"
+                )
+            np.bitwise_or(merged, current, out=merged)
+        unpacked = np.unpackbits(merged, bitorder="little")[:num_proteins]
+        counts[name] = int(np.count_nonzero(unpacked))
+    return counts
 
 
 @dataclass
@@ -117,6 +191,228 @@ class NBSLossConfig:
             gold_asl=gold_asl,
             pseudo_asl=pseudo_asl,
             **raw,
+        )
+
+
+@dataclass(frozen=True)
+class NBSSchedulerConfig:
+    """Scheduler configuration for fixed-length NBS training.
+
+    ``onecycle`` interprets the optimizer parameter-group learning rates as
+    *maximum* learning rates.  The initial and final rates are derived from
+    ``div_factor`` and ``final_div_factor`` exactly as in PyTorch OneCycleLR.
+    """
+
+    name: str = "none"
+    pct_start: float = 0.05
+    anneal_strategy: str = "cos"
+    div_factor: float = 5.0
+    final_div_factor: float = 20.0
+    three_phase: bool = False
+    cycle_momentum: bool = False
+
+    @classmethod
+    def from_mapping(cls, value: Optional[Mapping[str, Any]]) -> "NBSSchedulerConfig":
+        raw = dict(value or {})
+        if "name" in raw:
+            raw["name"] = str(raw["name"]).lower()
+        return cls(**raw)
+
+    def validate(self) -> None:
+        if self.name not in {"none", "onecycle"}:
+            raise ValueError("scheduler.name must be 'none' or 'onecycle'")
+        if not 0.0 < self.pct_start < 1.0:
+            raise ValueError("scheduler.pct_start must lie in (0, 1)")
+        if self.anneal_strategy not in {"cos", "linear"}:
+            raise ValueError("scheduler.anneal_strategy must be 'cos' or 'linear'")
+        if self.div_factor <= 0.0:
+            raise ValueError("scheduler.div_factor must be positive")
+        if self.final_div_factor <= 0.0:
+            raise ValueError("scheduler.final_div_factor must be positive")
+
+
+def resolve_scheduler_step_plan(
+    train_loader: Iterable[Any],
+    training_config: "NBSFixedEpochTrainingConfig",
+) -> dict[str, int]:
+    """Resolve raw-loader and optimizer steps used by fixed-length schedulers.
+
+    The contract intentionally uses *optimizer updates*, not DDP-global query
+    count.  With synchronous DDP every rank performs the same optimizer update,
+    so world size must not multiply ``total_optimizer_steps``.
+    """
+
+    loader_steps = len(train_loader) if hasattr(train_loader, "__len__") else None
+    if loader_steps is None and training_config.max_steps_per_epoch is None:
+        raise ValueError(
+            "a finite train_loader length or training.max_steps_per_epoch is "
+            "required for OneCycleLR"
+        )
+    if loader_steps is None:
+        effective_loader_steps = int(training_config.max_steps_per_epoch)
+    elif training_config.max_steps_per_epoch is None:
+        effective_loader_steps = int(loader_steps)
+    else:
+        effective_loader_steps = min(
+            int(loader_steps), int(training_config.max_steps_per_epoch)
+        )
+    if effective_loader_steps <= 0:
+        raise ValueError("effective loader steps per epoch must be positive")
+    optimizer_steps_per_epoch = int(
+        math.ceil(effective_loader_steps / training_config.accumulation_steps)
+    )
+    total_optimizer_steps = int(optimizer_steps_per_epoch * training_config.epochs)
+    return {
+        "loader_steps_per_epoch": (
+            -1 if loader_steps is None else int(loader_steps)
+        ),
+        "effective_loader_steps_per_epoch": effective_loader_steps,
+        "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
+        "total_optimizer_steps": total_optimizer_steps,
+    }
+
+
+def build_nbs_scheduler(
+    optimizer: torch.optim.Optimizer,
+    scheduler_value: Optional[Mapping[str, Any]],
+    training_config: "NBSFixedEpochTrainingConfig",
+    train_loader: Iterable[Any],
+    *,
+    runtime: Optional[Mapping[str, Any]] = None,
+    episode_config: Optional[Mapping[str, Any]] = None,
+    local_sampling_config: Optional[Mapping[str, Any]] = None,
+) -> tuple[Optional[Any], dict[str, Any]]:
+    """Build the configured scheduler and its resume-safety contract."""
+
+    scheduler_config = NBSSchedulerConfig.from_mapping(scheduler_value)
+    scheduler_config.validate()
+    runtime = dict(runtime or {})
+    episode_config = dict(episode_config or {})
+    local_sampling_config = dict(local_sampling_config or {})
+    max_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+    base_contract: dict[str, Any] = {
+        "name": scheduler_config.name,
+        "scheduler_step": training_config.scheduler_step,
+        "epochs": int(training_config.epochs),
+        "accumulation_steps": int(training_config.accumulation_steps),
+        "world_size": int(runtime.get("world_size", 1) or 1),
+        "num_queries": int(episode_config.get("num_queries", 0) or 0),
+        "coverage_cycles_per_epoch": float(
+            local_sampling_config.get("coverage_cycles_per_epoch", 0.0) or 0.0
+        ),
+        "max_lrs": max_lrs,
+    }
+    if scheduler_config.name == "none":
+        return None, base_contract
+    if training_config.scheduler_step != "batch":
+        raise ValueError(
+            "OneCycleLR must use training.scheduler_step='batch' because it "
+            "advances once per optimizer update"
+        )
+    if not training_config.include_scheduler_state:
+        raise ValueError(
+            "OneCycleLR requires include_scheduler_state=true for safe fixed-epoch resume"
+        )
+    if not training_config.include_optimizer_state:
+        raise ValueError(
+            "OneCycleLR requires include_optimizer_state=true for safe fixed-epoch resume"
+        )
+    plan = resolve_scheduler_step_plan(train_loader, training_config)
+    requested_pct_start = float(scheduler_config.pct_start)
+    # PyTorch OneCycleLR has a degenerate first phase when
+    # pct_start * total_steps == 1, and very short smoke runs otherwise skip
+    # the warm-up almost entirely.  Keep the requested value for production
+    # runs, but guarantee roughly two warm-up optimizer updates for short
+    # diagnostic runs.  The formal 28,650-step BP schedule remains exactly 0.05.
+    minimum_pct_start = min(0.9, 2.0 / max(1, int(plan["total_optimizer_steps"])))
+    effective_pct_start = max(requested_pct_start, minimum_pct_start)
+    contract = {
+        **base_contract,
+        **plan,
+        "requested_pct_start": requested_pct_start,
+        "pct_start": float(effective_pct_start),
+        "anneal_strategy": scheduler_config.anneal_strategy,
+        "div_factor": float(scheduler_config.div_factor),
+        "final_div_factor": float(scheduler_config.final_div_factor),
+        "three_phase": bool(scheduler_config.three_phase),
+        "cycle_momentum": bool(scheduler_config.cycle_momentum),
+    }
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=max_lrs,
+        total_steps=int(plan["total_optimizer_steps"]),
+        pct_start=float(effective_pct_start),
+        anneal_strategy=scheduler_config.anneal_strategy,
+        cycle_momentum=bool(scheduler_config.cycle_momentum),
+        div_factor=float(scheduler_config.div_factor),
+        final_div_factor=float(scheduler_config.final_div_factor),
+        three_phase=bool(scheduler_config.three_phase),
+    )
+    return scheduler, contract
+
+
+def validate_scheduler_resume_contract(
+    saved: Optional[Mapping[str, Any]],
+    current: Optional[Mapping[str, Any]],
+) -> None:
+    """Reject resumes that would change the OneCycle time axis."""
+
+    saved = dict(saved or {})
+    current = dict(current or {})
+    if str(current.get("name", "none")) == "none":
+        return
+    if not saved:
+        raise ValueError(
+            "checkpoint lacks scheduler_contract; cannot safely resume an active "
+            "OneCycleLR schedule. Start a new run or load model weights without "
+            "scheduler/optimizer state."
+        )
+    keys = (
+        "name",
+        "scheduler_step",
+        "epochs",
+        "accumulation_steps",
+        "world_size",
+        "num_queries",
+        "coverage_cycles_per_epoch",
+        "loader_steps_per_epoch",
+        "effective_loader_steps_per_epoch",
+        "optimizer_steps_per_epoch",
+        "total_optimizer_steps",
+        "requested_pct_start",
+        "pct_start",
+        "anneal_strategy",
+        "div_factor",
+        "final_div_factor",
+        "three_phase",
+        "cycle_momentum",
+        "max_lrs",
+    )
+    mismatches: dict[str, tuple[Any, Any]] = {}
+    for key in keys:
+        left = saved.get(key)
+        right = current.get(key)
+        if isinstance(left, list) or isinstance(right, list):
+            left_list = list(left or [])
+            right_list = list(right or [])
+            if len(left_list) != len(right_list) or any(
+                abs(float(a) - float(b)) > 1e-12
+                for a, b in zip(left_list, right_list)
+            ):
+                mismatches[key] = (left, right)
+        elif isinstance(left, float) or isinstance(right, float):
+            if left is None or right is None or abs(float(left) - float(right)) > 1e-12:
+                mismatches[key] = (left, right)
+        elif left != right:
+            mismatches[key] = (left, right)
+    if mismatches:
+        raise ValueError(
+            "scheduler resume contract mismatch; OneCycleLR total-step semantics "
+            f"must remain unchanged: {mismatches}. "
+            "If this is a fresh smoke/probe run, unset NBS_RESUME or set "
+            "NBS_FRESH_START=1 (or pass --fresh-start). If this is an intentional "
+            "resume, restore the original epochs/loader-step/world-size/scheduler "
+            "contract instead of overriding it."
         )
 
 
@@ -370,6 +666,9 @@ class NBSFixedEpochTrainer:
         self._refresh_global_go_cache()
         self.optimizer = components.optimizer
         self.scheduler = components.scheduler
+        self.scheduler_contract = dict(
+            components.metadata.get("scheduler_contract", {}) or {}
+        )
         self.loss_config = components.loss_config
         self.output_dir = Path(config.output_dir)
         if self.distributed.is_main_process:
@@ -421,8 +720,8 @@ class NBSFixedEpochTrainer:
     ) -> dict[str, Any]:
         model_config = getattr(self.base_model, "config", None)
         payload: dict[str, Any] = {
-            "checkpoint_type": "latence_nbs_fixed_epoch_v0.4.9",
-            "nbs_version": "0.4.9",
+            "checkpoint_type": "latence_nbs_fixed_epoch_v0.5.1",
+            "nbs_version": "0.5.1",
             "epoch": int(epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.base_model.state_dict(),
@@ -432,6 +731,7 @@ class NBSFixedEpochTrainer:
                 "weights": asdict(self.loss_config.weights),
             },
             "selection_policy": self.selection_policy,
+            "scheduler_contract": dict(self.scheduler_contract),
             "epoch_metrics": dict(epoch_metrics),
             "history": list(self.history),
             "run_metadata": {
@@ -495,6 +795,16 @@ class NBSFixedEpochTrainer:
         if checkpoint.get("selection_policy", {}).get("validation_used", False):
             raise ValueError("refusing a validation-selected checkpoint in fixed-epoch mode")
         self.base_model.load_state_dict(checkpoint["model_state_dict"])
+        if load_scheduler and self.scheduler is not None:
+            validate_scheduler_resume_contract(
+                checkpoint.get("scheduler_contract")
+                or checkpoint.get("run_metadata", {}).get("scheduler_contract"),
+                self.scheduler_contract,
+            )
+            if "scheduler_state_dict" not in checkpoint:
+                raise ValueError(
+                    "active scheduler resume requested but checkpoint has no scheduler_state_dict"
+                )
         if load_optimizer and "optimizer_state_dict" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if load_scheduler and self.scheduler is not None and "scheduler_state_dict" in checkpoint:
@@ -565,6 +875,14 @@ class NBSFixedEpochTrainer:
         }
         eligible_go_count: Optional[int] = None
         coverage_plan = dict(getattr(loader, "coverage_plan", {}) or {})
+        protein_universe = dict(coverage_plan.get("protein_universe", {}) or {})
+        num_proteins = int(protein_universe.get("total", 0) or 0)
+        protein_coverage_bitmaps: dict[str, np.ndarray] = {}
+        if num_proteins > 0:
+            protein_coverage_bitmaps = {
+                name: np.zeros(num_proteins, dtype=np.bool_)
+                for name in _PROTEIN_COVERAGE_METADATA_KEYS
+            }
         progress = None
         if (
             self.config.progress_bar
@@ -612,12 +930,26 @@ class NBSFixedEpochTrainer:
                 "hard_pairs_retained",
                 "pseudo_pairs_requested",
                 "pseudo_pairs_retained",
+                "weak_focus_queries_requested",
+                "weak_focus_queries_realized",
+                "weak_focus_scan_count",
+                "weak_focus_anchor_new_count",
+                "weak_focus_target_capacity_requested",
+                "weak_focus_targets_requested",
+                "weak_focus_targets_retained",
             )
             if isinstance(raw_batch.metadata, Mapping):
                 for key in scalar_metadata_keys:
                     value = raw_batch.metadata.get(key)
                     if value is not None:
                         batch_totals[key] = batch_totals.get(key, 0.0) + float(value)
+                if protein_coverage_bitmaps:
+                    for coverage_name, metadata_key in _PROTEIN_COVERAGE_METADATA_KEYS.items():
+                        _update_protein_coverage_bitmap(
+                            protein_coverage_bitmaps[coverage_name],
+                            raw_batch.metadata.get(metadata_key),
+                            field_name=metadata_key,
+                        )
                 query_values = raw_batch.metadata.get("query_go_idx")
                 query_gold_counts = raw_batch.metadata.get("query_gold_counts")
                 if query_values is not None:
@@ -709,6 +1041,7 @@ class NBSFixedEpochTrainer:
                     else 0.0
                 )
                 meta = raw_batch.metadata if isinstance(raw_batch.metadata, Mapping) else {}
+                current_lrs = [float(group["lr"]) for group in self.optimizer.param_groups]
                 status = {
                     "loss": f"{float(loss.detach().cpu()):.4f}",
                     "gold": f"{_part('gold_asl'):.3g}",
@@ -716,12 +1049,19 @@ class NBSFixedEpochTrainer:
                     "gpos": int(meta.get("gold_pairs_retained", 0)),
                     "hard": int(meta.get("hard_pairs_retained", 0)),
                     "ppos": int(meta.get("pseudo_pairs_retained", 0)),
+                    "wfq": int(meta.get("weak_focus_queries_realized", 0)),
+                    "wfa": int(meta.get("weak_focus_anchor_new_count", 0)),
+                    "wft": int(meta.get("weak_focus_targets_retained", 0)),
                     "qps": int(meta.get("query_with_pseudo_pool", 0)),
                     "qcan": int(meta.get("query_with_backbone_candidate_pool", 0)),
                     "h_pairs": int(_part('hierarchy_pairs')),
                     "qseen_r0": len(query_seen),
                     "capdrop": f"{float(meta.get('candidate_truncation_fraction', 0.0)):.1%}",
                     "gscale": f"{scale_value:.4f}",
+                    "lr": f"{current_lrs[0]:.2e}" if current_lrs else "nan",
+                    "slr": (
+                        f"{current_lrs[1]:.2e}" if len(current_lrs) > 1 else "nan"
+                    ),
                 }
                 if self.device.type == "cuda":
                     status["mem"] = f"{memory_gb:.1f}G"
@@ -742,6 +1082,8 @@ class NBSFixedEpochTrainer:
                         f"gold_pairs={_part('gold_supervised_pairs'):.0f} "
                         f"pseudo_pairs={_part('pseudo_supervised_pairs'):.0f} "
                         f"graph_delta_scale={scale_value:.6f} "
+                        f"lr={current_lrs[0]:.6e} "
+                        f"scale_lr={(current_lrs[1] if len(current_lrs) > 1 else float('nan')):.6e} "
                         f"world_size={self.distributed.world_size}"
                     )
 
@@ -771,6 +1113,11 @@ class NBSFixedEpochTrainer:
             "elapsed_seconds": round(time.time() - started, 3),
             "grad_norm_last": last_grad_norm,
             "learning_rates": [float(group["lr"]) for group in self.optimizer.param_groups],
+            "scheduler_name": str(self.scheduler_contract.get("name", "none")),
+            "scheduler_last_epoch": (
+                None if self.scheduler is None else int(getattr(self.scheduler, "last_epoch", -1))
+            ),
+            "scheduler_total_steps": self.scheduler_contract.get("total_optimizer_steps"),
             "world_size": self.distributed.world_size,
         }
         for name, value in reduced.items():
@@ -863,6 +1210,101 @@ class NBSFixedEpochTrainer:
         metrics["candidate_capacity_retention_rate"] = (
             1.0 if candidate_before <= 0 else min(1.0, candidate_after / candidate_before)
         )
+        focus_capacity = float(
+            metrics.get("avg_weak_focus_target_capacity_requested", 0.0)
+        )
+        focus_selected = float(metrics.get("avg_weak_focus_targets_requested", 0.0))
+        focus_retained = float(metrics.get("avg_weak_focus_targets_retained", 0.0))
+        metrics["weak_focus_target_fill_rate"] = (
+            1.0 if focus_capacity <= 0 else min(1.0, focus_selected / focus_capacity)
+        )
+        metrics["weak_focus_target_retention_rate"] = (
+            1.0 if focus_selected <= 0 else min(1.0, focus_retained / focus_selected)
+        )
+        total_pseudo_target_occurrences = int(round(float(
+            reduced.get("batch/pseudo_pairs_retained", 0.0)
+        )))
+        metrics["pseudo_target_occurrences"] = total_pseudo_target_occurrences
+
+        # Protein-node coverage is a separate axis from GO-query coverage.
+        # Stage 1 approximately iterates protein mini-batches; NBS iterates
+        # GO-conditioned graph episodes.  Reporting both unique and occurrence
+        # coverage prevents the 191-step GO cycle from being misread as a
+        # 191/4384 fraction of a stage-1 epoch.
+        protein_coverage_counts = _merge_ddp_protein_coverage(
+            self.distributed, protein_coverage_bitmaps
+        )
+        role_counts = dict(protein_universe.get("role_counts", {}) or {})
+        total_proteins = int(protein_universe.get("total", 0) or 0)
+        core_proteins = int(role_counts.get("core", 0) or 0)
+        weak_proteins = int(role_counts.get("weak", 0) or 0)
+        pseudo_active_weak = int(
+            protein_universe.get("pseudo_active_weak", 0) or 0
+        )
+        pseudo_eligible_active_weak = int(
+            protein_universe.get("pseudo_eligible_active_weak", pseudo_active_weak) or 0
+        )
+        denominator_by_name = {
+            "root": total_proteins,
+            "local": total_proteins,
+            "candidate": total_proteins,
+            "hard_target": total_proteins,
+            "support": core_proteins,
+            "gold_target": core_proteins,
+            "pseudo_target": weak_proteins,
+            "root_core": core_proteins,
+            "root_weak": weak_proteins,
+            "local_core": core_proteins,
+            "local_weak": weak_proteins,
+        }
+        for name, unique_count in protein_coverage_counts.items():
+            metrics[f"unique_{name}_protein_count"] = int(unique_count)
+            denominator_value = int(denominator_by_name.get(name, total_proteins))
+            metrics[f"{name}_protein_coverage_rate"] = (
+                0.0
+                if denominator_value <= 0
+                else float(unique_count / denominator_value)
+            )
+        if pseudo_active_weak > 0:
+            metrics["pseudo_target_active_weak_coverage_rate"] = float(
+                protein_coverage_counts.get("pseudo_target", 0)
+                / pseudo_active_weak
+            )
+        else:
+            metrics["pseudo_target_active_weak_coverage_rate"] = 0.0
+        if pseudo_eligible_active_weak > 0:
+            metrics["pseudo_target_eligible_weak_coverage_rate"] = float(
+                protein_coverage_counts.get("pseudo_target", 0)
+                / pseudo_eligible_active_weak
+            )
+        else:
+            metrics["pseudo_target_eligible_weak_coverage_rate"] = 0.0
+        unique_pseudo_targets = int(protein_coverage_counts.get("pseudo_target", 0))
+        metrics["pseudo_target_unique_efficiency"] = (
+            0.0
+            if total_pseudo_target_occurrences <= 0
+            else float(unique_pseudo_targets / total_pseudo_target_occurrences)
+        )
+        metrics["protein_universe"] = protein_universe
+
+        root_occurrences = float(
+            reduced.get("batch/support_proteins", 0.0)
+            + reduced.get("batch/candidate_union_after_cap", 0.0)
+        )
+        local_occurrences = float(reduced.get("batch/protein_nodes", 0.0))
+        metrics["root_protein_occurrences"] = int(round(root_occurrences))
+        metrics["local_protein_occurrences"] = int(round(local_occurrences))
+        metrics["root_protein_occurrence_equivalent_passes"] = (
+            0.0 if total_proteins <= 0 else float(root_occurrences / total_proteins)
+        )
+        metrics["local_protein_occurrence_equivalent_passes"] = (
+            0.0 if total_proteins <= 0 else float(local_occurrences / total_proteins)
+        )
+        stage1_reference = dict(coverage_plan.get("stage1_reference", {}) or {})
+        metrics["epoch_unit"] = str(
+            coverage_plan.get("epoch_unit", "eligible_go_coverage_cycle")
+        )
+        metrics["stage1_reference"] = stage1_reference
         if self.device.type == "cuda":
             local_peak_alloc = float(torch.cuda.max_memory_allocated(self.device)) / (1024 ** 3)
             local_peak_reserved = float(torch.cuda.max_memory_reserved(self.device)) / (1024 ** 3)
@@ -909,10 +1351,22 @@ class NBSFixedEpochTrainer:
             )
             self.logger(
                 "NBS query coverage plan: "
+                f"epoch_unit={coverage_plan.get('epoch_unit', 'eligible_go_coverage_cycle')}, "
                 f"eligible_go={coverage_plan.get('eligible_go_count')}, "
                 f"coverage_slots/episode={coverage_plan.get('coverage_slots_per_episode')}, "
                 f"steps/rank={coverage_plan.get('resolved_steps_per_epoch_per_rank')}, "
                 f"estimated_cycles={coverage_plan.get('estimated_base_cycle_coverage', 0.0):.3f}, "
+                f"go_floor={coverage_plan.get('go_cycles_required', 0.0):.3f}, "
+                f"weak_cycles={coverage_plan.get('weak_pseudo_cycles_required', 0.0):.3f}, "
+                f"core_cycles={coverage_plan.get('core_gold_cycles_required', 0.0):.3f}, "
+                f"pseudo_pairs/cycle={coverage_plan.get('predicted_pseudo_pairs_per_go_cycle', 0)}, "
+                f"core_occ/cycle={coverage_plan.get('predicted_core_gold_occurrences_per_go_cycle', 0)}, "
+                f"weak_focus_q={coverage_plan.get('weak_focus_queries_per_episode', 0)}, "
+                f"weak_focus_t={coverage_plan.get('weak_focus_targets_per_query', 0)}, "
+                f"weak_target={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('weak_unique_target_count', 0)}, "
+                f"weak_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('weak_unique_steps_required', 0)}, "
+                f"go_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('go_steps_required', 0)}, "
+                f"core_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('core_steps_required', 0)}, "
                 f"eligible_q1={eligibility.get('eligible_gold_count_eq1', 0)}, "
                 f"eligible_q2={eligibility.get('eligible_gold_count_eq2', 0)}, "
                 f"eligible_q3_4={eligibility.get('eligible_gold_count_3_4', 0)}, "
@@ -920,8 +1374,25 @@ class NBSFixedEpochTrainer:
                 f"singleton_all={eligibility.get('gold_count_eq1_all', 0)}, "
                 f"singleton_with_pseudo={eligibility.get('gold_count_eq1_with_pseudo', 0)}, "
                 f"eligible_with_candidate={eligibility.get('eligible_with_backbone_candidate', 0)}, "
-                f"eligible_with_pseudo={eligibility.get('eligible_with_pseudo', 0)}"
+                f"eligible_with_pseudo={eligibility.get('eligible_with_pseudo', 0)}, "
+                f"stage1_reference_steps={dict(coverage_plan.get('stage1_reference', {}) or {}).get('global_steps_per_epoch')}"
             )
+        if self.scheduler_contract and self.distributed.is_main_process:
+            (self.output_dir / "scheduler_plan.json").write_text(
+                json.dumps(_json_safe(self.scheduler_contract), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            if str(self.scheduler_contract.get("name", "none")) != "none":
+                lrs = [float(group["lr"]) for group in self.optimizer.param_groups]
+                self.logger(
+                    "NBS scheduler plan: "
+                    f"name={self.scheduler_contract.get('name')}, "
+                    f"optimizer_steps/epoch={self.scheduler_contract.get('optimizer_steps_per_epoch')}, "
+                    f"total_optimizer_steps={self.scheduler_contract.get('total_optimizer_steps')}, "
+                    f"pct_start={self.scheduler_contract.get('pct_start')}, "
+                    f"max_lrs={self.scheduler_contract.get('max_lrs')}, "
+                    f"initial_lrs={lrs}"
+                )
         save_epochs = self.config.epochs_to_save()
         for epoch in range(self.start_epoch, self.config.epochs + 1):
             metrics = self._train_epoch(epoch)
@@ -955,8 +1426,43 @@ class NBSFixedEpochTrainer:
                 f"{metrics.get('eligible_query_go_gt4', 0)} "
                 f"qcan={metrics.get('query_with_backbone_candidate_pool_rate', 0.0):.1%} "
                 f"qps={metrics.get('query_with_pseudo_pool_rate', 0.0):.1%} "
+                f"wfq={metrics.get('avg_weak_focus_queries_realized', 0.0):.1f}/"
+                f"{metrics.get('avg_weak_focus_queries_requested', 0.0):.1f} "
+                f"wfa={metrics.get('avg_weak_focus_anchor_new_count', 0.0):.1f} "
+                f"wft={metrics.get('avg_weak_focus_targets_retained', 0.0):.1f} "
+                f"wft_fill={metrics.get('weak_focus_target_fill_rate', 1.0):.1%} "
+                f"wft_keep={metrics.get('weak_focus_target_retention_rate', 1.0):.1%} "
                 f"hard_keep={metrics.get('hard_pair_retention_rate', 1.0):.1%} "
                 f"cand_keep={metrics.get('candidate_capacity_retention_rate', 1.0):.1%} "
+                f"roots={metrics.get('unique_root_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('total', 0)}"
+                f"({metrics.get('root_protein_coverage_rate', 0.0):.1%}) "
+                f"wroot={metrics.get('unique_root_weak_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('role_counts', {}).get('weak', 0)}"
+                f"({metrics.get('root_weak_protein_coverage_rate', 0.0):.1%}) "
+                f"localP={metrics.get('unique_local_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('total', 0)}"
+                f"({metrics.get('local_protein_coverage_rate', 0.0):.1%}) "
+                f"wlocal={metrics.get('unique_local_weak_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('role_counts', {}).get('weak', 0)}"
+                f"({metrics.get('local_weak_protein_coverage_rate', 0.0):.1%}) "
+                f"coreS={metrics.get('unique_support_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('role_counts', {}).get('core', 0)}"
+                f"({metrics.get('support_protein_coverage_rate', 0.0):.1%}) "
+                f"coreG={metrics.get('unique_gold_target_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('role_counts', {}).get('core', 0)}"
+                f"({metrics.get('gold_target_protein_coverage_rate', 0.0):.1%}) "
+                f"pweak={metrics.get('unique_pseudo_target_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('pseudo_eligible_active_weak', metrics.get('protein_universe', {}).get('pseudo_active_weak', 0))}"
+                f"({metrics.get('pseudo_target_eligible_weak_coverage_rate', 0.0):.1%}) "
+                f"puniq_eff={metrics.get('pseudo_target_unique_efficiency', 0.0):.1%} "
+                f"pweak_all={metrics.get('unique_pseudo_target_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('role_counts', {}).get('weak', 0)}"
+                f"({metrics.get('pseudo_target_protein_coverage_rate', 0.0):.1%}) "
+                f"root_pass={metrics.get('root_protein_occurrence_equivalent_passes', 0.0):.2f} "
+                f"local_pass={metrics.get('local_protein_occurrence_equivalent_passes', 0.0):.2f} "
+                f"lr={(metrics.get('learning_rates') or [float('nan')])[0]:.2e} "
+                f"slr={((metrics.get('learning_rates') or [float('nan'), float('nan')]) + [float('nan')])[1]:.2e} "
                 f"peak_mem={metrics.get('gpu_peak_allocated_gb', float('nan')):.2f}GB "
                 f"elapsed={metrics['elapsed_seconds']:.3f}s"
             )

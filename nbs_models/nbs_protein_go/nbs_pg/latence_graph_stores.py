@@ -228,6 +228,74 @@ class RoleLocalProteinGOCSRStore:
         if self.probability is not None and self.probability.shape != self.go_idx.shape:
             raise ValueError("Protein-GO probability payload mismatch")
 
+    @property
+    def num_role_rows(self) -> int:
+        return int(self.indptr.size - 1)
+
+    def get_role_row(self, role_row: int) -> dict[str, np.ndarray]:
+        """Return one role-local Protein->GO row without copying the full CSR.
+
+        This accessor is used by the weak-first query scheduler.  The returned
+        arrays are small views/copies for a single protein; the complete weak
+        pseudo matrix remains memory-mapped.
+        """
+        row = int(role_row)
+        if row < 0 or row >= self.num_role_rows:
+            raise IndexError(f"role-local protein row outside [0,{self.num_role_rows}): {row}")
+        start, end = int(self.indptr[row]), int(self.indptr[row + 1])
+        go = np.asarray(self.go_idx[start:end], dtype=np.int64)
+        if self.probability is None:
+            probability = np.ones(go.size, dtype=np.float32)
+        else:
+            probability = np.asarray(self.probability[start:end], dtype=np.float32)
+        return {"go_idx": go, "probability": probability}
+
+    def global_protein_for_role_row(self, role_row: int) -> int:
+        row = int(role_row)
+        indices = self.registry.role_global_indices[self.role]
+        if row < 0 or row >= indices.size:
+            raise IndexError(f"role-local protein row outside [0,{indices.size}): {row}")
+        return int(indices[row])
+
+    def active_role_rows_for_go_mask(
+        self,
+        go_mask: np.ndarray,
+        *,
+        chunk_rows: int = 65536,
+    ) -> np.ndarray:
+        """Return role-local rows with at least one GO selected by ``go_mask``.
+
+        The computation is row-chunked and never materializes an edge-to-row
+        array for the full pseudo graph.  It therefore remains practical for
+        the ~10.6M weak pseudo annotations in BP.
+        """
+        mask = np.asarray(go_mask, dtype=np.bool_)
+        if mask.ndim != 1:
+            raise ValueError("go_mask must be one-dimensional")
+        if self.go_idx.size and int(np.max(self.go_idx)) >= mask.size:
+            raise IndexError("go_mask does not cover the Protein-GO CSR GO space")
+        if chunk_rows <= 0:
+            raise ValueError("chunk_rows must be positive")
+        active = np.zeros(self.num_role_rows, dtype=np.bool_)
+        for row_start in range(0, self.num_role_rows, int(chunk_rows)):
+            row_end = min(self.num_role_rows, row_start + int(chunk_rows))
+            edge_start = int(self.indptr[row_start])
+            edge_end = int(self.indptr[row_end])
+            if edge_end <= edge_start:
+                continue
+            degrees = np.diff(np.asarray(self.indptr[row_start : row_end + 1], dtype=np.int64))
+            nonempty = np.flatnonzero(degrees > 0)
+            if nonempty.size == 0:
+                continue
+            relative_starts = (
+                np.asarray(self.indptr[row_start:row_end], dtype=np.int64)[nonempty]
+                - edge_start
+            )
+            selected_edge = mask[np.asarray(self.go_idx[edge_start:edge_end], dtype=np.int64)]
+            counts = np.add.reduceat(selected_edge.astype(np.int32), relative_starts)
+            active[row_start + nonempty] = counts > 0
+        return np.flatnonzero(active).astype(np.int64)
+
     def gather(
         self,
         protein_idx: Iterable[int],

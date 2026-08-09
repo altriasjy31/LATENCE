@@ -248,6 +248,75 @@ class ProteinGONBSModel(nn.Module):
             },
         )
 
+    def encode_external_protein_candidates(
+        self,
+        protein_x: Tensor,
+        *,
+        source_names: Optional[tuple[str, ...]] = None,
+    ) -> NBSNeighborhoodHierarchy:
+        """Encode inductive proteins without inserting them into the train graph.
+
+        This path is intended for independent-test inference.  The external
+        protein uses the same protein input projection/type embedding as the
+        heterogeneous backbone, while graph-relation residual sources are set
+        to zero.  The GO/query side still uses the trained NBS graph and full
+        BoxSquaredEL ontology.  This provides a deterministic inductive
+        fallback for proteins absent from the 2022 training registry.
+        """
+        if protein_x.dim() != 2:
+            raise ValueError("protein_x must be [N,D]")
+        proj = self.backbone.input_proj[PROTEIN]
+        h = self.backbone.input_drop(
+            self.backbone.activation(
+                proj(protein_x) + self.backbone.type_embedding[PROTEIN]
+            )
+        )
+        source_count = int(self.backbone.num_target_sources)
+        if source_names is None:
+            source_names = tuple(f"external_source:{i}" for i in range(source_count))
+        if len(source_names) != source_count:
+            raise ValueError("source_names do not match NBS target-source count")
+        hierarchy = NBSNeighborhoodHierarchy(
+            final_context=h,
+            source_contexts=h.new_zeros(source_count, h.size(0), h.size(1)),
+            source_names=tuple(source_names),
+        )
+        hierarchy.validate()
+        return hierarchy
+
+    def score_external_candidates(
+        self,
+        encoded_support: ProteinGOEncodedGraph,
+        query: ProteinGOQueryBatch,
+        candidate_x: Tensor,
+        *,
+        return_aux: bool = False,
+    ) -> NBSMatchOutput:
+        """Score external proteins against GO queries using full NBS queries.
+
+        ``query.base_logits`` and optional ``query.candidate_evidence`` must be
+        [Q,C] / [Q,C,F], where C equals ``candidate_x.size(0)``.  No expert
+        probability is required or consumed in the default student mode.
+        """
+        if query.candidate_protein_index is not None:
+            raise ValueError(
+                "external candidate scoring expects candidate_protein_index=None"
+            )
+        condition = self.query_encoder(
+            encoded_support.hierarchy.final_context,
+            encoded_support.final_states[GO],
+            encoded_support.local_go_box,
+            query,
+            global_cache=encoded_support.global_go_cache,
+        )
+        external_hierarchy = self.encode_external_protein_candidates(
+            candidate_x, source_names=encoded_support.hierarchy.source_names
+        )
+        output = self.matcher(external_hierarchy, condition, return_aux=return_aux)
+        if return_aux and output.auxiliary is not None:
+            output.auxiliary["inference/external_candidate_mode"] = output.logits.new_tensor(1.0)
+        return output
+
     def score_encoded(
         self,
         encoded: ProteinGOEncodedGraph,

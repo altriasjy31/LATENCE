@@ -1,6 +1,6 @@
 """Neighborhood--BoxSquare (NBS) with BoxSquaredEL protein--GO geometry."""
 
-__version__ = "0.4.9"
+__version__ = "0.5.3"
 
 from .boxsqel_manifest import (
     BoxSquaredELTrainingContract,
@@ -32,6 +32,7 @@ from .boxsqel_relations import (
     build_boxsqel_gg_relations,
     parse_boxsqel_normalized_axioms,
 )
+from .inference import ExternalCandidateEvidenceStore, FullTaskInferenceConfig, export_full_task_probabilities
 from .inverted_index import (
     InvertedIndexFiles,
     ProteinMajorAnnotationFiles,
@@ -62,11 +63,15 @@ from .latence_stores import (
 )
 from .sampling_indices import build_edge_offset_csr, build_pp_sampling_indices
 from .training import (
+    NBSSchedulerConfig,
     NBSFixedEpochTrainer,
     NBSFixedEpochTrainingConfig,
     NBSLocalBatch,
     NBSLossConfig,
     NBSRunComponents,
+    build_nbs_scheduler,
+    resolve_scheduler_step_plan,
+    validate_scheduler_resume_contract,
     freeze_go_geometry,
 )
 from .schema import *
@@ -113,12 +118,19 @@ __all__ = [
     "unwrap_distributed_model",
     "build_edge_offset_csr",
     "build_pp_sampling_indices",
+    "NBSSchedulerConfig",
     "NBSFixedEpochTrainer",
     "NBSFixedEpochTrainingConfig",
+    "build_nbs_scheduler",
+    "resolve_scheduler_step_plan",
+    "validate_scheduler_resume_contract",
     "NBSLocalBatch",
     "NBSLossConfig",
     "NBSRunComponents",
     "freeze_go_geometry",
+    "ExternalCandidateEvidenceStore",
+    "FullTaskInferenceConfig",
+    "export_full_task_probabilities",
     "GOProteinCSRStore",
     "FixedDegreeCandidateAttributeStore",
     "RoleProbabilitySlice",

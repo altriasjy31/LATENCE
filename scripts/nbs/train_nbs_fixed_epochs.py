@@ -39,13 +39,22 @@ def parse_args() -> argparse.Namespace:
             "selection or early stopping."
         )
     )
-    parser.add_argument("--config", required=True, help="NBS v0.4 JSON config")
+    parser.add_argument("--config", required=True, help="NBS fixed-epoch JSON config")
     parser.add_argument(
         "--component-factory",
         default=None,
         help="module:function returning nbs_pg.training.NBSRunComponents",
     )
-    parser.add_argument("--resume", default=None, help="fixed-epoch checkpoint")
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument("--resume", default=None, help="fixed-epoch checkpoint")
+    resume_group.add_argument(
+        "--fresh-start",
+        action="store_true",
+        help=(
+            "explicitly start from newly initialized NBS weights and ignore any "
+            "external resume intent; mutually exclusive with --resume"
+        ),
+    )
     parser.add_argument(
         "--save-interval-epochs",
         type=int,
@@ -69,6 +78,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-candidates", type=int, default=None)
     parser.add_argument("--hard-candidate-per-query", type=int, default=None)
     parser.add_argument("--pseudo-positive-per-query", type=int, default=None)
+    parser.add_argument(
+        "--pseudo-sampling-mode",
+        choices=["random", "go_cyclic", "go_cyclic_unique"],
+        default=None,
+    )
+    parser.add_argument("--weak-focus-queries", type=int, default=None)
+    parser.add_argument("--weak-focus-targets", type=int, default=None)
+    parser.add_argument("--weak-focus-scan-limit", type=int, default=None)
+    parser.add_argument("--weak-focus-specificity-power", type=float, default=None)
+    parser.add_argument("--weak-focus-min-probability", type=float, default=None)
     parser.add_argument("--support-per-query", type=int, default=None)
     parser.add_argument("--gold-positive-per-query", type=int, default=None)
     parser.add_argument("--hierarchy-pairs-per-episode", type=int, default=None)
@@ -79,6 +98,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pseudo-message-topk", type=int, default=None)
     parser.add_argument("--steps-per-epoch-per-rank", type=int, default=None)
     parser.add_argument("--coverage-cycles-per-epoch", type=float, default=None)
+    parser.add_argument(
+        "--epoch-unit",
+        choices=[
+            "eligible_go_coverage_cycle",
+            "protein_major_with_go_floor",
+            "hybrid_go_weak_coverage",
+        ],
+        default=None,
+    )
+    parser.add_argument("--weak-pseudo-passes-per-epoch", type=float, default=None)
+    parser.add_argument("--core-gold-passes-per-epoch", type=float, default=None)
+    parser.add_argument("--weak-unique-coverage-target", type=float, default=None)
+    parser.add_argument("--weak-focus-planning-efficiency", type=float, default=None)
+    parser.add_argument("--scheduler-name", choices=["none", "onecycle"], default=None)
+    parser.add_argument("--onecycle-pct-start", type=float, default=None)
+    parser.add_argument("--onecycle-div-factor", type=float, default=None)
+    parser.add_argument("--onecycle-final-div-factor", type=float, default=None)
+    parser.add_argument("--onecycle-anneal-strategy", choices=["cos", "linear"], default=None)
+    parser.add_argument("--onecycle-three-phase", type=int, choices=[0, 1], default=None)
+    parser.add_argument("--onecycle-cycle-momentum", type=int, choices=[0, 1], default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--distributed", action="store_true", help="enable DDP even when WORLD_SIZE is not preset")
     parser.add_argument(
@@ -99,6 +138,7 @@ def main() -> None:
         distributed_seed,
     )
     from nbs_pg.training import (  # pylint: disable=import-outside-toplevel
+        NBSSchedulerConfig,
         NBSFixedEpochTrainer,
         NBSFixedEpochTrainingConfig,
         NBSRunComponents,
@@ -143,6 +183,9 @@ def main() -> None:
         "max_candidates": args.max_candidates,
         "hard_candidate_per_query": args.hard_candidate_per_query,
         "pseudo_positive_per_query": args.pseudo_positive_per_query,
+        "weak_focus_queries_per_episode": args.weak_focus_queries,
+        "weak_focus_targets_per_query": args.weak_focus_targets,
+        "weak_focus_scan_limit": args.weak_focus_scan_limit,
         "support_per_query": args.support_per_query,
         "gold_positive_per_query": args.gold_positive_per_query,
         "hierarchy_pairs_per_episode": args.hierarchy_pairs_per_episode,
@@ -150,8 +193,18 @@ def main() -> None:
     for key, value in episode_overrides.items():
         if value is not None:
             episode_raw[key] = int(value)
+    if args.weak_focus_specificity_power is not None:
+        episode_raw["weak_focus_specificity_power"] = float(
+            args.weak_focus_specificity_power
+        )
+    if args.weak_focus_min_probability is not None:
+        episode_raw["weak_focus_min_probability"] = float(
+            args.weak_focus_min_probability
+        )
     if args.query_sampling_mode is not None:
         episode_raw["query_sampling_mode"] = str(args.query_sampling_mode)
+    if args.pseudo_sampling_mode is not None:
+        episode_raw["pseudo_sampling_mode"] = str(args.pseudo_sampling_mode)
     if args.gold_support_policy is not None:
         episode_raw["gold_support_policy"] = str(args.gold_support_policy)
     if args.singleton_requires_pseudo is not None:
@@ -168,11 +221,50 @@ def main() -> None:
             sampling_raw[key] = int(value)
     if args.coverage_cycles_per_epoch is not None:
         sampling_raw["coverage_cycles_per_epoch"] = float(args.coverage_cycles_per_epoch)
+    if args.epoch_unit is not None:
+        sampling_raw["epoch_unit"] = str(args.epoch_unit)
+    if args.weak_pseudo_passes_per_epoch is not None:
+        sampling_raw["weak_pseudo_equivalent_passes_per_epoch"] = float(args.weak_pseudo_passes_per_epoch)
+    if args.core_gold_passes_per_epoch is not None:
+        sampling_raw["core_gold_equivalent_passes_per_epoch"] = float(args.core_gold_passes_per_epoch)
+    if args.weak_unique_coverage_target is not None:
+        sampling_raw["weak_unique_coverage_target_per_epoch"] = float(
+            args.weak_unique_coverage_target
+        )
+    if args.weak_focus_planning_efficiency is not None:
+        sampling_raw["weak_focus_planning_efficiency"] = float(
+            args.weak_focus_planning_efficiency
+        )
+
+    scheduler_raw = config.setdefault("scheduler", {})
+    if args.scheduler_name is not None:
+        scheduler_raw["name"] = str(args.scheduler_name)
+    if args.onecycle_pct_start is not None:
+        scheduler_raw["pct_start"] = float(args.onecycle_pct_start)
+    if args.onecycle_div_factor is not None:
+        scheduler_raw["div_factor"] = float(args.onecycle_div_factor)
+    if args.onecycle_final_div_factor is not None:
+        scheduler_raw["final_div_factor"] = float(args.onecycle_final_div_factor)
+    if args.onecycle_anneal_strategy is not None:
+        scheduler_raw["anneal_strategy"] = str(args.onecycle_anneal_strategy)
+    if args.onecycle_three_phase is not None:
+        scheduler_raw["three_phase"] = bool(args.onecycle_three_phase)
+    if args.onecycle_cycle_momentum is not None:
+        scheduler_raw["cycle_momentum"] = bool(args.onecycle_cycle_momentum)
 
     if args.output_dir is not None:
         training_raw["output_dir"] = args.output_dir
     training_config = NBSFixedEpochTrainingConfig.from_mapping(training_raw)
     training_config.validate()
+    scheduler_config = NBSSchedulerConfig.from_mapping(config.get("scheduler", {}))
+    scheduler_config.validate()
+    if scheduler_config.name == "onecycle":
+        if training_config.scheduler_step != "batch":
+            raise ValueError("OneCycleLR requires training.scheduler_step='batch'")
+        if not training_config.include_scheduler_state:
+            raise ValueError("OneCycleLR requires include_scheduler_state=true")
+        if not training_config.include_optimizer_state:
+            raise ValueError("OneCycleLR requires include_optimizer_state=true")
     if distributed.is_main_process:
         print(
             "validated fixed-epoch policy: "
@@ -180,6 +272,7 @@ def main() -> None:
             f"save_interval_epochs={training_config.save_interval_epochs}, "
             f"save_epochs={sorted(training_config.epochs_to_save())}, "
             f"world_size={distributed.world_size}, "
+            f"scheduler={scheduler_config.name}, "
             "validation=False, early_stopping=False"
         )
         resolved_output = Path(training_config.output_dir)
@@ -227,7 +320,9 @@ def main() -> None:
         )
     )
     try:
-        trainer.fit(resume_from=args.resume)
+        if distributed.is_main_process and args.fresh_start:
+            print("NBS fresh-start mode: checkpoint resume disabled", flush=True)
+        trainer.fit(resume_from=(None if args.fresh_start else args.resume))
     finally:
         distributed.cleanup()
 

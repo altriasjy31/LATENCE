@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from .latence_graph_stores import RoleLocalProteinGOCSRStore
 from .latence_stores import (
     FixedDegreeCandidateAttributeStore,
     GOProteinCSRStore,
@@ -22,6 +23,25 @@ class NBSQueryEpisodeConfig:
     gold_positive_per_query: int = 1
     hard_candidate_per_query: int = 16
     pseudo_positive_per_query: int = 0
+    # Repeated GO queries can either resample weak positives randomly or walk
+    # the GO-major pseudo CSR in deterministic non-overlapping chunks.  The
+    # latter makes repeated GO coverage act as a weak-protein coverage cycle.
+    pseudo_sampling_mode: str = "random"
+    # ``go_cyclic_unique`` keeps the GO-major cyclic walk but prioritizes
+    # weak proteins not yet used as pseudo targets in the current epoch.
+    # With DDP, each rank first consumes its deterministic weak-ID partition,
+    # reducing cross-rank duplicate pseudo supervision.
+    pseudo_rank_partition: bool = True
+    # Hybrid GO/weak scheduling.  These slots are still GO queries, but their
+    # GO identity is chosen from previously unseen weak proteins through the
+    # protein-major modelout CSR.  This preserves the NBS GO-query architecture
+    # while preventing repeated full GO cycles from supervising the same
+    # multi-label weak proteins over and over.
+    weak_focus_queries_per_episode: int = 0
+    weak_focus_targets_per_query: int = 0
+    weak_focus_scan_limit: int = 8192
+    weak_focus_specificity_power: float = 0.5
+    weak_focus_min_probability: float = 0.5
     max_candidates: int = 256
     sampled_unlabelled_weight: float = 0.2
     pseudo_confidence_power: float = 1.0
@@ -54,11 +74,37 @@ class NBSQueryEpisodeConfig:
                 raise ValueError(f"{name} must be positive")
         if self.pseudo_positive_per_query < 0:
             raise ValueError("pseudo_positive_per_query cannot be negative")
+        if self.pseudo_sampling_mode not in {"random", "go_cyclic", "go_cyclic_unique"}:
+            raise ValueError("pseudo_sampling_mode must be random, go_cyclic or go_cyclic_unique")
+        if self.weak_focus_queries_per_episode < 0:
+            raise ValueError("weak_focus_queries_per_episode cannot be negative")
+        if self.weak_focus_targets_per_query < 0:
+            raise ValueError("weak_focus_targets_per_query cannot be negative")
+        if self.weak_focus_scan_limit <= 0:
+            raise ValueError("weak_focus_scan_limit must be positive")
+        if self.weak_focus_specificity_power < 0:
+            raise ValueError("weak_focus_specificity_power cannot be negative")
+        if not 0.5 <= self.weak_focus_min_probability <= 1.0:
+            raise ValueError("weak_focus_min_probability must lie in [0.5,1]")
+        if self.weak_focus_queries_per_episode > 0:
+            if self.pseudo_sampling_mode != "go_cyclic_unique":
+                raise ValueError("weak-focus scheduling requires pseudo_sampling_mode=go_cyclic_unique")
+            if self.query_sampling_mode != "shuffled_cycle":
+                raise ValueError("weak-focus scheduling requires query_sampling_mode=shuffled_cycle")
+            if self.weak_focus_targets_per_query <= 0:
+                raise ValueError("weak_focus_targets_per_query must be positive when weak focus is enabled")
+            if self.weak_focus_targets_per_query > self.pseudo_positive_per_query:
+                raise ValueError("weak_focus_targets_per_query cannot exceed pseudo_positive_per_query")
         if self.hierarchy_pairs_per_episode < 0:
             raise ValueError("hierarchy_pairs_per_episode cannot be negative")
-        if 2 * self.hierarchy_pairs_per_episode > self.num_queries:
+        reserved_queries = (
+            2 * self.hierarchy_pairs_per_episode
+            + self.weak_focus_queries_per_episode
+        )
+        if reserved_queries >= self.num_queries:
             raise ValueError(
-                "2 * hierarchy_pairs_per_episode cannot exceed num_queries"
+                "hierarchy and weak-focus query slots must leave at least one "
+                "shuffled-cycle GO coverage slot"
             )
         if not 0.0 <= self.sampled_unlabelled_weight <= 1.0:
             raise ValueError("sampled_unlabelled_weight must lie in [0,1]")
@@ -189,13 +235,18 @@ class GOQueryEpisodeSampler:
         task_to_ontology_go: Optional[np.ndarray] = None,
         candidate_attributes: Optional[FixedDegreeCandidateAttributeStore] = None,
         pseudo: Optional[GOProteinCSRStore] = None,
+        pseudo_by_protein: Optional[RoleLocalProteinGOCSRStore] = None,
+        pseudo_active_role_rows: Optional[np.ndarray] = None,
         hierarchy_pairs: Optional[np.ndarray] = None,
         config: Optional[NBSQueryEpisodeConfig] = None,
         seed: int = 3407,
+        weak_global_start: Optional[int] = None,
+        weak_global_end: Optional[int] = None,
     ) -> None:
         self.gold = gold
         self.candidate = candidate
         self.pseudo = pseudo
+        self.pseudo_by_protein = pseudo_by_protein
         self.base_logit_store = base_logits
         self.candidate_attributes = candidate_attributes
         self.train_go_counts = np.asarray(train_go_counts, dtype=np.float64)
@@ -265,6 +316,7 @@ class GOQueryEpisodeSampler:
             raise ValueError("not enough eligible GO terms for the requested query episode")
         eligible_mask = np.zeros(self.gold.num_go, dtype=bool)
         eligible_mask[self.eligible_go] = True
+        self.eligible_go_mask = eligible_mask
         if self.hierarchy_pairs.size:
             keep = (
                 eligible_mask[self.hierarchy_pairs[0]]
@@ -285,13 +337,372 @@ class GOQueryEpisodeSampler:
             )
         self.base_seed = int(seed)
         self.rng = np.random.default_rng(seed)
+        self.weak_global_start = None if weak_global_start is None else int(weak_global_start)
+        self.weak_global_end = None if weak_global_end is None else int(weak_global_end)
+        if self.config.pseudo_sampling_mode == "go_cyclic_unique":
+            if self.weak_global_start is None or self.weak_global_end is None:
+                raise ValueError("go_cyclic_unique requires weak_global_start/weak_global_end")
+            if self.weak_global_end <= self.weak_global_start:
+                raise ValueError("invalid weak global protein range")
+        if self.config.weak_focus_queries_per_episode > 0:
+            if self.pseudo_by_protein is None:
+                raise ValueError("weak-focus scheduling requires the protein-major pseudo CSR")
+            if self.pseudo_by_protein.role != "weak":
+                raise ValueError("weak-focus protein-major pseudo CSR must use role='weak'")
+        if pseudo_active_role_rows is None:
+            self.pseudo_active_role_rows = np.empty(0, dtype=np.int64)
+        else:
+            active_rows = np.unique(np.asarray(pseudo_active_role_rows, dtype=np.int64))
+            if active_rows.size and (
+                int(active_rows.min()) < 0
+                or self.weak_global_start is None
+                or self.weak_global_end is None
+                or int(active_rows.max()) >= self.weak_global_end - self.weak_global_start
+            ):
+                raise IndexError("pseudo_active_role_rows leaves the weak role-local space")
+            self.pseudo_active_role_rows = active_rows
+        self._pseudo_seen_epoch: Optional[int] = None
+        self._pseudo_seen: Optional[np.ndarray] = None
+        self._weak_focus_epoch: Optional[int] = None
+        self._weak_focus_cursor: int = 0
+        self._weak_focus_owned_cache: dict[tuple[int, int], np.ndarray] = {}
 
     @property
     def coverage_slots_per_episode(self) -> int:
         """Number of query slots reserved for deterministic GO-cycle coverage."""
-        if self.config.query_sampling_mode != "shuffled_cycle":
-            return int(self.config.num_queries)
-        return max(1, int(self.config.num_queries) - 2 * int(self.config.hierarchy_pairs_per_episode))
+        return max(
+            1,
+            int(self.config.num_queries)
+            - 2 * int(self.config.hierarchy_pairs_per_episode)
+            - int(self.config.weak_focus_queries_per_episode),
+        )
+
+    @staticmethod
+    def _coprime_stride(size: int, seed: int) -> int:
+        """Return a deterministic stride coprime to ``size``.
+
+        This defines a memory-free affine permutation over a potentially very
+        large GO-major pseudo list.  It avoids materialising a full random
+        permutation for high-degree GO terms.
+        """
+        import math
+
+        if size <= 1:
+            return 1
+        candidate = int(seed % size)
+        if candidate <= 0:
+            candidate = 1
+        if candidate % 2 == 0:
+            candidate += 1
+        while math.gcd(candidate, size) != 1:
+            candidate += 2
+            if candidate >= size:
+                candidate = 1
+        return candidate
+
+    def _cyclic_pseudo_indices(
+        self,
+        *,
+        size: int,
+        count: int,
+        go_idx: int,
+        epoch: int,
+        global_episode: int,
+    ) -> np.ndarray:
+        """Select a deterministic pseudo-positive chunk for one GO.
+
+        The base GO-cycle index is derived from the global DDP episode cursor.
+        Successive complete GO cycles therefore move to the next pseudo chunk
+        instead of repeatedly drawing the same weak proteins.  A per-epoch
+        affine permutation changes ordering without allocating O(degree) RAM.
+        """
+        if count <= 0 or size <= 0:
+            return np.empty(0, dtype=np.int64)
+        count = min(int(count), int(size))
+        cycle_index = (
+            int(global_episode) * int(self.coverage_slots_per_episode)
+        ) // max(1, int(self.eligible_go.size))
+        absolute_start = int(cycle_index) * int(count)
+        result: list[int] = []
+        remaining = int(count)
+        cursor = int(absolute_start)
+        while remaining > 0:
+            block = cursor // int(size)
+            offset = cursor % int(size)
+            take = min(remaining, int(size) - offset)
+            permutation_seed = (
+                self.base_seed
+                + int(epoch) * 1_000_003
+                + int(go_idx) * 104_729
+                + int(block) * 65_537
+            )
+            stride = self._coprime_stride(int(size), permutation_seed * 2 + 1)
+            shift = int((permutation_seed * 2_654_435_761) % int(size))
+            positions = np.arange(offset, offset + take, dtype=np.int64)
+            mapped = (stride * positions + shift) % int(size)
+            result.extend(mapped.astype(np.int64).tolist())
+            cursor += take
+            remaining -= take
+        return np.asarray(result, dtype=np.int64)
+
+    def _ensure_pseudo_seen_epoch(self, epoch: int) -> None:
+        if self.config.pseudo_sampling_mode != "go_cyclic_unique":
+            return
+        if self._pseudo_seen_epoch == int(epoch) and self._pseudo_seen is not None:
+            return
+        assert self.weak_global_start is not None and self.weak_global_end is not None
+        self._pseudo_seen_epoch = int(epoch)
+        self._pseudo_seen = np.zeros(
+            self.weak_global_end - self.weak_global_start, dtype=np.bool_
+        )
+
+    def _take_cyclic_pool(
+        self,
+        pool: np.ndarray,
+        *,
+        count: int,
+        go_idx: int,
+        epoch: int,
+        global_episode: int,
+        salt: int,
+    ) -> np.ndarray:
+        if count <= 0 or pool.size == 0:
+            return np.empty(0, dtype=np.int64)
+        take = min(int(count), int(pool.size))
+        # Reuse the memory-free affine permutation over the compact pool.
+        choice = self._cyclic_pseudo_indices(
+            size=int(pool.size),
+            count=take,
+            go_idx=int(go_idx) + int(salt) * 1_000_003,
+            epoch=int(epoch),
+            global_episode=int(global_episode),
+        )
+        return pool[choice].astype(np.int64, copy=False)
+
+    def _unique_pseudo_indices(
+        self,
+        proteins: np.ndarray,
+        *,
+        count: int,
+        go_idx: int,
+        epoch: int,
+        global_episode: int,
+        rank: int,
+        world_size: int,
+    ) -> np.ndarray:
+        """Prefer unseen weak proteins, then fall back deterministically.
+
+        The selection priority is:
+          unseen + rank-owned -> unseen -> rank-owned -> any.
+        This preserves GO-conditioned sampling while making a protein-major
+        epoch target meaningful in a multi-label pseudo graph.
+        """
+        if count <= 0 or proteins.size == 0:
+            return np.empty(0, dtype=np.int64)
+        self._ensure_pseudo_seen_epoch(int(epoch))
+        assert self._pseudo_seen is not None
+        assert self.weak_global_start is not None and self.weak_global_end is not None
+        local = proteins.astype(np.int64, copy=False) - int(self.weak_global_start)
+        if np.any(local < 0) or np.any(local >= self._pseudo_seen.size):
+            raise IndexError("pseudo protein leaves configured weak global range")
+        unseen = ~self._pseudo_seen[local]
+        if bool(self.config.pseudo_rank_partition) and int(world_size) > 1:
+            owner = (local % int(world_size)) == int(rank)
+        else:
+            owner = np.ones(local.shape, dtype=np.bool_)
+
+        selected_positions: list[np.ndarray] = []
+        selected_mask = np.zeros(proteins.size, dtype=np.bool_)
+        remaining = min(int(count), int(proteins.size))
+        priorities = (
+            unseen & owner,
+            unseen,
+            owner,
+            np.ones(proteins.size, dtype=np.bool_),
+        )
+        for priority, mask in enumerate(priorities):
+            if remaining <= 0:
+                break
+            pool = np.flatnonzero(mask & ~selected_mask).astype(np.int64)
+            if pool.size == 0:
+                continue
+            chosen = self._take_cyclic_pool(
+                pool,
+                count=remaining,
+                go_idx=int(go_idx),
+                epoch=int(epoch),
+                global_episode=int(global_episode),
+                salt=priority + 1,
+            )
+            if chosen.size:
+                selected_positions.append(chosen)
+                selected_mask[chosen] = True
+                remaining -= int(chosen.size)
+
+        if not selected_positions:
+            return np.empty(0, dtype=np.int64)
+        selected = np.concatenate(selected_positions).astype(np.int64, copy=False)
+        self._pseudo_seen[local[selected]] = True
+        return selected
+
+
+    def _ensure_weak_focus_epoch(self, epoch: int) -> None:
+        if self._weak_focus_epoch == int(epoch):
+            return
+        self._weak_focus_epoch = int(epoch)
+        self._weak_focus_cursor = 0
+
+    def _owned_active_role_rows(self, *, rank: int, world_size: int) -> np.ndarray:
+        key = (int(rank), int(world_size))
+        cached = self._weak_focus_owned_cache.get(key)
+        if cached is not None:
+            return cached
+        rows = self.pseudo_active_role_rows
+        if bool(self.config.pseudo_rank_partition) and int(world_size) > 1:
+            rows = rows[(rows % int(world_size)) == int(rank)]
+        rows = np.asarray(rows, dtype=np.int64)
+        self._weak_focus_owned_cache[key] = rows
+        return rows
+
+    def _next_weak_focus_role_row(
+        self,
+        *,
+        epoch: int,
+        rank: int,
+        world_size: int,
+    ) -> Optional[int]:
+        """Walk a deterministic affine permutation of rank-owned weak rows.
+
+        The cursor is stateful only within one epoch.  Checkpoints are written at
+        epoch boundaries, so this preserves deterministic resume semantics while
+        avoiding an O(Nweak) permutation allocation.
+        """
+        self._ensure_weak_focus_epoch(int(epoch))
+        rows = self._owned_active_role_rows(rank=int(rank), world_size=int(world_size))
+        if rows.size == 0:
+            return None
+        cursor = int(self._weak_focus_cursor)
+        self._weak_focus_cursor += 1
+        block = cursor // int(rows.size)
+        offset = cursor % int(rows.size)
+        seed = (
+            self.base_seed
+            + int(epoch) * 1_000_003
+            + int(rank) * 104_729
+            + int(block) * 65_537
+        )
+        stride = self._coprime_stride(int(rows.size), seed * 2 + 1)
+        shift = int((seed * 2_654_435_761) % int(rows.size))
+        position = int((stride * offset + shift) % int(rows.size))
+        return int(rows[position])
+
+    def _focus_go_score(
+        self,
+        go_idx: np.ndarray,
+        probability: np.ndarray,
+    ) -> np.ndarray:
+        """Balance modelout confidence, pseudo capacity and GO specificity.
+
+        Very broad GO terms often have enormous pseudo degree.  Confidence alone
+        would repeatedly choose these generic terms for weak-first scheduling.
+        The specificity factor keeps them as a fallback while preferring more
+        informative GO labels when the same weak protein has alternatives.
+        """
+        go = np.asarray(go_idx, dtype=np.int64)
+        prob = np.asarray(probability, dtype=np.float64)
+        target = max(1, int(self.config.weak_focus_targets_per_query))
+        capacity = np.minimum(self.pseudo_degree[go], target).astype(np.float64) / target
+        specificity = np.power(
+            1.0 + np.log1p(np.maximum(self.train_go_counts[go], 0.0)),
+            -float(self.config.weak_focus_specificity_power),
+        )
+        return prob * capacity * specificity
+
+    def _sample_weak_focus_anchors(
+        self,
+        *,
+        epoch: int,
+        rank: int,
+        world_size: int,
+        excluded_task: set[int],
+        excluded_ontology: set[int],
+    ) -> tuple[dict[int, tuple[np.ndarray, np.ndarray]], int]:
+        """Choose GO queries from unseen weak proteins and retain one anchor.
+
+        Only the GO identity is weak-first.  The resulting object is still a
+        standard GO-conditioned NBS query and receives core support exactly like
+        every other query.
+        """
+        requested = int(self.config.weak_focus_queries_per_episode)
+        if requested <= 0:
+            return {}, 0
+        if self.pseudo_by_protein is None:
+            raise RuntimeError("weak-focus scheduling requires pseudo_by_protein")
+        self._ensure_pseudo_seen_epoch(int(epoch))
+        assert self._pseudo_seen is not None
+        anchors: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        scanned = 0
+        used_role_rows: set[int] = set()
+        while len(anchors) < requested and scanned < int(self.config.weak_focus_scan_limit):
+            role_row = self._next_weak_focus_role_row(
+                epoch=int(epoch), rank=int(rank), world_size=int(world_size)
+            )
+            if role_row is None:
+                break
+            scanned += 1
+            if role_row in used_role_rows or bool(self._pseudo_seen[role_row]):
+                continue
+            values = self.pseudo_by_protein.get_role_row(role_row)
+            go = np.asarray(values["go_idx"], dtype=np.int64)
+            probability = np.asarray(values["probability"], dtype=np.float32)
+            if go.size == 0:
+                continue
+            keep = self.eligible_go_mask[go]
+            keep &= probability >= float(self.config.weak_focus_min_probability)
+            if excluded_task:
+                keep &= ~np.isin(go, np.fromiter(excluded_task, dtype=np.int64))
+            if not np.any(keep):
+                continue
+            go = go[keep]
+            probability = probability[keep]
+            ontology = self.task_to_ontology_go[go]
+            if excluded_ontology:
+                keep_ontology = ~np.isin(
+                    ontology, np.fromiter(excluded_ontology, dtype=np.int64)
+                )
+                go = go[keep_ontology]
+                probability = probability[keep_ontology]
+                ontology = ontology[keep_ontology]
+            if go.size == 0:
+                continue
+            score = self._focus_go_score(go, probability)
+            # Stable deterministic tie-break: larger score, then smaller task GO.
+            order = np.lexsort((go, -score))
+            choice = int(order[0])
+            selected_go = int(go[choice])
+            selected_probability = float(probability[choice])
+            protein = int(self.pseudo_by_protein.global_protein_for_role_row(role_row))
+            anchors[selected_go] = (
+                np.asarray([protein], dtype=np.int64),
+                np.asarray([selected_probability], dtype=np.float32),
+            )
+            used_role_rows.add(role_row)
+            excluded_task.add(selected_go)
+            excluded_ontology.add(int(self.task_to_ontology_go[selected_go]))
+        return anchors, scanned
+
+    def _mark_pseudo_seen(self, proteins: np.ndarray, *, epoch: int) -> int:
+        if proteins.size == 0 or self.config.pseudo_sampling_mode != "go_cyclic_unique":
+            return 0
+        self._ensure_pseudo_seen_epoch(int(epoch))
+        assert self._pseudo_seen is not None
+        assert self.weak_global_start is not None
+        local = np.asarray(proteins, dtype=np.int64) - int(self.weak_global_start)
+        if np.any(local < 0) or np.any(local >= self._pseudo_seen.size):
+            raise IndexError("pseudo protein leaves configured weak global range")
+        new_count = int(np.count_nonzero(~self._pseudo_seen[local]))
+        self._pseudo_seen[local] = True
+        return new_count
 
     def _gold_requirements(self, go_idx: int) -> tuple[int, int]:
         degree = int(self.gold_degree[int(go_idx)])
@@ -353,72 +764,77 @@ class GOQueryEpisodeSampler:
             raise RuntimeError("could not complete shuffled-cycle GO query selection")
         return selected
 
-    def _sample_query_indices(
-        self, *, epoch: Optional[int] = None, global_episode: Optional[int] = None
-    ) -> np.ndarray:
-        """Sample task GO columns, optionally forcing direct hierarchy pairs."""
+    def _sample_query_plan(
+        self,
+        *,
+        epoch: Optional[int] = None,
+        global_episode: Optional[int] = None,
+        rank: int = 0,
+        world_size: int = 1,
+    ) -> tuple[np.ndarray, dict[int, tuple[np.ndarray, np.ndarray]], int]:
+        """Build hierarchy, weak-focus and shuffled-cycle query slots."""
         cfg = self.config
-        n_pairs = int(cfg.hierarchy_pairs_per_episode)
-        if n_pairs <= 0:
-            if (
-                cfg.query_sampling_mode == "shuffled_cycle"
-                and epoch is not None
-                and global_episode is not None
-            ):
-                chosen = self._cycle_candidates(
-                    epoch=int(epoch),
-                    global_episode=int(global_episode),
-                    count=int(cfg.num_queries),
-                    excluded_task=set(),
-                    excluded_ontology=set(),
-                )
-                return np.asarray(chosen, dtype=np.int64)
-            return self.rng.choice(
-                self.eligible_go, size=cfg.num_queries, replace=False
-            ).astype(np.int64)
-
-        order = self.rng.permutation(self.hierarchy_pairs.shape[1])
         chosen: list[int] = []
         chosen_ontology: set[int] = set()
-        used_edges = 0
-        for edge_index in order.tolist():
-            child = int(self.hierarchy_pairs[0, edge_index])
-            parent = int(self.hierarchy_pairs[1, edge_index])
-            ontology_rows = (
-                int(self.task_to_ontology_go[child]),
-                int(self.task_to_ontology_go[parent]),
+
+        n_pairs = int(cfg.hierarchy_pairs_per_episode)
+        if n_pairs > 0:
+            order = self.rng.permutation(self.hierarchy_pairs.shape[1])
+            used_edges = 0
+            for edge_index in order.tolist():
+                child = int(self.hierarchy_pairs[0, edge_index])
+                parent = int(self.hierarchy_pairs[1, edge_index])
+                ontology_rows = (
+                    int(self.task_to_ontology_go[child]),
+                    int(self.task_to_ontology_go[parent]),
+                )
+                if child in chosen or parent in chosen:
+                    continue
+                if ontology_rows[0] == ontology_rows[1]:
+                    continue
+                if ontology_rows[0] in chosen_ontology or ontology_rows[1] in chosen_ontology:
+                    continue
+                chosen.extend([child, parent])
+                chosen_ontology.update(ontology_rows)
+                used_edges += 1
+                if used_edges >= n_pairs:
+                    break
+            if used_edges < n_pairs:
+                raise RuntimeError(
+                    "could not sample the requested number of disjoint hierarchy pairs"
+                )
+
+        focus_anchors: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        focus_scanned = 0
+        if int(cfg.weak_focus_queries_per_episode) > 0:
+            if epoch is None or global_episode is None:
+                raise ValueError("weak-focus scheduling requires epoch/global_episode context")
+            focus_anchors, focus_scanned = self._sample_weak_focus_anchors(
+                epoch=int(epoch),
+                rank=int(rank),
+                world_size=int(world_size),
+                excluded_task=set(chosen),
+                excluded_ontology=set(chosen_ontology),
             )
-            if child in chosen or parent in chosen:
-                continue
-            if ontology_rows[0] == ontology_rows[1]:
-                continue
-            if ontology_rows[0] in chosen_ontology or ontology_rows[1] in chosen_ontology:
-                continue
-            chosen.extend([child, parent])
-            chosen_ontology.update(ontology_rows)
-            used_edges += 1
-            if used_edges >= n_pairs:
-                break
-        if used_edges < n_pairs:
-            raise RuntimeError(
-                "could not sample the requested number of disjoint hierarchy pairs"
+            chosen.extend(int(go_idx) for go_idx in focus_anchors)
+            chosen_ontology.update(
+                int(self.task_to_ontology_go[int(go_idx)]) for go_idx in focus_anchors
             )
 
-        remaining = int(cfg.num_queries) - len(chosen)
-        if remaining > 0:
+        coverage_count = int(self.coverage_slots_per_episode)
+        if coverage_count > 0:
             if (
                 cfg.query_sampling_mode == "shuffled_cycle"
                 and epoch is not None
                 and global_episode is not None
             ):
-                extra = self._cycle_candidates(
+                coverage = self._cycle_candidates(
                     epoch=int(epoch),
                     global_episode=int(global_episode),
-                    count=remaining,
+                    count=coverage_count,
                     excluded_task=set(chosen),
                     excluded_ontology=set(chosen_ontology),
                 )
-                chosen.extend(extra)
             else:
                 candidates = [
                     int(go_idx)
@@ -426,24 +842,76 @@ class GOQueryEpisodeSampler:
                     if int(go_idx) not in chosen
                     and int(self.task_to_ontology_go[int(go_idx)]) not in chosen_ontology
                 ]
-                if len(candidates) < remaining:
-                    raise RuntimeError("not enough GO terms to complete hierarchy-aware episode")
-                extra = self.rng.choice(
+                if len(candidates) < coverage_count:
+                    raise RuntimeError("not enough GO terms for coverage query slots")
+                coverage = self.rng.choice(
                     np.asarray(candidates, dtype=np.int64),
-                    size=remaining,
+                    size=coverage_count,
                     replace=False,
-                ).astype(np.int64)
-                chosen.extend(extra.tolist())
+                ).astype(np.int64).tolist()
+            chosen.extend(coverage)
+            chosen_ontology.update(
+                int(self.task_to_ontology_go[int(go_idx)]) for go_idx in coverage
+            )
+
+        # Focus selection may occasionally find fewer distinct eligible GO terms
+        # than requested. Fill those non-coverage slots randomly; the fixed
+        # shuffled-cycle cursor remains untouched, so GO coverage accounting is
+        # still exact.
+        remaining = int(cfg.num_queries) - len(chosen)
+        if remaining > 0:
+            candidates = [
+                int(go_idx)
+                for go_idx in self.eligible_go.tolist()
+                if int(go_idx) not in chosen
+                and int(self.task_to_ontology_go[int(go_idx)]) not in chosen_ontology
+            ]
+            if len(candidates) < remaining:
+                raise RuntimeError("not enough GO terms to complete hybrid query episode")
+            extra = self.rng.choice(
+                np.asarray(candidates, dtype=np.int64), size=remaining, replace=False
+            ).astype(np.int64)
+            chosen.extend(extra.tolist())
+
+        if len(chosen) != int(cfg.num_queries):
+            raise RuntimeError(
+                f"hybrid query plan produced {len(chosen)} rows, expected {cfg.num_queries}"
+            )
         query = np.asarray(chosen, dtype=np.int64)
-        # Shuffle row order; hierarchy edge recovery later is index-based.
-        return query[self.rng.permutation(query.size)]
+        query = query[self.rng.permutation(query.size)]
+        return query, focus_anchors, int(focus_scanned)
+
+    def _sample_query_indices(
+        self, *, epoch: Optional[int] = None, global_episode: Optional[int] = None
+    ) -> np.ndarray:
+        """Backward-compatible query-only wrapper used by older tests."""
+        query, _, _ = self._sample_query_plan(
+            epoch=epoch, global_episode=global_episode, rank=0, world_size=1
+        )
+        return query
 
     def _sample_queries_and_support(
-        self, *, epoch: Optional[int] = None, global_episode: Optional[int] = None
-    ) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
+        self,
+        *,
+        epoch: Optional[int] = None,
+        global_episode: Optional[int] = None,
+        rank: int = 0,
+        world_size: int = 1,
+    ) -> tuple[
+        np.ndarray,
+        list[np.ndarray],
+        np.ndarray,
+        dict[int, tuple[np.ndarray, np.ndarray]],
+        int,
+    ]:
         cfg = self.config
         for _ in range(cfg.max_query_resample_attempts):
-            query = self._sample_query_indices(epoch=epoch, global_episode=global_episode)
+            query, focus_anchors, focus_scanned = self._sample_query_plan(
+                epoch=epoch,
+                global_episode=global_episode,
+                rank=int(rank),
+                world_size=int(world_size),
+            )
             # Canonical/alt-ID classifier columns may map to the same full
             # BoxSquaredEL class. Keep ontology queries unique inside an
             # episode while preserving the immutable task label space.
@@ -468,7 +936,13 @@ class GOQueryEpisodeSampler:
                     valid = False
                     break
             if valid:
-                return query, support, np.asarray(gold_positive_counts, dtype=np.int64)
+                return (
+                    query,
+                    support,
+                    np.asarray(gold_positive_counts, dtype=np.int64),
+                    focus_anchors,
+                    int(focus_scanned),
+                )
         raise RuntimeError("failed to sample episode-disjoint support/query positives")
 
     def sample(
@@ -477,14 +951,42 @@ class GOQueryEpisodeSampler:
         seed: Optional[int] = None,
         epoch: Optional[int] = None,
         global_episode: Optional[int] = None,
+        rank: int = 0,
+        world_size: int = 1,
     ) -> NBSGlobalEpisode:
         if seed is not None:
             self.rng = np.random.default_rng(int(seed))
         cfg = self.config
-        query_go, support_by_query, gold_positive_counts = self._sample_queries_and_support(
-            epoch=epoch, global_episode=global_episode
+        (
+            query_go,
+            support_by_query,
+            gold_positive_counts,
+            weak_focus_anchors,
+            weak_focus_scanned,
+        ) = self._sample_queries_and_support(
+            epoch=epoch,
+            global_episode=global_episode,
+            rank=int(rank),
+            world_size=int(world_size),
         )
         support_union = np.unique(np.concatenate(support_by_query))
+        # Reserve every weak-focus anchor before any per-query fill selection.
+        # Without this pre-marking, an anchor belonging to a later query could
+        # be consumed as an ordinary pseudo positive by an earlier GO, reducing
+        # unique weak-protein coverage inside the same episode.
+        weak_focus_anchor_new = 0
+        if weak_focus_anchors:
+            if epoch is None:
+                raise ValueError("weak-focus pseudo targets require an epoch context")
+            anchor_parts = [
+                np.asarray(values[0], dtype=np.int64)
+                for values in weak_focus_anchors.values()
+                if np.asarray(values[0]).size
+            ]
+            if anchor_parts:
+                weak_focus_anchor_new = self._mark_pseudo_seen(
+                    np.unique(np.concatenate(anchor_parts)), epoch=int(epoch)
+                )
         per_query_gold_positive: list[np.ndarray] = []
         per_query_hard: list[np.ndarray] = []
         per_query_hard_rank: list[np.ndarray] = []
@@ -554,20 +1056,83 @@ class GOQueryEpisodeSampler:
 
             pseudo_protein = np.empty(0, dtype=np.int64)
             pseudo_prob = np.empty(0, dtype=np.float32)
+            forced_protein, forced_prob = weak_focus_anchors.get(
+                int(go_idx),
+                (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32)),
+            )
+            forced_protein = np.asarray(forced_protein, dtype=np.int64)
+            forced_prob = np.asarray(forced_prob, dtype=np.float32)
+            if forced_protein.size and epoch is None:
+                raise ValueError("weak-focus pseudo targets require an epoch context")
+            # All focus anchors were pre-marked before entering this loop so
+            # ordinary pseudo filling cannot consume another query's anchor.
             if cfg.pseudo_positive_per_query > 0 and all_pseudo_protein.size:
                 keep = ~np.isin(
                     all_pseudo_protein, np.union1d(gold, support_union),
                     assume_unique=False,
                 )
-                pseudo_protein = all_pseudo_protein[keep]
-                pseudo_prob = all_pseudo_prob[keep]
-                if pseudo_protein.size:
-                    count = min(cfg.pseudo_positive_per_query, pseudo_protein.size)
-                    choice = self.rng.choice(
-                        pseudo_protein.size, size=count, replace=False
+                available_protein = all_pseudo_protein[keep]
+                available_prob = all_pseudo_prob[keep]
+                if forced_protein.size:
+                    keep_forced = ~np.isin(
+                        available_protein, forced_protein, assume_unique=False
                     )
-                    pseudo_protein = pseudo_protein[choice]
-                    pseudo_prob = pseudo_prob[choice]
+                    available_protein = available_protein[keep_forced]
+                    available_prob = available_prob[keep_forced]
+
+                desired = int(cfg.pseudo_positive_per_query)
+                if int(go_idx) in weak_focus_anchors:
+                    desired = min(
+                        desired, int(cfg.weak_focus_targets_per_query)
+                    )
+                remaining = max(0, desired - int(forced_protein.size))
+                selected_protein = np.empty(0, dtype=np.int64)
+                selected_prob = np.empty(0, dtype=np.float32)
+                if remaining > 0 and available_protein.size:
+                    count = min(remaining, int(available_protein.size))
+                    if (
+                        cfg.pseudo_sampling_mode == "go_cyclic_unique"
+                        and epoch is not None
+                        and global_episode is not None
+                    ):
+                        choice = self._unique_pseudo_indices(
+                            available_protein,
+                            count=int(count),
+                            go_idx=int(go_idx),
+                            epoch=int(epoch),
+                            global_episode=int(global_episode),
+                            rank=int(rank),
+                            world_size=int(world_size),
+                        )
+                    elif (
+                        cfg.pseudo_sampling_mode == "go_cyclic"
+                        and epoch is not None
+                        and global_episode is not None
+                    ):
+                        choice = self._cyclic_pseudo_indices(
+                            size=int(available_protein.size),
+                            count=int(count),
+                            go_idx=int(go_idx),
+                            epoch=int(epoch),
+                            global_episode=int(global_episode),
+                        )
+                    else:
+                        choice = self.rng.choice(
+                            available_protein.size, size=count, replace=False
+                        )
+                    selected_protein = available_protein[choice]
+                    selected_prob = available_prob[choice]
+                pseudo_protein = np.concatenate(
+                    [forced_protein, selected_protein]
+                ).astype(np.int64, copy=False)
+                pseudo_prob = np.concatenate(
+                    [forced_prob, selected_prob]
+                ).astype(np.float32, copy=False)
+            elif forced_protein.size:
+                # This path is mainly a defensive invariant.  Formal weak-focus
+                # configs require pseudo_positive_per_query > 0.
+                pseudo_protein = forced_protein
+                pseudo_prob = forced_prob
             per_query_pseudo.append(pseudo_protein)
             per_query_pseudo_prob.append(pseudo_prob)
 
@@ -603,6 +1168,10 @@ class GOQueryEpisodeSampler:
         retained_gold_pairs = 0
         retained_hard_pairs = 0
         retained_pseudo_pairs = 0
+        retained_weak_focus_pairs = 0
+        retained_gold_proteins: list[int] = []
+        retained_hard_proteins: list[int] = []
+        retained_pseudo_proteins: list[int] = []
 
         for row, go_idx in enumerate(query_go.tolist()):
             for protein in per_query_gold_positive[row].tolist():
@@ -612,6 +1181,7 @@ class GOQueryEpisodeSampler:
                     mask[row, column] = True
                     supervision_weight[row, column] = 1.0
                     retained_gold_pairs += 1
+                    retained_gold_proteins.append(int(protein))
             hard = per_query_hard[row]
             hard_rank = per_query_hard_rank[row]
             hard_attr = None
@@ -624,6 +1194,7 @@ class GOQueryEpisodeSampler:
                 mask[row, column] = True
                 supervision_weight[row, column] = cfg.sampled_unlabelled_weight
                 retained_hard_pairs += 1
+                retained_hard_proteins.append(int(protein))
                 if hard_attr is not None:
                     candidate_evidence[row, column] = hard_attr[index]
                 else:
@@ -642,6 +1213,9 @@ class GOQueryEpisodeSampler:
                 confidence[row, column] = normalized ** cfg.pseudo_confidence_power
                 supervision_weight[row, column] = 1.0
                 retained_pseudo_pairs += 1
+                if int(go_idx) in weak_focus_anchors:
+                    retained_weak_focus_pairs += 1
+                retained_pseudo_proteins.append(int(protein))
 
         base_logits = self.base_logit_store.gather_matrix(candidate_union, query_go)
         seed_protein = np.concatenate(support_by_query).astype(np.int64)
@@ -671,6 +1245,25 @@ class GOQueryEpisodeSampler:
                 "eligible_go_count": int(self.eligible_go.size),
                 "query_sampling_mode": str(cfg.query_sampling_mode),
                 "gold_support_policy": str(cfg.gold_support_policy),
+                "pseudo_sampling_mode": str(cfg.pseudo_sampling_mode),
+                "weak_focus_queries_requested": int(cfg.weak_focus_queries_per_episode),
+                "weak_focus_queries_realized": int(len(weak_focus_anchors)),
+                "weak_focus_scan_count": int(weak_focus_scanned),
+                "weak_focus_anchor_new_count": int(weak_focus_anchor_new),
+                "weak_focus_target_capacity_requested": int(
+                    len(weak_focus_anchors) * int(cfg.weak_focus_targets_per_query)
+                ),
+                # Selected before the global candidate-union cap.  Kept under
+                # the legacy key for compatibility with v0.5.4 probes.
+                "weak_focus_targets_requested": int(sum(
+                    per_query_pseudo[row].size
+                    for row, query_go_idx in enumerate(query_go.tolist())
+                    if int(query_go_idx) in weak_focus_anchors
+                )),
+                "weak_focus_targets_retained": int(retained_weak_focus_pairs),
+                "pseudo_seen_rank": (
+                    0 if self._pseudo_seen is None else int(np.count_nonzero(self._pseudo_seen))
+                ),
                 "query_gold_count_eq1": int(np.sum(self.gold_degree[query_go] == 1)),
                 "query_gold_count_eq2": int(np.sum(self.gold_degree[query_go] == 2)),
                 "query_gold_count_3_4": int(np.sum((self.gold_degree[query_go] >= 3) & (self.gold_degree[query_go] <= 4))),
@@ -678,6 +1271,23 @@ class GOQueryEpisodeSampler:
                 "query_with_pseudo_pool": int(np.sum(self.pseudo_degree[query_go] > 0)),
                 "query_with_backbone_candidate_pool": int(np.sum(self.candidate_degree[query_go] > 0)),
                 "support_proteins": int(seed_protein.size),
+                # Exact global protein IDs are retained only in transient batch
+                # metadata.  They are consumed by epoch-level coverage audits
+                # and are never written into checkpoints or dense graph stores.
+                "support_protein_idx": np.unique(seed_protein).astype(np.int64),
+                "candidate_protein_idx": candidate_union.astype(np.int64),
+                "root_protein_idx": np.unique(
+                    np.concatenate([seed_protein, candidate_union])
+                ).astype(np.int64),
+                "gold_target_protein_idx": np.unique(
+                    np.asarray(retained_gold_proteins, dtype=np.int64)
+                ),
+                "hard_target_protein_idx": np.unique(
+                    np.asarray(retained_hard_proteins, dtype=np.int64)
+                ),
+                "pseudo_target_protein_idx": np.unique(
+                    np.asarray(retained_pseudo_proteins, dtype=np.int64)
+                ),
                 "candidate_union_before_cap": int(candidate_union_before_cap),
                 "candidate_union_after_cap": int(candidate_union.size),
                 "candidate_dropped_by_cap": int(max(0, candidate_union_before_cap - int(candidate_union.size))),

@@ -21,6 +21,25 @@ def _load_callable(spec: str) -> Callable[[dict[str, Any]], Any]:
     return function
 
 
+
+def _metadata_for_json(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Keep smoke output compact when transient coverage ID arrays are present."""
+
+    result: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if isinstance(value, np.ndarray):
+            flat = np.asarray(value).reshape(-1)
+            result[key] = {
+                "count": int(flat.size),
+                "min": None if flat.size == 0 else int(flat.min()),
+                "max": None if flat.size == 0 else int(flat.max()),
+            }
+        elif isinstance(value, np.generic):
+            result[key] = value.item()
+        else:
+            result[key] = value
+    return result
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Materialize and audit one real LATENCE NBS local batch"
@@ -105,7 +124,7 @@ def main() -> None:
             "|".join(edge_type): edge_count(edge_type)
             for edge_type in graph.edge_types
         },
-        "metadata": dict(batch.metadata),
+        "metadata": _metadata_for_json(dict(batch.metadata)),
         "full_go_cache_nodes": int(loader.global_go_graph["go"].num_nodes),
         "direction_safe": not failures,
         "failures": failures,

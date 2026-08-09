@@ -8,8 +8,10 @@ import torch
 
 from nbs_pg import NBSConfig, ProteinGONBSModel, load_boxsqel_training_contract
 from nbs_pg.training import (
+    NBSFixedEpochTrainingConfig,
     NBSLossConfig,
     NBSRunComponents,
+    build_nbs_scheduler,
     freeze_go_geometry,
 )
 
@@ -56,7 +58,7 @@ def _load_callable(spec: str) -> Callable[[dict[str, Any]], Any]:
 def _build_optimizer(model: torch.nn.Module, config: dict[str, Any]) -> torch.optim.Optimizer:
     optimizer_config = config.get("optimizer", {})
     if optimizer_config.get("name", "adamw").lower() != "adamw":
-        raise ValueError("the v0.4 reference component factory currently supports AdamW")
+        raise ValueError("the v0.5.1 reference component factory currently supports AdamW")
     base_lr = float(optimizer_config.get("lr", 1e-4))
     graph_scale_lr = float(optimizer_config.get("graph_delta_scale_lr", 5e-4))
     weight_decay = float(optimizer_config.get("weight_decay", 1e-4))
@@ -121,12 +123,23 @@ def build_components(config: dict[str, Any]) -> NBSRunComponents:
     if bool(config.get("stage", {}).get("freeze_go_geometry", True)):
         freeze_go_geometry(model, True)
     optimizer = _build_optimizer(model, config)
+    training_config = NBSFixedEpochTrainingConfig.from_mapping(config.get("training", {}))
+    training_config.validate()
+    scheduler, scheduler_contract = build_nbs_scheduler(
+        optimizer,
+        config.get("scheduler", {}),
+        training_config,
+        loader,
+        runtime=config.get("_distributed_runtime", {}),
+        episode_config=config.get("episode", {}),
+        local_sampling_config=config.get("local_sampling", {}),
+    )
     loss_config = NBSLossConfig.from_mapping(config.get("loss", {}))
     return NBSRunComponents(
         model=model,
         optimizer=optimizer,
         train_loader=loader,
-        scheduler=None,
+        scheduler=scheduler,
         loss_config=loss_config,
         global_go_graph=getattr(loader, "global_go_graph", None),
         metadata={
@@ -136,6 +149,7 @@ def build_components(config: dict[str, Any]) -> NBSRunComponents:
             "selection_policy": "fixed_epoch_snapshots",
             "loader": type(loader).__name__,
             "distributed_runtime": dict(config.get("_distributed_runtime", {})),
+            "scheduler_contract": scheduler_contract,
             "validation_used": False,
             "early_stopping": False,
             "boxsqel": contract.summary(),
