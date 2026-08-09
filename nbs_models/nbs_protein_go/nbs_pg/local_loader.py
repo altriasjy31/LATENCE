@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,7 +40,10 @@ from .training import NBSLocalBatch
 
 @dataclass
 class NBSLocalGraphSamplingConfig:
-    steps_per_epoch_per_rank: int = 1000
+    # Explicit synchronized steps per epoch.  ``None`` lets the loader derive
+    # a world-size-invariant epoch length from GO coverage.
+    steps_per_epoch_per_rank: Optional[int] = 1000
+    coverage_cycles_per_epoch: float = 1.0
     pp_hops: int = 2
     ppi_fanouts: tuple[int, ...] = (8, 4)
     similar_to_fanouts: tuple[int, ...] = (8, 4)
@@ -63,13 +67,19 @@ class NBSLocalGraphSamplingConfig:
                 raw[name] = tuple(int(x) for x in raw[name])
         if "gold_message_topk" in raw and raw["gold_message_topk"] is not None:
             raw["gold_message_topk"] = int(raw["gold_message_topk"])
+        if "steps_per_epoch_per_rank" in raw and raw["steps_per_epoch_per_rank"] is not None:
+            raw["steps_per_epoch_per_rank"] = int(raw["steps_per_epoch_per_rank"])
+        if "coverage_cycles_per_epoch" in raw:
+            raw["coverage_cycles_per_epoch"] = float(raw["coverage_cycles_per_epoch"])
         result = cls(**raw)
         result.validate()
         return result
 
     def validate(self) -> None:
-        if self.steps_per_epoch_per_rank <= 0:
-            raise ValueError("steps_per_epoch_per_rank must be positive")
+        if self.steps_per_epoch_per_rank is not None and self.steps_per_epoch_per_rank <= 0:
+            raise ValueError("steps_per_epoch_per_rank must be positive or None")
+        if self.coverage_cycles_per_epoch <= 0:
+            raise ValueError("coverage_cycles_per_epoch must be positive")
         if self.pp_hops <= 0 or self.go_hops < 0:
             raise ValueError("invalid P-P/GO hop count")
         if self.gold_message_topk is not None and self.gold_message_topk <= 0:
@@ -480,6 +490,7 @@ class LatenceNBSLocalGraphMaterializer:
             query=query,
             hierarchy_edges=hierarchy_edges,
             metadata={
+                **dict(episode.metadata),
                 "global_seed": int(seed),
                 "protein_nodes": int(protein_nodes.size),
                 "go_nodes": int(go_nodes.size),
@@ -530,6 +541,7 @@ class LatenceNBSLocalBatchLoader:
         world_size: int,
         steps_per_epoch_per_rank: int,
         base_seed: int,
+        coverage_plan: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.sampler = sampler
         self.materializer = materializer
@@ -537,6 +549,11 @@ class LatenceNBSLocalBatchLoader:
         self.world_size = int(world_size)
         self.steps = int(steps_per_epoch_per_rank)
         self.base_seed = int(base_seed)
+        self.coverage_plan = dict(coverage_plan or {})
+        sample_parameters = inspect.signature(self.sampler.sample).parameters
+        self._sampler_supports_episode_context = (
+            "epoch" in sample_parameters and "global_episode" in sample_parameters
+        )
         self.epoch = 1
         self.global_go_graph = materializer.build_global_go_graph()
         if self.steps <= 0 or self.world_size <= 0 or not 0 <= self.rank < self.world_size:
@@ -556,7 +573,12 @@ class LatenceNBSLocalBatchLoader:
                 + self.epoch * 1_000_003
                 + global_episode * 97
             )
-            episode = self.sampler.sample(seed=seed)
+            if self._sampler_supports_episode_context:
+                episode = self.sampler.sample(
+                    seed=seed, epoch=self.epoch, global_episode=global_episode
+                )
+            else:
+                episode = self.sampler.sample(seed=seed)
             yield self.materializer.materialize(episode, seed=seed + 31)
 
 
@@ -739,11 +761,34 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
     sampling_cfg = NBSLocalGraphSamplingConfig.from_mapping(config.get("local_sampling"))
     stores = build_latence_nbs_stores(config)
     materializer = LatenceNBSLocalGraphMaterializer(stores, sampling_cfg)
+    explicit_steps = sampling_cfg.steps_per_epoch_per_rank
+    coverage_slots = int(stores.episode_sampler.coverage_slots_per_episode)
+    eligible_go_count = int(stores.episode_sampler.eligible_go.size)
+    if explicit_steps is None:
+        global_slots_per_step = max(1, coverage_slots * world_size)
+        resolved_steps = int(np.ceil(
+            eligible_go_count * float(sampling_cfg.coverage_cycles_per_epoch)
+            / global_slots_per_step
+        ))
+    else:
+        resolved_steps = int(explicit_steps)
+    coverage_plan = {
+        "eligible_go_count": eligible_go_count,
+        "eligibility_summary": dict(stores.episode_sampler.eligibility_summary),
+        "coverage_slots_per_episode": coverage_slots,
+        "world_size": int(world_size),
+        "coverage_cycles_per_epoch": float(sampling_cfg.coverage_cycles_per_epoch),
+        "resolved_steps_per_epoch_per_rank": int(resolved_steps),
+        "estimated_base_cycle_coverage": float(
+            resolved_steps * coverage_slots * world_size / max(1, eligible_go_count)
+        ),
+    }
     return LatenceNBSLocalBatchLoader(
         stores.episode_sampler,
         materializer,
         rank=rank,
         world_size=world_size,
-        steps_per_epoch_per_rank=sampling_cfg.steps_per_epoch_per_rank,
+        steps_per_epoch_per_rank=resolved_steps,
         base_seed=sampling_cfg.base_seed,
+        coverage_plan=coverage_plan,
     )

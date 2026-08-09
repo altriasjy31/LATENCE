@@ -18,7 +18,7 @@ def main() -> None:
             / "nbs_models"
             / "nbs_protein_go"
             / "configs"
-            / "bp_fixed_epoch_v0.4.6.json",
+            / "bp_fixed_epoch_v0.4.8.json",
         )
     )
     train_script = project_root / "scripts" / "nbs" / "train_nbs_fixed_epochs.py"
@@ -59,9 +59,13 @@ def main() -> None:
         "NBS_SUPPORT_PER_QUERY": "--support-per-query",
         "NBS_GOLD_POSITIVE_PER_QUERY": "--gold-positive-per-query",
         "NBS_HIERARCHY_PAIRS_PER_EPISODE": "--hierarchy-pairs-per-episode",
+        "NBS_QUERY_SAMPLING_MODE": "--query-sampling-mode",
+        "NBS_GOLD_SUPPORT_POLICY": "--gold-support-policy",
+        "NBS_SINGLETON_REQUIRES_PSEUDO": "--singleton-requires-pseudo",
         "NBS_CANDIDATE_MESSAGE_TOPK": "--candidate-message-topk",
         "NBS_PSEUDO_MESSAGE_TOPK": "--pseudo-message-topk",
         "NBS_STEPS_PER_EPOCH_PER_RANK": "--steps-per-epoch-per-rank",
+        "NBS_COVERAGE_CYCLES_PER_EPOCH": "--coverage-cycles-per-epoch",
         "NBS_PROGRESS_BAR": "--progress-bar",
     }
     for env_name, flag in env_arg_map.items():

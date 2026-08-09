@@ -4,14 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nbs-protein-go"
-version = "0.4.6"
+version = "0.4.9"
 description = "Neighborhood-BoxSquare protein-GO model with BoxSquaredEL geometry"
 requires-python = ">=3.10"
 dependencies = [
   "torch>=2.4",
   "torch-geometric>=2.5",
   "numpy>=1.26",
-  "tqdm>=4.66",
 ]
 
 [tool.setuptools.packages.find]

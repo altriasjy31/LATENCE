@@ -1,6 +1,6 @@
 """Neighborhood--BoxSquare (NBS) with BoxSquaredEL protein--GO geometry."""
 
-__version__ = "0.4.5"
+__version__ = "0.4.9"
 
 from .boxsqel_manifest import (
     BoxSquaredELTrainingContract,

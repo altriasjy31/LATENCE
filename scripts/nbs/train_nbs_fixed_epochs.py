@@ -72,9 +72,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--support-per-query", type=int, default=None)
     parser.add_argument("--gold-positive-per-query", type=int, default=None)
     parser.add_argument("--hierarchy-pairs-per-episode", type=int, default=None)
+    parser.add_argument("--query-sampling-mode", choices=["random", "shuffled_cycle"], default=None)
+    parser.add_argument("--gold-support-policy", choices=["fixed", "adaptive_rare"], default=None)
+    parser.add_argument("--singleton-requires-pseudo", type=int, choices=[0, 1], default=None)
     parser.add_argument("--candidate-message-topk", type=int, default=None)
     parser.add_argument("--pseudo-message-topk", type=int, default=None)
     parser.add_argument("--steps-per-epoch-per-rank", type=int, default=None)
+    parser.add_argument("--coverage-cycles-per-epoch", type=float, default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--distributed", action="store_true", help="enable DDP even when WORLD_SIZE is not preset")
     parser.add_argument(
@@ -146,6 +150,12 @@ def main() -> None:
     for key, value in episode_overrides.items():
         if value is not None:
             episode_raw[key] = int(value)
+    if args.query_sampling_mode is not None:
+        episode_raw["query_sampling_mode"] = str(args.query_sampling_mode)
+    if args.gold_support_policy is not None:
+        episode_raw["gold_support_policy"] = str(args.gold_support_policy)
+    if args.singleton_requires_pseudo is not None:
+        episode_raw["singleton_requires_pseudo"] = bool(args.singleton_requires_pseudo)
 
     sampling_raw = config.setdefault("local_sampling", {})
     sampling_overrides = {
@@ -156,6 +166,8 @@ def main() -> None:
     for key, value in sampling_overrides.items():
         if value is not None:
             sampling_raw[key] = int(value)
+    if args.coverage_cycles_per_epoch is not None:
+        sampling_raw["coverage_cycles_per_epoch"] = float(args.coverage_cycles_per_epoch)
 
     if args.output_dir is not None:
         training_raw["output_dir"] = args.output_dir

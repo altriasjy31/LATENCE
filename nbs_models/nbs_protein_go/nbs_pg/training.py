@@ -421,8 +421,8 @@ class NBSFixedEpochTrainer:
     ) -> dict[str, Any]:
         model_config = getattr(self.base_model, "config", None)
         payload: dict[str, Any] = {
-            "checkpoint_type": "latence_nbs_fixed_epoch_v0.4.6",
-            "nbs_version": "0.4.6",
+            "checkpoint_type": "latence_nbs_fixed_epoch_v0.4.9",
+            "nbs_version": "0.4.9",
             "epoch": int(epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.base_model.state_dict(),
@@ -556,6 +556,15 @@ class NBSFixedEpochTrainer:
         if self.device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(self.device)
         batch_totals: dict[str, float] = {}
+        query_seen: set[int] = set()
+        query_seen_by_bucket: dict[str, set[int]] = {
+            "eq1": set(),
+            "eq2": set(),
+            "3_4": set(),
+            "gt4": set(),
+        }
+        eligible_go_count: Optional[int] = None
+        coverage_plan = dict(getattr(loader, "coverage_plan", {}) or {})
         progress = None
         if (
             self.config.progress_bar
@@ -578,15 +587,67 @@ class NBSFixedEpochTrainer:
             ):
                 break
             batch = raw_batch.to(self.device)
-            for key in (
+            scalar_metadata_keys = (
                 "protein_nodes",
                 "go_nodes",
                 "candidate_edges_materialized",
                 "hierarchy_query_edges",
-            ):
-                value = raw_batch.metadata.get(key) if isinstance(raw_batch.metadata, Mapping) else None
-                if value is not None:
-                    batch_totals[key] = batch_totals.get(key, 0.0) + float(value)
+                "query_gold_count_eq1",
+                "query_gold_count_eq2",
+                "query_gold_count_3_4",
+                "query_gold_count_gt4",
+                # These fields were already present in episode metadata and in
+                # the tqdm postfix, but v0.4.8 forgot to accumulate them for the
+                # epoch summary, which made qcan/qps print as 0.0.
+                "query_with_pseudo_pool",
+                "query_with_backbone_candidate_pool",
+                "support_proteins",
+                "candidate_union_before_cap",
+                "candidate_union_after_cap",
+                "candidate_dropped_by_cap",
+                "candidate_truncation_fraction",
+                "gold_pairs_requested",
+                "gold_pairs_retained",
+                "hard_pairs_requested",
+                "hard_pairs_retained",
+                "pseudo_pairs_requested",
+                "pseudo_pairs_retained",
+            )
+            if isinstance(raw_batch.metadata, Mapping):
+                for key in scalar_metadata_keys:
+                    value = raw_batch.metadata.get(key)
+                    if value is not None:
+                        batch_totals[key] = batch_totals.get(key, 0.0) + float(value)
+                query_values = raw_batch.metadata.get("query_go_idx")
+                query_gold_counts = raw_batch.metadata.get("query_gold_counts")
+                if query_values is not None:
+                    query_values = [int(value) for value in query_values]
+                    query_seen.update(query_values)
+                    if query_gold_counts is not None:
+                        query_gold_counts = [int(value) for value in query_gold_counts]
+                        if len(query_gold_counts) != len(query_values):
+                            raise RuntimeError(
+                                "query_gold_counts must align with query_go_idx"
+                            )
+                        for go_idx, count in zip(query_values, query_gold_counts):
+                            if count == 1:
+                                query_seen_by_bucket["eq1"].add(go_idx)
+                            elif count == 2:
+                                query_seen_by_bucket["eq2"].add(go_idx)
+                            elif 3 <= count <= 4:
+                                query_seen_by_bucket["3_4"].add(go_idx)
+                            elif count > 4:
+                                query_seen_by_bucket["gt4"].add(go_idx)
+                            else:
+                                raise RuntimeError(
+                                    f"eligible query GO has invalid gold count {count}"
+                                )
+                if raw_batch.metadata.get("eligible_go_count") is not None:
+                    current_eligible = int(raw_batch.metadata["eligible_go_count"])
+                    if eligible_go_count is None:
+                        eligible_go_count = current_eligible
+                    elif eligible_go_count != current_eligible:
+                        raise RuntimeError("eligible GO count changed within one epoch")
             if batch.global_go_cache is None and self.global_go_cache is not None:
                 batch.global_go_cache = self.global_go_cache
             is_last = effective_steps is not None and step >= effective_steps
@@ -647,13 +708,19 @@ class NBSFixedEpochTrainer:
                     if self.device.type == "cuda"
                     else 0.0
                 )
+                meta = raw_batch.metadata if isinstance(raw_batch.metadata, Mapping) else {}
                 status = {
                     "loss": f"{float(loss.detach().cpu()):.4f}",
                     "gold": f"{_part('gold_asl'):.3g}",
                     "pseudo": f"{_part('pseudo_asl'):.3g}",
-                    "g_pairs": int(_part('gold_supervised_pairs')),
-                    "p_pairs": int(_part('pseudo_supervised_pairs')),
+                    "gpos": int(meta.get("gold_pairs_retained", 0)),
+                    "hard": int(meta.get("hard_pairs_retained", 0)),
+                    "ppos": int(meta.get("pseudo_pairs_retained", 0)),
+                    "qps": int(meta.get("query_with_pseudo_pool", 0)),
+                    "qcan": int(meta.get("query_with_backbone_candidate_pool", 0)),
                     "h_pairs": int(_part('hierarchy_pairs')),
+                    "qseen_r0": len(query_seen),
+                    "capdrop": f"{float(meta.get('candidate_truncation_fraction', 0.0)):.1%}",
                     "gscale": f"{scale_value:.4f}",
                 }
                 if self.device.type == "cuda":
@@ -711,6 +778,91 @@ class NBSFixedEpochTrainer:
                 metrics[name.removeprefix("loss/")] = value / global_steps
             elif name.startswith("batch/"):
                 metrics[f"avg_{name.removeprefix('batch/')}"] = value / global_steps
+
+        gathered_query_state = self.distributed.all_gather_object(
+            {
+                "all": sorted(query_seen),
+                **{
+                    bucket: sorted(values)
+                    for bucket, values in query_seen_by_bucket.items()
+                },
+            }
+        )
+        global_query_seen: set[int] = set()
+        global_query_seen_by_bucket: dict[str, set[int]] = {
+            "eq1": set(),
+            "eq2": set(),
+            "3_4": set(),
+            "gt4": set(),
+        }
+        for state in gathered_query_state:
+            global_query_seen.update(int(value) for value in state.get("all", []))
+            for bucket in global_query_seen_by_bucket:
+                global_query_seen_by_bucket[bucket].update(
+                    int(value) for value in state.get(bucket, [])
+                )
+        denominator = int(eligible_go_count or coverage_plan.get("eligible_go_count", 0) or 0)
+        metrics["unique_query_go_count"] = int(len(global_query_seen))
+        metrics["eligible_go_count"] = denominator
+        metrics["query_coverage_rate"] = (
+            0.0 if denominator <= 0 else float(len(global_query_seen) / denominator)
+        )
+        metrics["coverage_plan"] = coverage_plan
+        metrics["eligibility_summary"] = dict(coverage_plan.get("eligibility_summary", {}) or {})
+
+        eligibility = metrics["eligibility_summary"]
+        bucket_specs = {
+            "eq1": ("eligible_gold_count_eq1", "query_gold_count_eq1"),
+            "eq2": ("eligible_gold_count_eq2", "query_gold_count_eq2"),
+            "3_4": ("eligible_gold_count_3_4", "query_gold_count_3_4"),
+            "gt4": ("eligible_gold_count_gt4", "query_gold_count_gt4"),
+        }
+        for bucket, (eligible_key, occurrence_key) in bucket_specs.items():
+            eligible_count = int(eligibility.get(eligible_key, 0) or 0)
+            unique_count = int(len(global_query_seen_by_bucket[bucket]))
+            occurrence_count = int(round(float(
+                reduced.get(f"batch/{occurrence_key}", 0.0)
+            )))
+            metrics[f"eligible_query_go_{bucket}"] = eligible_count
+            metrics[f"unique_query_go_{bucket}"] = unique_count
+            metrics[f"query_occurrences_{bucket}"] = occurrence_count
+            metrics[f"query_coverage_rate_{bucket}"] = (
+                0.0 if eligible_count <= 0 else float(unique_count / eligible_count)
+            )
+
+        total_query_occurrences = int(sum(
+            metrics[f"query_occurrences_{bucket}"]
+            for bucket in bucket_specs
+        ))
+        metrics["query_occurrences_total"] = total_query_occurrences
+        candidate_pool_occurrences = int(round(float(
+            reduced.get("batch/query_with_backbone_candidate_pool", 0.0)
+        )))
+        pseudo_pool_occurrences = int(round(float(
+            reduced.get("batch/query_with_pseudo_pool", 0.0)
+        )))
+        metrics["query_with_backbone_candidate_pool_occurrences"] = candidate_pool_occurrences
+        metrics["query_with_pseudo_pool_occurrences"] = pseudo_pool_occurrences
+        metrics["query_with_backbone_candidate_pool_rate"] = (
+            0.0
+            if total_query_occurrences <= 0
+            else float(candidate_pool_occurrences / total_query_occurrences)
+        )
+        metrics["query_with_pseudo_pool_rate"] = (
+            0.0
+            if total_query_occurrences <= 0
+            else float(pseudo_pool_occurrences / total_query_occurrences)
+        )
+        hard_requested = float(metrics.get("avg_hard_pairs_requested", 0.0))
+        hard_retained = float(metrics.get("avg_hard_pairs_retained", 0.0))
+        metrics["hard_pair_retention_rate"] = (
+            1.0 if hard_requested <= 0 else min(1.0, hard_retained / hard_requested)
+        )
+        candidate_before = float(metrics.get("avg_candidate_union_before_cap", 0.0))
+        candidate_after = float(metrics.get("avg_candidate_union_after_cap", 0.0))
+        metrics["candidate_capacity_retention_rate"] = (
+            1.0 if candidate_before <= 0 else min(1.0, candidate_after / candidate_before)
+        )
         if self.device.type == "cuda":
             local_peak_alloc = float(torch.cuda.max_memory_allocated(self.device)) / (1024 ** 3)
             local_peak_reserved = float(torch.cuda.max_memory_reserved(self.device)) / (1024 ** 3)
@@ -749,6 +901,27 @@ class NBSFixedEpochTrainer:
             f"world_size={self.distributed.world_size}, "
             "validation=False, early_stopping=False"
         )
+        coverage_plan = dict(getattr(self.components.train_loader, "coverage_plan", {}) or {})
+        if coverage_plan and self.distributed.is_main_process:
+            eligibility = dict(coverage_plan.get("eligibility_summary", {}) or {})
+            (self.output_dir / "query_coverage_plan.json").write_text(
+                json.dumps(_json_safe(coverage_plan), indent=2) + "\n", encoding="utf-8"
+            )
+            self.logger(
+                "NBS query coverage plan: "
+                f"eligible_go={coverage_plan.get('eligible_go_count')}, "
+                f"coverage_slots/episode={coverage_plan.get('coverage_slots_per_episode')}, "
+                f"steps/rank={coverage_plan.get('resolved_steps_per_epoch_per_rank')}, "
+                f"estimated_cycles={coverage_plan.get('estimated_base_cycle_coverage', 0.0):.3f}, "
+                f"eligible_q1={eligibility.get('eligible_gold_count_eq1', 0)}, "
+                f"eligible_q2={eligibility.get('eligible_gold_count_eq2', 0)}, "
+                f"eligible_q3_4={eligibility.get('eligible_gold_count_3_4', 0)}, "
+                f"eligible_qgt4={eligibility.get('eligible_gold_count_gt4', 0)}, "
+                f"singleton_all={eligibility.get('gold_count_eq1_all', 0)}, "
+                f"singleton_with_pseudo={eligibility.get('gold_count_eq1_with_pseudo', 0)}, "
+                f"eligible_with_candidate={eligibility.get('eligible_with_backbone_candidate', 0)}, "
+                f"eligible_with_pseudo={eligibility.get('eligible_with_pseudo', 0)}"
+            )
         save_epochs = self.config.epochs_to_save()
         for epoch in range(self.start_epoch, self.config.epochs + 1):
             metrics = self._train_epoch(epoch)
@@ -765,8 +938,25 @@ class NBSFixedEpochTrainer:
                 f"hier={metrics.get('hierarchy', float('nan')):.6f} "
                 f"c_hier={metrics.get('contrib_hierarchy', float('nan')):.6f} "
                 f"hier_pairs={metrics.get('hierarchy_pairs', float('nan')):.1f} "
-                f"gold_pairs={metrics.get('gold_supervised_pairs', float('nan')):.1f} "
-                f"pseudo_pairs={metrics.get('pseudo_supervised_pairs', float('nan')):.1f} "
+                f"gpos={metrics.get('avg_gold_pairs_retained', 0.0):.1f} "
+                f"hard={metrics.get('avg_hard_pairs_retained', 0.0):.1f} "
+                f"ppos={metrics.get('avg_pseudo_pairs_retained', 0.0):.1f} "
+                f"qcov={metrics.get('unique_query_go_count', 0)}/"
+                f"{metrics.get('eligible_go_count', 0)}"
+                f"({metrics.get('query_coverage_rate', 0.0):.3%}) "
+                f"q1={metrics.get('unique_query_go_eq1', 0)}/"
+                f"{metrics.get('eligible_query_go_eq1', 0)}"
+                f"[occ={metrics.get('query_occurrences_eq1', 0)}] "
+                f"q2={metrics.get('unique_query_go_eq2', 0)}/"
+                f"{metrics.get('eligible_query_go_eq2', 0)} "
+                f"q3_4={metrics.get('unique_query_go_3_4', 0)}/"
+                f"{metrics.get('eligible_query_go_3_4', 0)} "
+                f"qgt4={metrics.get('unique_query_go_gt4', 0)}/"
+                f"{metrics.get('eligible_query_go_gt4', 0)} "
+                f"qcan={metrics.get('query_with_backbone_candidate_pool_rate', 0.0):.1%} "
+                f"qps={metrics.get('query_with_pseudo_pool_rate', 0.0):.1%} "
+                f"hard_keep={metrics.get('hard_pair_retention_rate', 1.0):.1%} "
+                f"cand_keep={metrics.get('candidate_capacity_retention_rate', 1.0):.1%} "
                 f"peak_mem={metrics.get('gpu_peak_allocated_gb', float('nan')):.2f}GB "
                 f"elapsed={metrics['elapsed_seconds']:.3f}s"
             )
