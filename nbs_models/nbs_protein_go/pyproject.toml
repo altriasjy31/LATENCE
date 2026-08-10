@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nbs-protein-go"
-version = "0.5.4"
+version = "0.5.6.1"
 description = "Neighborhood-BoxSquare protein-GO model with BoxSquaredEL geometry"
 requires-python = ">=3.10"
 dependencies = [

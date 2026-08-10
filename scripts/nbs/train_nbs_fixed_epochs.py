@@ -77,6 +77,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-queries", type=int, default=None)
     parser.add_argument("--max-candidates", type=int, default=None)
     parser.add_argument("--hard-candidate-per-query", type=int, default=None)
+    parser.add_argument("--background-unlabelled-per-query", type=int, default=None)
+    parser.add_argument("--background-unlabelled-weight", type=float, default=None)
+    parser.add_argument("--background-base-probability-max", type=float, default=None)
     parser.add_argument("--pseudo-positive-per-query", type=int, default=None)
     parser.add_argument(
         "--pseudo-sampling-mode",
@@ -182,6 +185,7 @@ def main() -> None:
         "num_queries": args.num_queries,
         "max_candidates": args.max_candidates,
         "hard_candidate_per_query": args.hard_candidate_per_query,
+        "background_unlabelled_per_query": args.background_unlabelled_per_query,
         "pseudo_positive_per_query": args.pseudo_positive_per_query,
         "weak_focus_queries_per_episode": args.weak_focus_queries,
         "weak_focus_targets_per_query": args.weak_focus_targets,
@@ -193,6 +197,14 @@ def main() -> None:
     for key, value in episode_overrides.items():
         if value is not None:
             episode_raw[key] = int(value)
+    if args.background_unlabelled_weight is not None:
+        episode_raw["background_unlabelled_weight"] = float(
+            args.background_unlabelled_weight
+        )
+    if args.background_base_probability_max is not None:
+        episode_raw["background_base_probability_max"] = float(
+            args.background_base_probability_max
+        )
     if args.weak_focus_specificity_power is not None:
         episode_raw["weak_focus_specificity_power"] = float(
             args.weak_focus_specificity_power

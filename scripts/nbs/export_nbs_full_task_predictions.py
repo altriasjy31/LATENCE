@@ -34,6 +34,10 @@ def main() -> None:
     parser.add_argument("--protein-ids", type=Path, default=None)
     parser.add_argument("--candidate-go-index", type=Path, default=None)
     parser.add_argument("--candidate-edge-attr", type=Path, default=None)
+    parser.add_argument("--external-pp-core-repr", type=Path, default=None)
+    parser.add_argument("--external-pp-neighbors", type=Path, default=None)
+    parser.add_argument("--external-pp-edge-attr", type=Path, default=None)
+    parser.add_argument("--input-manifest", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--go-chunk-size", type=int, default=256)
     parser.add_argument("--protein-batch-size", type=int, default=256)
@@ -42,15 +46,22 @@ def main() -> None:
     parser.add_argument("--probability-clip", type=float, default=1e-5)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--limit-proteins", type=int, default=None)
+    parser.add_argument(
+        "--save-diagnostics",
+        action="store_true",
+        help="Save applied logit delta, delta gate and per-GO routing arrays.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parents[2]
     import sys
 
     sys.path.insert(0, str(project_root))
+    sys.path.insert(0, str(project_root / "nbs_models" / "nbs_protein_go"))
     from nbs_pg import NBSConfig, ProteinGONBSModel  # pylint: disable=import-outside-toplevel
     from nbs_pg.inference import (  # pylint: disable=import-outside-toplevel
         ExternalCandidateEvidenceStore,
+        ExternalPPNeighborhoodStore,
         FullTaskInferenceConfig,
         export_full_task_probabilities,
     )
@@ -61,6 +72,13 @@ def main() -> None:
     )
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
+    frozen_support_block = int(config.get("inference", {}).get("go_chunk_size", 256))
+    if int(args.go_chunk_size) != frozen_support_block:
+        raise ValueError(
+            "--go-chunk-size changes the sampled support graph and is therefore a scientific "
+            f"inference parameter, not a free memory knob. Use the frozen value "
+            f"{frozen_support_block} from the resolved config."
+        )
     # Inference is single-process by default. The graph/data contract is shared
     # with training, but no optimizer or scheduler is constructed.
     config["_distributed_runtime"] = {"rank": 0, "world_size": 1}
@@ -98,9 +116,57 @@ def main() -> None:
         evidence = ExternalCandidateEvidenceStore(
             args.candidate_go_index, args.candidate_edge_attr
         )
+        if evidence.feature_dim != int(model.config.candidate_evidence_dim):
+            raise ValueError(
+                "candidate evidence width differs from the trained NBS contract: "
+                f"input={evidence.feature_dim}, model={model.config.candidate_evidence_dim}"
+            )
+
+    pp_values = (
+        args.external_pp_core_repr,
+        args.external_pp_neighbors,
+        args.external_pp_edge_attr,
+    )
+    if any(value is not None for value in pp_values) and not all(
+        value is not None for value in pp_values
+    ):
+        raise ValueError(
+            "external-pp-core-repr, external-pp-neighbors and external-pp-edge-attr "
+            "must be supplied together"
+        )
+    pp_neighborhood = None
+    pp_neighbor_fanouts = None
+    if all(value is not None for value in pp_values):
+        pp_neighborhood = ExternalPPNeighborhoodStore(*pp_values)
+        pp_neighbor_fanouts = tuple(
+            int(value)
+            for value in sampling_cfg.similar_to_fanouts[: model.config.num_layers]
+        )
+        if len(pp_neighbor_fanouts) != model.config.num_layers:
+            raise ValueError(
+                "local_sampling.similar_to_fanouts must cover every NBS layer"
+            )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     probability_path = args.output_dir / "nbs_full_task_prob.f16.npy"
+    logit_delta_path = (
+        args.output_dir / "nbs_applied_logit_delta.f16.npy"
+        if args.save_diagnostics
+        else None
+    )
+    delta_gate_path = (
+        args.output_dir / "nbs_delta_gate.f16.npy" if args.save_diagnostics else None
+    )
+    routing_source_path = (
+        args.output_dir / "nbs_routing_source_weights.f16.npy"
+        if args.save_diagnostics
+        else None
+    )
+    routing_null_path = (
+        args.output_dir / "nbs_routing_null_weight.f16.npy"
+        if args.save_diagnostics
+        else None
+    )
     inference_config = FullTaskInferenceConfig(
         go_chunk_size=int(args.go_chunk_size),
         protein_batch_size=int(args.protein_batch_size),
@@ -120,8 +186,37 @@ def main() -> None:
         config=inference_config,
         base_values_are_logits=bool(args.base_values_are_logits),
         candidate_evidence_store=evidence,
+        pp_neighborhood_store=pp_neighborhood,
+        pp_neighbor_fanouts=pp_neighbor_fanouts,
+        logit_delta_output_path=logit_delta_path,
+        delta_gate_output_path=delta_gate_path,
+        routing_source_weight_output_path=routing_source_path,
+        routing_null_weight_output_path=routing_null_path,
         amp_dtype=torch.bfloat16,
     )
+
+    eligible_path = args.output_dir / "eligible_go_indices.i32.npy"
+    np.save(
+        eligible_path,
+        np.asarray(stores.episode_sampler.eligible_go, dtype=np.int32),
+    )
+    routing_names_path = None
+    if args.save_diagnostics:
+        routing_names_path = args.output_dir / "nbs_routing_source_names.json"
+        if model.config.source_mode == "layer":
+            source_names = [
+                f"layer:{i + 1}|target:protein" for i in range(model.config.num_layers)
+            ]
+        else:
+            source_names = [
+                f"layer:{i + 1}|relation:{'-'.join(edge_type)}"
+                for i in range(model.config.num_layers)
+                for edge_type in model.backbone.incoming_target_relations
+            ]
+        routing_names_path.write_text(
+            json.dumps(source_names, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     output_ids = None
     if args.protein_ids is not None:
@@ -133,27 +228,70 @@ def main() -> None:
         output_ids.write_text("\n".join(ids) + "\n", encoding="utf-8")
 
     manifest = {
-        "schema_version": 1,
-        "exporter": "NBS full-task inductive feature-candidate inference v0.5.3",
+        "schema_version": 2,
+        "exporter": "NBS full-task isolated inductive inference v0.5.6.1-inductive-r1",
         "task": config.get("task"),
         "checkpoint": str(args.checkpoint),
         "checkpoint_sha256": _sha256(args.checkpoint),
-        "inference_mode": "inductive_feature_candidate",
+        "inference_mode": (
+            "inductive_pp_feature_candidate"
+            if pp_neighborhood is not None
+            else "inductive_feature_candidate"
+        ),
         "prediction_space": "complete_task_classifier_columns",
         "num_proteins": int(output.shape[0]),
         "num_task_go": int(output.shape[1]),
         "go_chunk_size": int(args.go_chunk_size),
+        "go_chunk_semantics": "frozen_deterministic_support_graph_block",
         "protein_batch_size": int(args.protein_batch_size),
         "support_per_query": int(args.support_per_query),
         "base_values_are_logits": bool(args.base_values_are_logits),
         "candidate_evidence": "sparse_fixed_k" if evidence is not None else "absent_zero_channel",
+        "external_pp": {
+            "enabled": pp_neighborhood is not None,
+            "relation_operator": "similar_to" if pp_neighborhood is not None else None,
+            "message_direction": "core_to_test" if pp_neighborhood is not None else None,
+            "test_to_test_edges": False,
+            "per_layer_fanouts": pp_neighbor_fanouts,
+            "neighbors": (
+                None if args.external_pp_neighbors is None else str(args.external_pp_neighbors)
+            ),
+            "neighbors_sha256": (
+                None if args.external_pp_neighbors is None else _sha256(args.external_pp_neighbors)
+            ),
+            "edge_attr": (
+                None if args.external_pp_edge_attr is None else str(args.external_pp_edge_attr)
+            ),
+            "edge_attr_sha256": (
+                None if args.external_pp_edge_attr is None else _sha256(args.external_pp_edge_attr)
+            ),
+        },
         "output_probability": str(probability_path),
+        "output_probability_sha256": _sha256(probability_path),
+        "applied_logit_delta": None if logit_delta_path is None else str(logit_delta_path),
+        "delta_gate": None if delta_gate_path is None else str(delta_gate_path),
+        "routing_source_weights": (
+            None if routing_source_path is None else str(routing_source_path)
+        ),
+        "routing_null_weight": None if routing_null_path is None else str(routing_null_path),
+        "routing_source_names": (
+            None if routing_names_path is None else str(routing_names_path)
+        ),
+        "eligible_go_indices": str(eligible_path),
+        "eligible_go_count": int(stores.episode_sampler.eligible_go.size),
         "protein_ids": None if output_ids is None else str(output_ids),
+        "protein_ids_sha256": None if output_ids is None else _sha256(output_ids),
+        "input_manifest": None if args.input_manifest is None else str(args.input_manifest),
+        "input_manifest_sha256": (
+            None if args.input_manifest is None else _sha256(args.input_manifest)
+        ),
         "uses_expert_probability_in_nbs_forward": False,
         "note": (
             "Every task GO column is scored. Training Q does not cap prediction labels. "
-            "External candidates use the learned protein input projection with zero graph-relation "
-            "source residuals; GO queries use the trained NBS support graph and full BoxSquaredEL cache."
+            "External proteins are always isolated from one another. When external_pp.enabled, "
+            "retrieved core neighbours are aggregated through the trained similar_to operator; "
+            "otherwise relation-source residuals are zero. GO queries use the trained NBS support "
+            "graph and full BoxSquaredEL cache."
         ),
     }
     manifest_path = args.output_dir / "nbs_full_task_prediction_manifest.json"

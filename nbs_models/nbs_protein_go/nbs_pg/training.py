@@ -42,6 +42,13 @@ _PROTEIN_COVERAGE_METADATA_KEYS: dict[str, str] = {
     "local_core": "local_core_protein_idx",
     "local_weak": "local_weak_protein_idx",
 }
+_ONTOLOGY_COVERAGE_METADATA_KEYS: dict[str, str] = {
+    "local": "local_ontology_go_idx",
+    "task": "local_task_ontology_go_idx",
+    "context_only_task": "local_context_only_task_ontology_go_idx",
+    "non_task": "local_non_task_ontology_go_idx",
+}
+
 
 
 def _update_protein_coverage_bitmap(
@@ -98,6 +105,64 @@ def _merge_ddp_protein_coverage(
                 )
             np.bitwise_or(merged, current, out=merged)
         unpacked = np.unpackbits(merged, bitorder="little")[:num_proteins]
+        counts[name] = int(np.count_nonzero(unpacked))
+    return counts
+
+
+def _update_ontology_coverage_bitmap(
+    bitmap: np.ndarray,
+    values: Any,
+    *,
+    field_name: str,
+) -> None:
+    if values is None:
+        return
+    indices = np.asarray(values, dtype=np.int64).reshape(-1)
+    if indices.size == 0:
+        return
+    if int(indices.min()) < 0 or int(indices.max()) >= bitmap.size:
+        raise IndexError(
+            f"{field_name} contains an ontology row outside [0,{bitmap.size})"
+        )
+    bitmap[indices] = True
+
+
+def _merge_ddp_ontology_coverage(
+    context: NBSDistributedContext,
+    bitmaps: Mapping[str, np.ndarray],
+) -> dict[str, int]:
+    """Merge full-ontology coverage bitmaps across ranks.
+
+    The supplied BoxSquaredEL universe has only 44,919 rows, so one packed
+    bitmap is about 5.5 KiB.  Tracking local ontology exposure is therefore
+    effectively free compared with the sampled protein graph.
+    """
+
+    if not bitmaps:
+        return {}
+    sizes = {int(value.size) for value in bitmaps.values()}
+    if len(sizes) != 1:
+        raise ValueError("ontology coverage bitmaps must share one universe size")
+    num_go = sizes.pop()
+    local_payload = {
+        name: np.packbits(value, bitorder="little").tobytes()
+        for name, value in bitmaps.items()
+    }
+    gathered = context.all_gather_object(local_payload)
+    packed_size = (num_go + 7) // 8
+    counts: dict[str, int] = {}
+    for name in bitmaps:
+        merged = np.zeros(packed_size, dtype=np.uint8)
+        for payload in gathered:
+            raw = payload.get(name, b"")
+            current = np.frombuffer(raw, dtype=np.uint8)
+            if current.size != packed_size:
+                raise RuntimeError(
+                    f"DDP ontology coverage payload for {name} has size "
+                    f"{current.size}, expected {packed_size}"
+                )
+            np.bitwise_or(merged, current, out=merged)
+        unpacked = np.unpackbits(merged, bitorder="little")[:num_go]
         counts[name] = int(np.count_nonzero(unpacked))
     return counts
 
@@ -883,6 +948,15 @@ class NBSFixedEpochTrainer:
                 name: np.zeros(num_proteins, dtype=np.bool_)
                 for name in _PROTEIN_COVERAGE_METADATA_KEYS
             }
+
+        ontology_universe = dict(coverage_plan.get("ontology_universe", {}) or {})
+        num_ontology_go = int(ontology_universe.get("full_ontology_rows", 0) or 0)
+        ontology_coverage_bitmaps: dict[str, np.ndarray] = {}
+        if num_ontology_go > 0:
+            ontology_coverage_bitmaps = {
+                name: np.zeros(num_ontology_go, dtype=np.bool_)
+                for name in _ONTOLOGY_COVERAGE_METADATA_KEYS
+            }
         progress = None
         if (
             self.config.progress_bar
@@ -909,6 +983,8 @@ class NBSFixedEpochTrainer:
                 "protein_nodes",
                 "go_nodes",
                 "candidate_edges_materialized",
+                "go_is_a_edges_materialized",
+                "go_part_of_edges_materialized",
                 "hierarchy_query_edges",
                 "query_gold_count_eq1",
                 "query_gold_count_eq2",
@@ -930,6 +1006,17 @@ class NBSFixedEpochTrainer:
                 "hard_pairs_retained",
                 "pseudo_pairs_requested",
                 "pseudo_pairs_retained",
+                "background_pairs_requested",
+                "background_pairs_retained",
+                "background_query_rows",
+                "positive_query_rows",
+                "negative_query_rows",
+                "positive_only_query_rows",
+                "negative_only_query_rows",
+                "mixed_query_rows",
+                "positive_supervision_pairs",
+                "negative_supervision_pairs",
+                "negative_positive_pair_ratio",
                 "weak_focus_queries_requested",
                 "weak_focus_queries_realized",
                 "weak_focus_scan_count",
@@ -947,6 +1034,13 @@ class NBSFixedEpochTrainer:
                     for coverage_name, metadata_key in _PROTEIN_COVERAGE_METADATA_KEYS.items():
                         _update_protein_coverage_bitmap(
                             protein_coverage_bitmaps[coverage_name],
+                            raw_batch.metadata.get(metadata_key),
+                            field_name=metadata_key,
+                        )
+                if ontology_coverage_bitmaps:
+                    for coverage_name, metadata_key in _ONTOLOGY_COVERAGE_METADATA_KEYS.items():
+                        _update_ontology_coverage_bitmap(
+                            ontology_coverage_bitmaps[coverage_name],
                             raw_batch.metadata.get(metadata_key),
                             field_name=metadata_key,
                         )
@@ -1049,6 +1143,9 @@ class NBSFixedEpochTrainer:
                     "gpos": int(meta.get("gold_pairs_retained", 0)),
                     "hard": int(meta.get("hard_pairs_retained", 0)),
                     "ppos": int(meta.get("pseudo_pairs_retained", 0)),
+                    "bg": int(meta.get("background_pairs_retained", 0)),
+                    "posonly": int(meta.get("positive_only_query_rows", 0)),
+                    "negrows": int(meta.get("negative_query_rows", 0)),
                     "wfq": int(meta.get("weak_focus_queries_realized", 0)),
                     "wfa": int(meta.get("weak_focus_anchor_new_count", 0)),
                     "wft": int(meta.get("weak_focus_targets_retained", 0)),
@@ -1205,6 +1302,91 @@ class NBSFixedEpochTrainer:
         metrics["hard_pair_retention_rate"] = (
             1.0 if hard_requested <= 0 else min(1.0, hard_retained / hard_requested)
         )
+        background_requested = float(
+            metrics.get("avg_background_pairs_requested", 0.0)
+        )
+        background_retained = float(
+            metrics.get("avg_background_pairs_retained", 0.0)
+        )
+        metrics["background_pair_fill_rate"] = (
+            1.0
+            if background_requested <= 0
+            else min(1.0, background_retained / background_requested)
+        )
+        total_positive_pairs = int(round(float(
+            reduced.get("batch/positive_supervision_pairs", 0.0)
+        )))
+        total_negative_pairs = int(round(float(
+            reduced.get("batch/negative_supervision_pairs", 0.0)
+        )))
+        metrics["positive_supervision_pair_occurrences"] = total_positive_pairs
+        metrics["negative_supervision_pair_occurrences"] = total_negative_pairs
+        metrics["negative_positive_pair_ratio_global"] = (
+            0.0
+            if total_positive_pairs <= 0
+            else float(total_negative_pairs / total_positive_pairs)
+        )
+        # Query-row balance must be computed from global row occurrences, not
+        # from an average-per-step value divided by Q again.  The latter is
+        # fragile under DDP reductions and caused v0.5.6 to report
+        # ``posonly≈99.5%`` even when the live batches showed
+        # ``posonly=1, negrows=63`` for Q=64.
+        #
+        # ``total_query_occurrences`` is already the global (all-rank,
+        # all-step) denominator, so use the equally global reduced row counts.
+        total_positive_row_occurrences = int(round(float(
+            reduced.get("batch/positive_query_rows", 0.0)
+        )))
+        total_negative_row_occurrences = int(round(float(
+            reduced.get("batch/negative_query_rows", 0.0)
+        )))
+        total_positive_only_row_occurrences = int(round(float(
+            reduced.get("batch/positive_only_query_rows", 0.0)
+        )))
+        total_negative_only_row_occurrences = int(round(float(
+            reduced.get("batch/negative_only_query_rows", 0.0)
+        )))
+        total_mixed_row_occurrences = int(round(float(
+            reduced.get("batch/mixed_query_rows", 0.0)
+        )))
+
+        metrics["positive_query_row_occurrences"] = total_positive_row_occurrences
+        metrics["negative_query_row_occurrences"] = total_negative_row_occurrences
+        metrics["positive_only_query_row_occurrences"] = total_positive_only_row_occurrences
+        metrics["negative_only_query_row_occurrences"] = total_negative_only_row_occurrences
+        metrics["mixed_query_row_occurrences"] = total_mixed_row_occurrences
+
+        row_denominator = max(1, int(total_query_occurrences))
+        metrics["positive_query_row_rate"] = float(
+            total_positive_row_occurrences / row_denominator
+        )
+        metrics["negative_query_row_rate"] = float(
+            total_negative_row_occurrences / row_denominator
+        )
+        metrics["positive_only_query_row_rate"] = float(
+            total_positive_only_row_occurrences / row_denominator
+        )
+        metrics["negative_only_query_row_rate"] = float(
+            total_negative_only_row_occurrences / row_denominator
+        )
+        metrics["mixed_query_row_rate"] = float(
+            total_mixed_row_occurrences / row_denominator
+        )
+
+        # Exact partition checks.  These are diagnostics rather than model
+        # assumptions: positive-only + mixed must recover all positive rows,
+        # and negative-only + mixed must recover all negative rows.
+        positive_partition_ok = (
+            total_positive_only_row_occurrences + total_mixed_row_occurrences
+            == total_positive_row_occurrences
+        )
+        negative_partition_ok = (
+            total_negative_only_row_occurrences + total_mixed_row_occurrences
+            == total_negative_row_occurrences
+        )
+        metrics["query_row_partition_ok"] = bool(
+            positive_partition_ok and negative_partition_ok
+        )
         candidate_before = float(metrics.get("avg_candidate_union_before_cap", 0.0))
         candidate_after = float(metrics.get("avg_candidate_union_after_cap", 0.0))
         metrics["candidate_capacity_retention_rate"] = (
@@ -1287,6 +1469,37 @@ class NBSFixedEpochTrainer:
         )
         metrics["protein_universe"] = protein_universe
 
+        # Ontology-node coverage is distinct from supervised task-query
+        # coverage.  The complete BoxSquaredEL graph is always encoded into
+        # the global GO cache, while local heterogeneous batches only expose
+        # the protein-conditioned neighbourhood needed for gradient-bearing
+        # updates.  Report both so an eligible-query count such as 18,300 is
+        # never misread as the size of the ontology graph.
+        ontology_coverage_counts = _merge_ddp_ontology_coverage(
+            self.distributed, ontology_coverage_bitmaps
+        )
+        full_ontology_rows = int(ontology_universe.get("full_ontology_rows", 0) or 0)
+        unique_task_rows = int(ontology_universe.get("unique_task_ontology_rows", 0) or 0)
+        context_only_task_rows = int(
+            ontology_universe.get("unique_context_only_task_ontology_rows", 0) or 0
+        )
+        non_task_rows = int(ontology_universe.get("non_task_ontology_rows", 0) or 0)
+        ontology_denominators = {
+            "local": full_ontology_rows,
+            "task": unique_task_rows,
+            "context_only_task": context_only_task_rows,
+            "non_task": non_task_rows,
+        }
+        for name, unique_count in ontology_coverage_counts.items():
+            metrics[f"unique_{name}_ontology_go_count"] = int(unique_count)
+            denominator_value = int(ontology_denominators.get(name, full_ontology_rows))
+            metrics[f"{name}_ontology_go_coverage_rate"] = (
+                0.0
+                if denominator_value <= 0
+                else float(unique_count / denominator_value)
+            )
+        metrics["ontology_universe"] = ontology_universe
+
         root_occurrences = float(
             reduced.get("batch/support_proteins", 0.0)
             + reduced.get("batch/candidate_union_after_cap", 0.0)
@@ -1365,6 +1578,8 @@ class NBSFixedEpochTrainer:
                 f"weak_focus_t={coverage_plan.get('weak_focus_targets_per_query', 0)}, "
                 f"weak_target={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('weak_unique_target_count', 0)}, "
                 f"weak_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('weak_unique_steps_required', 0)}, "
+                f"pseudo_global/step={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('estimated_pseudo_pairs_per_global_step', 0):.1f}, "
+                f"weak_unique_capacity/step={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('effective_unique_weak_capacity_per_global_step', 0):.1f}, "
                 f"go_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('go_steps_required', 0)}, "
                 f"core_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('core_steps_required', 0)}, "
                 f"eligible_q1={eligibility.get('eligible_gold_count_eq1', 0)}, "
@@ -1377,6 +1592,24 @@ class NBSFixedEpochTrainer:
                 f"eligible_with_pseudo={eligibility.get('eligible_with_pseudo', 0)}, "
                 f"stage1_reference_steps={dict(coverage_plan.get('stage1_reference', {}) or {}).get('global_steps_per_epoch')}"
             )
+            ontology = dict(coverage_plan.get("ontology_universe", {}) or {})
+            if ontology:
+                relation_edges = dict(ontology.get("direct_relation_edges", {}) or {})
+                self.logger(
+                    "NBS ontology context plan: "
+                    f"task_labels={ontology.get('task_label_columns')}, "
+                    f"task_ontology_rows={ontology.get('unique_task_ontology_rows')}, "
+                    f"eligible_task_queries={ontology.get('eligible_task_query_columns')}, "
+                    f"ineligible_task_queries={ontology.get('ineligible_task_query_columns')}, "
+                    f"context_only_task_rows={ontology.get('unique_context_only_task_ontology_rows')}, "
+                    f"full_ontology={ontology.get('full_ontology_rows')}, "
+                    f"non_task_context_rows={ontology.get('non_task_ontology_rows')}, "
+                    f"global_cache={ontology.get('global_go_cache_rows')}, "
+                    f"cross_task_context_edges={ontology.get('canonical_task_non_task_cross_edges', 0)}, "
+                    f"go_hops={ontology.get('local_go_hops')}, "
+                    f"is_a_edges={relation_edges.get('is_a', 0)}, "
+                    f"part_of_edges={relation_edges.get('part_of', 0)}"
+                )
         if self.scheduler_contract and self.distributed.is_main_process:
             (self.output_dir / "scheduler_plan.json").write_text(
                 json.dumps(_json_safe(self.scheduler_contract), indent=2) + "\n",
@@ -1412,6 +1645,17 @@ class NBSFixedEpochTrainer:
                 f"gpos={metrics.get('avg_gold_pairs_retained', 0.0):.1f} "
                 f"hard={metrics.get('avg_hard_pairs_retained', 0.0):.1f} "
                 f"ppos={metrics.get('avg_pseudo_pairs_retained', 0.0):.1f} "
+                f"bg={metrics.get('avg_background_pairs_retained', 0.0):.1f} "
+                f"bg_fill={metrics.get('background_pair_fill_rate', 1.0):.1%} "
+                f"negrows={metrics.get('negative_query_row_rate', 0.0):.1%}"
+                f"[{metrics.get('negative_query_row_occurrences', 0)}/"
+                f"{metrics.get('query_occurrences_total', 0)}] "
+                f"posonly={metrics.get('positive_only_query_row_rate', 0.0):.1%}"
+                f"[{metrics.get('positive_only_query_row_occurrences', 0)}/"
+                f"{metrics.get('query_occurrences_total', 0)}] "
+                f"mixed={metrics.get('mixed_query_row_rate', 0.0):.1%} "
+                f"rowpart={'ok' if metrics.get('query_row_partition_ok', False) else 'FAIL'} "
+                f"np_ratio={metrics.get('negative_positive_pair_ratio_global', 0.0):.2f} "
                 f"qcov={metrics.get('unique_query_go_count', 0)}/"
                 f"{metrics.get('eligible_go_count', 0)}"
                 f"({metrics.get('query_coverage_rate', 0.0):.3%}) "
@@ -1461,6 +1705,15 @@ class NBSFixedEpochTrainer:
                 f"({metrics.get('pseudo_target_protein_coverage_rate', 0.0):.1%}) "
                 f"root_pass={metrics.get('root_protein_occurrence_equivalent_passes', 0.0):.2f} "
                 f"local_pass={metrics.get('local_protein_occurrence_equivalent_passes', 0.0):.2f} "
+                f"ont_local={metrics.get('unique_local_ontology_go_count', 0)}/"
+                f"{metrics.get('ontology_universe', {}).get('full_ontology_rows', 0)}"
+                f"({metrics.get('local_ontology_go_coverage_rate', 0.0):.1%}) "
+                f"ont_non_task={metrics.get('unique_non_task_ontology_go_count', 0)}/"
+                f"{metrics.get('ontology_universe', {}).get('non_task_ontology_rows', 0)}"
+                f"({metrics.get('non_task_ontology_go_coverage_rate', 0.0):.1%}) "
+                f"task_ctx={metrics.get('unique_context_only_task_ontology_go_count', 0)}/"
+                f"{metrics.get('ontology_universe', {}).get('unique_context_only_task_ontology_rows', 0)}"
+                f"({metrics.get('context_only_task_ontology_go_coverage_rate', 0.0):.1%}) "
                 f"lr={(metrics.get('learning_rates') or [float('nan')])[0]:.2e} "
                 f"slr={((metrics.get('learning_rates') or [float('nan'), float('nan')]) + [float('nan')])[1]:.2e} "
                 f"peak_mem={metrics.get('gpu_peak_allocated_gb', float('nan')):.2f}GB "

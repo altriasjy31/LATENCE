@@ -18,7 +18,7 @@ def main() -> None:
             / "nbs_models"
             / "nbs_protein_go"
             / "configs"
-            / "bp_fixed_epoch_v0.5.4.json",
+            / "bp_fixed_epoch_v0.5.6.json",
         )
     )
     train_script = project_root / "scripts" / "nbs" / "train_nbs_fixed_epochs.py"
@@ -69,6 +69,9 @@ def main() -> None:
         "NBS_NUM_QUERIES": "--num-queries",
         "NBS_MAX_CANDIDATES": "--max-candidates",
         "NBS_HARD_CANDIDATE_PER_QUERY": "--hard-candidate-per-query",
+        "NBS_BACKGROUND_UNLABELLED_PER_QUERY": "--background-unlabelled-per-query",
+        "NBS_BACKGROUND_UNLABELLED_WEIGHT": "--background-unlabelled-weight",
+        "NBS_BACKGROUND_BASE_PROBABILITY_MAX": "--background-base-probability-max",
         "NBS_PSEUDO_POSITIVE_PER_QUERY": "--pseudo-positive-per-query",
         "NBS_PSEUDO_SAMPLING_MODE": "--pseudo-sampling-mode",
         "NBS_WEAK_FOCUS_QUERIES": "--weak-focus-queries",

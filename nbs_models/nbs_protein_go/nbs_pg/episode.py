@@ -16,6 +16,49 @@ from .latence_stores import (
 from .types import ProteinGOQueryBatch
 
 
+def select_background_unlabelled_columns(
+    *,
+    candidate_protein_idx: np.ndarray,
+    base_logits_row: np.ndarray,
+    occupied_mask: np.ndarray,
+    excluded_protein_idx: np.ndarray,
+    count: int,
+    max_probability: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Select low-confidence PU background pairs from an existing candidate union.
+
+    The returned indices are columns in ``candidate_protein_idx``.  This helper
+    deliberately does not add proteins or edges to the local graph.  It only
+    opens additional supervision positions in the already materialized [Q,C]
+    score matrix.  Gold, pseudo-positive and backbone-candidate proteins for
+    the current GO must be supplied through ``excluded_protein_idx``.
+    """
+    candidate = np.asarray(candidate_protein_idx, dtype=np.int64)
+    logits = np.asarray(base_logits_row, dtype=np.float64)
+    occupied = np.asarray(occupied_mask, dtype=bool)
+    excluded = np.asarray(excluded_protein_idx, dtype=np.int64)
+    if candidate.ndim != 1 or logits.shape != candidate.shape or occupied.shape != candidate.shape:
+        raise ValueError("background candidate/logit/mask arrays must be one-dimensional and aligned")
+    if count <= 0 or candidate.size == 0:
+        return np.empty(0, dtype=np.int64)
+    if not 0.0 <= float(max_probability) <= 0.5:
+        raise ValueError("background max_probability must lie in [0,0.5]")
+    # Stable sigmoid; the threshold is intentionally evaluated in float64 so
+    # fp16 base-probability quantization cannot silently broaden the PU pool.
+    clipped = np.clip(logits, -40.0, 40.0)
+    probability = 1.0 / (1.0 + np.exp(-clipped))
+    eligible = ~occupied
+    eligible &= probability <= float(max_probability)
+    if excluded.size:
+        eligible &= ~np.isin(candidate, excluded, assume_unique=False)
+    columns = np.flatnonzero(eligible).astype(np.int64, copy=False)
+    if columns.size <= int(count):
+        return columns
+    chosen = rng.choice(columns, size=int(count), replace=False)
+    return np.asarray(chosen, dtype=np.int64)
+
+
 @dataclass
 class NBSQueryEpisodeConfig:
     num_queries: int = 8
@@ -44,6 +87,13 @@ class NBSQueryEpisodeConfig:
     weak_focus_min_probability: float = 0.5
     max_candidates: int = 256
     sampled_unlabelled_weight: float = 0.2
+    # Low-weight PU contrast from proteins already present in the shared
+    # candidate union.  These are not asserted biological negatives.  They are
+    # selected only when the first-stage backbone is very low-confidence for
+    # the current GO and are down-weighted far below hard candidate evidence.
+    background_unlabelled_per_query: int = 0
+    background_unlabelled_weight: float = 0.05
+    background_base_probability_max: float = 0.05
     pseudo_confidence_power: float = 1.0
     # Number of direct child-parent query pairs that must be co-sampled in one
     # episode.  This makes the query-axis hierarchy loss observable instead of
@@ -108,6 +158,16 @@ class NBSQueryEpisodeConfig:
             )
         if not 0.0 <= self.sampled_unlabelled_weight <= 1.0:
             raise ValueError("sampled_unlabelled_weight must lie in [0,1]")
+        if self.background_unlabelled_per_query < 0:
+            raise ValueError("background_unlabelled_per_query cannot be negative")
+        if not 0.0 <= self.background_unlabelled_weight <= 1.0:
+            raise ValueError("background_unlabelled_weight must lie in [0,1]")
+        if self.background_unlabelled_weight > self.sampled_unlabelled_weight:
+            raise ValueError(
+                "background_unlabelled_weight should not exceed sampled_unlabelled_weight"
+            )
+        if not 0.0 <= self.background_base_probability_max <= 0.5:
+            raise ValueError("background_base_probability_max must lie in [0,0.5]")
         if self.pseudo_confidence_power < 0:
             raise ValueError("pseudo_confidence_power cannot be negative")
         if self.query_sampling_mode not in {"random", "shuffled_cycle"}:
@@ -296,14 +356,26 @@ class GOQueryEpisodeSampler:
         eligible_degree = self.gold_degree[self.eligible_go]
         eligible_pseudo_degree = self.pseudo_degree[self.eligible_go]
         eligible_candidate_degree = self.candidate_degree[self.eligible_go]
+        zero_gold = self.gold_degree == 0
         singleton_all = self.gold_degree == 1
         singleton_with_pseudo = singleton_all & (self.pseudo_degree > 0)
+        singleton_without_pseudo = singleton_all & (self.pseudo_degree <= 0)
+        ineligible_mask = ~eligible
+        ineligible_other = ineligible_mask & ~zero_gold & ~singleton_without_pseudo
         self.eligibility_summary = {
             "num_task_go": int(self.gold.num_go),
             "gold_positive_go": int(np.sum(self.gold_degree > 0)),
+            "gold_zero_count_all": int(np.sum(zero_gold)),
             "gold_count_eq1_all": int(np.sum(singleton_all)),
             "gold_count_eq1_with_pseudo": int(np.sum(singleton_with_pseudo)),
+            "gold_count_eq1_without_pseudo": int(np.sum(singleton_without_pseudo)),
             "eligible_go_count": int(self.eligible_go.size),
+            "ineligible_go_count": int(np.sum(ineligible_mask)),
+            "ineligible_zero_gold": int(np.sum(ineligible_mask & zero_gold)),
+            "ineligible_singleton_without_pseudo": int(
+                np.sum(ineligible_mask & singleton_without_pseudo)
+            ),
+            "ineligible_other": int(np.sum(ineligible_other)),
             "eligible_gold_count_eq1": int(np.sum(eligible_degree == 1)),
             "eligible_gold_count_eq2": int(np.sum(eligible_degree == 2)),
             "eligible_gold_count_3_4": int(np.sum((eligible_degree >= 3) & (eligible_degree <= 4))),
@@ -992,9 +1064,17 @@ class GOQueryEpisodeSampler:
         per_query_hard_rank: list[np.ndarray] = []
         per_query_pseudo: list[np.ndarray] = []
         per_query_pseudo_prob: list[np.ndarray] = []
+        # Full evidence pools are retained only while constructing this episode.
+        # Background-PU sampling excludes every known gold/pseudo/candidate
+        # protein for the current GO, not just the subset selected as direct
+        # supervision in this mini-batch.
+        per_query_all_gold: list[np.ndarray] = []
+        per_query_all_pseudo: list[np.ndarray] = []
+        per_query_all_candidate: list[np.ndarray] = []
 
         for query_row, go_idx in enumerate(query_go.tolist()):
             gold = np.unique(self.gold.get(go_idx)["protein_idx"].astype(np.int64))
+            per_query_all_gold.append(gold)
             remaining_gold = np.setdiff1d(gold, support_union, assume_unique=False)
             positive_count = int(gold_positive_counts[query_row])
             if positive_count > 0:
@@ -1034,8 +1114,11 @@ class GOQueryEpisodeSampler:
                             "0.5 <= stored probability <= 1.0; CSR membership itself records the pre-quantization modelout > 0.5 decision"
                         )
 
+            per_query_all_pseudo.append(all_pseudo_protein.astype(np.int64, copy=False))
+
             candidate_values = self.candidate.get(go_idx)
             hard_protein = candidate_values["protein_idx"].astype(np.int64)
+            per_query_all_candidate.append(hard_protein.astype(np.int64, copy=False))
             hard_rank = candidate_values.get(
                 "source_rank", np.zeros(hard_protein.size, dtype=np.uint16)
             )
@@ -1159,6 +1242,9 @@ class GOQueryEpisodeSampler:
             int(protein): column for column, protein in enumerate(candidate_union.tolist())
         }
         q, c = query_go.size, candidate_union.size
+        # Base logits are available for the complete shared candidate union and
+        # are also used to define conservative PU-background supervision.
+        base_logits = self.base_logit_store.gather_matrix(candidate_union, query_go)
         labels = np.zeros((q, c), dtype=np.float32)
         mask = np.zeros((q, c), dtype=bool)
         confidence = np.ones((q, c), dtype=np.float32)
@@ -1168,10 +1254,13 @@ class GOQueryEpisodeSampler:
         retained_gold_pairs = 0
         retained_hard_pairs = 0
         retained_pseudo_pairs = 0
+        retained_background_pairs = 0
         retained_weak_focus_pairs = 0
         retained_gold_proteins: list[int] = []
         retained_hard_proteins: list[int] = []
         retained_pseudo_proteins: list[int] = []
+        retained_background_proteins: list[int] = []
+        background_rows = 0
 
         for row, go_idx in enumerate(query_go.tolist()):
             for protein in per_query_gold_positive[row].tolist():
@@ -1217,7 +1306,61 @@ class GOQueryEpisodeSampler:
                     retained_weak_focus_pairs += 1
                 retained_pseudo_proteins.append(int(protein))
 
-        base_logits = self.base_logit_store.gather_matrix(candidate_union, query_go)
+        # Add a small amount of conservative PU background contrast for every
+        # GO query.  These pairs are sampled only from proteins already present
+        # in the shared candidate union, so they do not expand the graph.  The
+        # full gold, modelout-positive and backbone-candidate pools for this GO
+        # are excluded before applying a very-low base-probability threshold.
+        if int(cfg.background_unlabelled_per_query) > 0:
+            for row, _go_idx in enumerate(query_go.tolist()):
+                excluded_parts = [
+                    per_query_all_gold[row],
+                    per_query_all_pseudo[row],
+                    per_query_all_candidate[row],
+                ]
+                excluded_nonempty = [part for part in excluded_parts if part.size]
+                excluded = (
+                    np.unique(np.concatenate(excluded_nonempty)).astype(np.int64)
+                    if excluded_nonempty
+                    else np.empty(0, dtype=np.int64)
+                )
+                columns = select_background_unlabelled_columns(
+                    candidate_protein_idx=candidate_union,
+                    base_logits_row=base_logits[row],
+                    occupied_mask=mask[row],
+                    excluded_protein_idx=excluded,
+                    count=int(cfg.background_unlabelled_per_query),
+                    max_probability=float(cfg.background_base_probability_max),
+                    rng=self.rng,
+                )
+                if columns.size:
+                    background_rows += 1
+                    mask[row, columns] = True
+                    # labels are initialized to zero; retain an explicit low PU
+                    # weight rather than asserting these pairs as true negatives.
+                    supervision_weight[row, columns] = float(
+                        cfg.background_unlabelled_weight
+                    )
+                    retained_background_pairs += int(columns.size)
+                    retained_background_proteins.extend(
+                        candidate_union[columns].astype(np.int64).tolist()
+                    )
+
+        positive_mask = mask & (labels > 0.0)
+        negative_mask = mask & (~pseudo_mask) & (labels <= 0.0)
+        positive_rows_mask = np.any(positive_mask, axis=1)
+        negative_rows_mask = np.any(negative_mask, axis=1)
+        positive_rows = int(np.count_nonzero(positive_rows_mask))
+        negative_rows = int(np.count_nonzero(negative_rows_mask))
+        positive_only_rows = int(np.count_nonzero(positive_rows_mask & ~negative_rows_mask))
+        negative_only_rows = int(np.count_nonzero(negative_rows_mask & ~positive_rows_mask))
+        mixed_rows = int(np.count_nonzero(positive_rows_mask & negative_rows_mask))
+        positive_pairs = int(np.count_nonzero(positive_mask))
+        negative_pairs = int(np.count_nonzero(negative_mask))
+        neg_pos_pair_ratio = (
+            0.0 if positive_pairs <= 0 else float(negative_pairs / positive_pairs)
+        )
+
         seed_protein = np.concatenate(support_by_query).astype(np.int64)
         seed_query = np.concatenate(
             [np.full(values.size, row, dtype=np.int64) for row, values in enumerate(support_by_query)]
@@ -1300,6 +1443,22 @@ class GOQueryEpisodeSampler:
                 "hard_pairs_retained": int(retained_hard_pairs),
                 "pseudo_pairs_requested": int(sum(values.size for values in per_query_pseudo)),
                 "pseudo_pairs_retained": int(retained_pseudo_pairs),
+                "background_pairs_requested": int(
+                    query_go.size * int(cfg.background_unlabelled_per_query)
+                ),
+                "background_pairs_retained": int(retained_background_pairs),
+                "background_query_rows": int(background_rows),
+                "positive_query_rows": int(positive_rows),
+                "negative_query_rows": int(negative_rows),
+                "positive_only_query_rows": int(positive_only_rows),
+                "negative_only_query_rows": int(negative_only_rows),
+                "mixed_query_rows": int(mixed_rows),
+                "positive_supervision_pairs": int(positive_pairs),
+                "negative_supervision_pairs": int(negative_pairs),
+                "negative_positive_pair_ratio": float(neg_pos_pair_ratio),
+                "background_target_protein_idx": np.unique(
+                    np.asarray(retained_background_proteins, dtype=np.int64)
+                ),
             },
         )
         episode.validate()

@@ -304,6 +304,58 @@ def _map_edge(edge: np.ndarray, source_nodes: np.ndarray, destination_nodes: Opt
     return np.stack([source, destination], axis=0).astype(np.int64)
 
 
+def build_ontology_space_summary(
+    task_to_ontology: np.ndarray,
+    eligible_task_go: np.ndarray,
+    *,
+    full_ontology_rows: int,
+    relation_edge_counts: Optional[Mapping[str, int]] = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    """Build immutable masks for task/query/full ontology spaces.
+
+    ``task_to_ontology`` maps classifier columns into BoxSquaredEL rows.
+    Multiple classifier columns may map to the same canonical ontology row.
+    ``eligible_task_go`` is the directly supervised query subset and must not
+    be confused with either the task output vocabulary or the full ontology.
+    """
+
+    mapping = np.asarray(task_to_ontology, dtype=np.int64)
+    eligible = np.asarray(eligible_task_go, dtype=np.int64)
+    if mapping.ndim != 1:
+        raise ValueError("task_to_ontology must be one-dimensional")
+    if full_ontology_rows <= 0:
+        raise ValueError("full_ontology_rows must be positive")
+    if mapping.size and (int(mapping.min()) < 0 or int(mapping.max()) >= full_ontology_rows):
+        raise IndexError("task_to_ontology leaves the full ontology space")
+    if eligible.size and (int(eligible.min()) < 0 or int(eligible.max()) >= mapping.size):
+        raise IndexError("eligible task GO index outside classifier space")
+
+    task_rows = np.unique(mapping)
+    eligible_rows = np.unique(mapping[eligible]) if eligible.size else np.empty(0, np.int64)
+    task_mask = np.zeros(full_ontology_rows, dtype=np.bool_)
+    task_mask[task_rows] = True
+    eligible_mask = np.zeros(full_ontology_rows, dtype=np.bool_)
+    eligible_mask[eligible_rows] = True
+    context_only_mask = task_mask & ~eligible_mask
+    summary = {
+        "task_label_columns": int(mapping.size),
+        "unique_task_ontology_rows": int(task_rows.size),
+        "task_to_ontology_duplicate_columns": int(mapping.size - task_rows.size),
+        "eligible_task_query_columns": int(eligible.size),
+        "ineligible_task_query_columns": int(mapping.size - eligible.size),
+        "unique_eligible_query_ontology_rows": int(eligible_rows.size),
+        "unique_context_only_task_ontology_rows": int(np.count_nonzero(context_only_mask)),
+        "full_ontology_rows": int(full_ontology_rows),
+        "non_task_ontology_rows": int(full_ontology_rows - task_rows.size),
+        "global_go_cache_rows": int(full_ontology_rows),
+        "global_go_cache_uses_full_ontology": True,
+        "direct_relation_edges": {
+            str(key): int(value) for key, value in dict(relation_edge_counts or {}).items()
+        },
+    }
+    return task_mask, eligible_mask, context_only_mask, summary
+
+
 @dataclass
 class LatenceNBSStores:
     registry: ProteinRegistryStore
@@ -318,6 +370,35 @@ class LatenceNBSStores:
     task_to_ontology: np.ndarray
     feature_dim: int
     num_task_go: int
+    task_ontology_mask: Optional[np.ndarray] = None
+    eligible_ontology_mask: Optional[np.ndarray] = None
+    context_only_task_ontology_mask: Optional[np.ndarray] = None
+    ontology_summary: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if (
+            self.task_ontology_mask is not None
+            and self.eligible_ontology_mask is not None
+            and self.context_only_task_ontology_mask is not None
+            and self.ontology_summary
+        ):
+            return
+        eligible = getattr(self.episode_sampler, "eligible_go", None)
+        if eligible is None:
+            eligible = np.arange(self.num_task_go, dtype=np.int64)
+        task_mask, eligible_mask, context_mask, summary = build_ontology_space_summary(
+            np.asarray(self.task_to_ontology, dtype=np.int64),
+            np.asarray(eligible, dtype=np.int64),
+            full_ontology_rows=int(self.full_boxes.num_go),
+            relation_edge_counts={
+                name: int(getattr(store, "edge", np.empty((0, 2))).shape[0])
+                for name, store in self.go_relations.items()
+            },
+        )
+        self.task_ontology_mask = task_mask
+        self.eligible_ontology_mask = eligible_mask
+        self.context_only_task_ontology_mask = context_mask
+        self.ontology_summary = summary
 
 
 class LatenceNBSLocalGraphMaterializer:
@@ -559,6 +640,10 @@ class LatenceNBSLocalGraphMaterializer:
                 return np.empty(0, dtype=np.int64)
             return values[np.asarray(role_code)[values] == int(code)].astype(np.int64, copy=False)
 
+        local_task_mask = self.stores.task_ontology_mask[go_nodes]
+        local_context_only_mask = self.stores.context_only_task_ontology_mask[go_nodes]
+        local_non_task_mask = ~local_task_mask
+
         return NBSLocalBatch(
             graph=graph,
             query=query,
@@ -576,7 +661,23 @@ class LatenceNBSLocalGraphMaterializer:
                 "local_core_protein_idx": role_subset(protein_nodes, core_code),
                 "local_weak_protein_idx": role_subset(protein_nodes, weak_code),
                 "go_nodes": int(go_nodes.size),
+                # Full-ontology diagnostics.  These are BoxSquaredEL ontology
+                # row IDs, not task classifier columns.  They make it explicit
+                # that eligible task queries are only the supervised subset;
+                # local G-G propagation can and does include task-ineligible and
+                # non-task ontology nodes.
+                "local_ontology_go_idx": go_nodes.astype(np.int64),
+                "local_task_ontology_go_idx": go_nodes[local_task_mask].astype(np.int64),
+                "local_context_only_task_ontology_go_idx": go_nodes[
+                    local_context_only_mask
+                ].astype(np.int64),
+                "local_non_task_ontology_go_idx": go_nodes[local_non_task_mask].astype(np.int64),
+                "query_ontology_go_idx": np.asarray(
+                    episode.query_ontology_go_idx, dtype=np.int64
+                ),
                 "candidate_edges_materialized": int(candidate_local.shape[1]),
+                "go_is_a_edges_materialized": int(is_a_local.shape[1]),
+                "go_part_of_edges_materialized": int(part_local.shape[1]),
                 "candidate_edges_global_total": int(
                     getattr(self.stores.candidate_messages, "num_edges", -1)
                 ),
@@ -863,6 +964,53 @@ def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
         )
         for name in ("is_a", "has_child", "part_of", "has_part")
     }
+
+    # Three distinct GO spaces coexist in NBS and must never be conflated:
+    # (1) immutable task classifier columns, (2) directly supervised task
+    # queries, and (3) the complete BoxSquaredEL ontology used as semantic
+    # context.  Build immutable masks once so local-batch and epoch diagnostics
+    # can prove that non-task/context-only ontology nodes are actually exposed.
+    task_to_ontology_arr = np.asarray(task_to_ontology, dtype=np.int64)
+    (
+        task_ontology_mask,
+        eligible_ontology_mask,
+        context_only_task_ontology_mask,
+        ontology_summary,
+    ) = build_ontology_space_summary(
+        task_to_ontology_arr,
+        np.asarray(episode_sampler.eligible_go, dtype=np.int64),
+        full_ontology_rows=int(full_boxes.num_go),
+        relation_edge_counts={
+            name: int(store.edge.shape[0]) for name, store in go_relations.items()
+        },
+    )
+    relation_partition_edges: dict[str, dict[str, int]] = {}
+    for name, store in go_relations.items():
+        edge = np.asarray(store.edge, dtype=np.int64)
+        if edge.size == 0:
+            relation_partition_edges[name] = {
+                "task_to_task": 0,
+                "task_to_non_task": 0,
+                "non_task_to_task": 0,
+                "non_task_to_non_task": 0,
+            }
+            continue
+        src_task = task_ontology_mask[edge[:, 0]]
+        dst_task = task_ontology_mask[edge[:, 1]]
+        relation_partition_edges[name] = {
+            "task_to_task": int(np.count_nonzero(src_task & dst_task)),
+            "task_to_non_task": int(np.count_nonzero(src_task & ~dst_task)),
+            "non_task_to_task": int(np.count_nonzero(~src_task & dst_task)),
+            "non_task_to_non_task": int(np.count_nonzero(~src_task & ~dst_task)),
+        }
+    ontology_summary["relation_partition_edges"] = relation_partition_edges
+    # Count only canonical forward relations here; inverse stores duplicate the
+    # same structural evidence in the opposite message direction.
+    ontology_summary["canonical_task_non_task_cross_edges"] = int(sum(
+        relation_partition_edges.get(name, {}).get("task_to_non_task", 0)
+        + relation_partition_edges.get(name, {}).get("non_task_to_task", 0)
+        for name in ("is_a", "part_of")
+    ))
     return LatenceNBSStores(
         registry=registry,
         features=features,
@@ -873,7 +1021,11 @@ def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
         pp=pp,
         full_boxes=full_boxes,
         go_relations=go_relations,
-        task_to_ontology=np.asarray(task_to_ontology, dtype=np.int64),
+        task_to_ontology=task_to_ontology_arr,
+        task_ontology_mask=task_ontology_mask,
+        eligible_ontology_mask=eligible_ontology_mask,
+        context_only_task_ontology_mask=context_only_task_ontology_mask,
+        ontology_summary=ontology_summary,
         feature_dim=features.feature_dim,
         num_task_go=num_task_go,
     )
@@ -941,6 +1093,8 @@ def resolve_hybrid_epoch_requirements(
     core_gold_pass_target: float,
     core_count: int,
     predicted_core_occurrences_per_go_cycle: int,
+    num_queries_per_episode: Optional[int] = None,
+    predicted_pseudo_pairs_per_go_cycle: int = 0,
 ) -> dict[str, float | int]:
     """Plan a hybrid epoch from GO coverage and unique weak exposure.
 
@@ -969,6 +1123,44 @@ def resolve_hybrid_epoch_requirements(
     go_steps = int(np.ceil(
         float(eligible_go_count) * float(go_cycles_floor) / global_coverage_slots
     ))
+    if num_queries_per_episode is not None and num_queries_per_episode <= 0:
+        raise ValueError("num_queries_per_episode must be positive")
+    if (
+        num_queries_per_episode is not None
+        and weak_focus_queries_per_episode > num_queries_per_episode
+    ):
+        raise ValueError("weak-focus query count cannot exceed total query count")
+    if predicted_pseudo_pairs_per_go_cycle < 0:
+        raise ValueError("predicted pseudo pairs per GO cycle cannot be negative")
+
+    # v0.5.4 planned weak coverage from the explicit weak-focus block only.
+    # Real runs showed that ordinary coverage/hierarchy queries contribute a
+    # comparable number of pseudo positives.  Ignoring that signal nearly
+    # doubled the required epoch length (558 vs ~327 BP steps).  Estimate all
+    # pseudo capacity while still reserving the focus block at its configured
+    # target size.
+    baseline_pseudo_per_query = float(predicted_pseudo_pairs_per_go_cycle) / float(
+        eligible_go_count
+    )
+    if num_queries_per_episode is None or predicted_pseudo_pairs_per_go_cycle <= 0:
+        # Compatibility path for v0.5.4 callers/tests that only supplied the
+        # explicit weak-focus capacity.
+        non_focus_queries = 0
+        estimated_pseudo_pairs_per_rank_step = (
+            float(weak_focus_queries_per_episode)
+            * float(weak_focus_targets_per_query)
+        )
+    else:
+        non_focus_queries = max(
+            0, int(num_queries_per_episode) - int(weak_focus_queries_per_episode)
+        )
+        estimated_pseudo_pairs_per_rank_step = (
+            float(non_focus_queries) * baseline_pseudo_per_query
+            + float(weak_focus_queries_per_episode) * float(weak_focus_targets_per_query)
+        )
+    estimated_pseudo_pairs_per_global_step = (
+        estimated_pseudo_pairs_per_rank_step * float(world_size)
+    )
     focus_capacity_per_global_step = (
         int(weak_focus_queries_per_episode)
         * int(weak_focus_targets_per_query)
@@ -977,12 +1169,12 @@ def resolve_hybrid_epoch_requirements(
     weak_unique_target_count = int(np.ceil(
         int(pseudo_eligible_active_weak) * float(weak_unique_coverage_target)
     ))
-    effective_focus_capacity = max(
+    effective_total_capacity = max(
         1.0,
-        float(focus_capacity_per_global_step)
+        estimated_pseudo_pairs_per_global_step
         * float(weak_focus_planning_efficiency),
     )
-    weak_steps = int(np.ceil(weak_unique_target_count / effective_focus_capacity))
+    weak_steps = int(np.ceil(weak_unique_target_count / effective_total_capacity))
 
     core_occurrences_per_global_step = (
         float(predicted_core_occurrences_per_go_cycle)
@@ -1004,7 +1196,19 @@ def resolve_hybrid_epoch_requirements(
         "resolved_steps": int(resolved_steps),
         "weak_unique_target_count": int(weak_unique_target_count),
         "focus_capacity_per_global_step": int(focus_capacity_per_global_step),
-        "effective_focus_capacity_per_global_step": float(effective_focus_capacity),
+        "baseline_pseudo_pairs_per_query": float(baseline_pseudo_per_query),
+        "estimated_pseudo_pairs_per_rank_step": float(
+            estimated_pseudo_pairs_per_rank_step
+        ),
+        "estimated_pseudo_pairs_per_global_step": float(
+            estimated_pseudo_pairs_per_global_step
+        ),
+        "effective_unique_weak_capacity_per_global_step": float(
+            effective_total_capacity
+        ),
+        # Compatibility key retained for older diagnostics.  It now refers to
+        # the effective capacity from *all* pseudo-producing query slots.
+        "effective_focus_capacity_per_global_step": float(effective_total_capacity),
         "estimated_go_cycles": float(estimated_go_cycles),
     }
 
@@ -1053,11 +1257,13 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
             go_cycles_floor=float(sampling_cfg.coverage_cycles_per_epoch),
             eligible_go_count=int(eligible_go_count),
             coverage_slots_per_episode=int(coverage_slots),
+            num_queries_per_episode=int(sampler.config.num_queries),
             world_size=int(world_size),
             weak_unique_coverage_target=float(
                 sampling_cfg.weak_unique_coverage_target_per_epoch
             ),
             pseudo_eligible_active_weak=int(pseudo_eligible_active_weak),
+            predicted_pseudo_pairs_per_go_cycle=int(pseudo_per_go_cycle),
             weak_focus_queries_per_episode=int(
                 sampler.config.weak_focus_queries_per_episode
             ),
@@ -1167,6 +1373,20 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
             "role_counts": role_counts,
             "pseudo_active_weak": int(pseudo_active_weak),
             "pseudo_eligible_active_weak": int(pseudo_eligible_active_weak),
+        },
+        "ontology_universe": {
+            **dict(stores.ontology_summary),
+            "local_go_hops": int(sampling_cfg.go_hops),
+            "local_go_fanouts": {
+                "is_a": int(sampling_cfg.go_is_a_fanout),
+                "has_child": int(sampling_cfg.go_has_child_fanout),
+                "part_of": int(sampling_cfg.go_part_of_fanout),
+                "has_part": int(sampling_cfg.go_has_part_fanout),
+            },
+            "global_cache_role": (
+                "all full-ontology rows are encoded once per cache refresh; "
+                "local G-G sampling adds protein-conditioned ontology updates"
+            ),
         },
         "stage1_reference": {
             "global_steps_per_epoch": sampling_cfg.stage1_reference_global_steps_per_epoch,
