@@ -85,11 +85,36 @@ WORKING_ADDRESS = ROOT / "data" / "sprot_2204_MSA_bin" / "index.pkl"
 IC_PATH = None
 GO_EDGES_PATH = ROOT / "data" / "go_edges" / f"go_edges_{TASK}.pt"
 
+# Pseudo label probability
+PROB_OUTPUT_DIR = ROOT / "data" / "outputs" / "msa_teacher_25_10_22_probs"
+
+PSEUDO_PROB_PATH_BY_TASK = {
+    "cc": PROB_OUTPUT_DIR / "cc_exp_train_probs.float16.npy",
+    "mf": PROB_OUTPUT_DIR / "mf_exp_train_probs.float16.npy",
+    "bp": PROB_OUTPUT_DIR / "bp_exp_train_probs.float16.npy",
+}
+
+PSEUDO_PROB_PATH = PSEUDO_PROB_PATH_BY_TASK[TASK]
+
+USE_PSEUDO_PROB = True
+
+# 推荐先用 soft_pos，因为 hard positive-only 容易很快饱和。
+PSEUDO_PROB_TARGET = "soft_pos"   # "hard" or "soft_pos"
+
+# 0.5 会减弱高低置信度差异，避免低概率 pseudo positive 权重过小。
+PSEUDO_PROB_CONF_POWER = 0.5
+
+PSEUDO_PROB_MIN_CONF = 0.0
+PSEUDO_MIN_IC = 0.0
+
+# 当前 ASL true loss 很大，pseudo weighted_mean 容易贡献过小。
+PSEUDO_LOSS_REDUCTION = "batch_mean"
+
 
 # ---------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------
-RUN_TAG = f"{TASK}_semisup_multi_node_v1"
+RUN_TAG = f"{TASK}_semisup_ema_teacher_v1"
 
 OUTPUT_ROOT = ROOT / "outputs" / "exp_train"
 OUTPUT_DIR = OUTPUT_ROOT / RUN_TAG
@@ -138,9 +163,9 @@ TORCH_COMPILE = False
 # ---------------------------------------------------------------------
 SEED = 3407
 
-# EPOCHS = 20
-EPOCHS = 30
-BATCH_SIZE = 24
+EPOCHS = 20
+# EPOCHS = 30
+BATCH_SIZE = 16
 PSEUDO_BATCH_SIZE = 20
 EVAL_BATCH_SIZE = 8
 DATALOADER_NUM_WORKERS = 4
@@ -180,13 +205,21 @@ DDP_STATIC_GRAPH = False
 PIN_MEMORY = True
 DROP_LAST = False
 
-LR = 2e-4
+LR = 8e-5
+BACKBONE_LR = 8e-5
+PROJ_LR = 2e-4
 MIN_LR = 1e-6
 WEIGHT_DECAY = 1e-4
 GRAD_CLIP = 1.0
 
 NO_AMP = False
 
+# ---------------------------------------------------------------------
+# ASL loss
+# ---------------------------------------------------------------------
+ASL_GAMMA_NEG = 4.0
+ASL_GAMMA_POS = 0.0
+ASL_CLIP = 0.05
 
 # ---------------------------------------------------------------------
 # Projection head
@@ -205,15 +238,45 @@ PROJ_DROPOUT = 0.1
 # ---------------------------------------------------------------------
 # Semi-supervised losses
 # ---------------------------------------------------------------------
-LAMBDA_U = 0.5
-LAMBDA_C = 0.1
-LAMBDA_H = 0.001
+LAMBDA_U = 0.4
+LAMBDA_KD = 0.3
+LAMBDA_C = 0.05
+LAMBDA_H = 0.0005
+
 
 # Important for GO pseudo labels:
 # True means pseudo BCE only supervises pseudo-positive terms.
 # This avoids treating unknown GO terms as negatives.
 PSEUDO_POS_ONLY = True
 
+# ---------------------------------------------------------------------
+# EMA teacher / distillation
+# ---------------------------------------------------------------------
+EMA_ENABLED = True
+
+# 训练步数很多时，0.9999 比 0.999 更稳。
+EMA_DECAY = 0.9995
+EMA_UPDATE_AFTER_STEP = 0
+EMA_UPDATE_EVERY = 1
+
+# Multi-label sigmoid distillation.
+KD_TEMPERATURE = 1.0
+KD_EVERY_N_STEPS = 1
+
+KD_ON_WEAK = True
+KD_ON_STRONG = False
+
+SAVE_EMA_CHECKPOINT = True
+
+
+# ---------------------------------------------------------------------
+# BatchNorm fine-tuning policy
+# ---------------------------------------------------------------------
+# 推荐开启，防止 teacher 的 BN running stats 被 pseudo/strong augmentation 破坏。
+FREEZE_BN = True
+
+# 一般先不冻结 affine gamma/beta；只冻结 running stats。
+FREEZE_BN_AFFINE = False
 
 # ---------------------------------------------------------------------
 # GO-aware contrastive loss
@@ -257,6 +320,13 @@ STRONG_N_BLOCKS = 1
 STRONG_SHUFFLE_ROWS = False
 STRONG_MIN_KEEP_ROWS = 2
 STRONG_NOISE_STD = 0.0
+
+# ---------------------------------------------------------------------
+# Constrative all gather
+# ---------------------------------------------------------------------
+CONTRAST_ALL_GATHER = True
+CONTRAST_MAX_SAMPLES_PER_RANK = 64
+LAMBDA_C = 0.02
 
 
 # ---------------------------------------------------------------------
@@ -379,6 +449,10 @@ def _validate_paths():
     if GO_EDGES_PATH is not None and not Path(GO_EDGES_PATH).is_file():
         raise FileNotFoundError(f"GO_EDGES_PATH not found: {GO_EDGES_PATH}")
 
+    if USE_PSEUDO_PROB:
+        if PSEUDO_PROB_PATH is None or not Path(PSEUDO_PROB_PATH).is_file():
+            raise FileNotFoundError(f"PSEUDO_PROB_PATH not found: {PSEUDO_PROB_PATH}")
+
 def _validate_output_dir():
     output_dir = Path(OUTPUT_DIR)
 
@@ -415,6 +489,27 @@ def _validate_semantics():
         warnings.warn(
             "PSEUDO_POS_ONLY=False. This treats unannotated pseudo-label terms "
             "as negatives. For GO annotation this assumption is often unsafe."
+        )
+
+    if EMA_ENABLED and LAMBDA_KD <= 0:
+        warnings.warn(
+            "EMA_ENABLED=True but LAMBDA_KD <= 0. "
+            "EMA teacher will be saved, but it will not provide distillation loss."
+        )
+
+    if not EMA_ENABLED and LAMBDA_KD > 0:
+        raise ValueError(
+            "LAMBDA_KD > 0 requires EMA_ENABLED=True."
+        )
+
+    if EMA_DECAY <= 0.0 or EMA_DECAY >= 1.0:
+        raise ValueError(
+            f"EMA_DECAY should be in (0, 1), got {EMA_DECAY}"
+        )
+
+    if KD_EVERY_N_STEPS <= 0:
+        raise ValueError(
+            f"KD_EVERY_N_STEPS must be positive, got {KD_EVERY_N_STEPS}"
         )
 
 def _rank_from_env() -> int:
@@ -504,6 +599,27 @@ def build_args() -> argparse.Namespace:
         permute_dims=list(PERMUTE_DIMS),
         torch_compile=bool(TORCH_COMPILE),
 
+        # Pseudo prob
+        pseudo_prob_path=(
+            str(Path(PSEUDO_PROB_PATH))
+            if bool(USE_PSEUDO_PROB)
+            else None
+        ),
+        pseudo_prob_target=str(PSEUDO_PROB_TARGET),
+        pseudo_prob_conf_power=float(PSEUDO_PROB_CONF_POWER),
+        pseudo_prob_min_conf=float(PSEUDO_PROB_MIN_CONF),
+        pseudo_min_ic=float(PSEUDO_MIN_IC),
+        pseudo_loss_reduction=str(PSEUDO_LOSS_REDUCTION),
+        
+        # ASL
+        asl_gamma_neg=float(ASL_GAMMA_NEG),
+        asl_gamma_pos=float(ASL_GAMMA_POS),
+        asl_clip=float(ASL_CLIP),
+        
+        # Contrast all_gather
+        contrast_all_gather=bool(CONTRAST_ALL_GATHER),
+        contrast_max_samples_per_rank=int(CONTRAST_MAX_SAMPLES_PER_RANK),
+
         # GPU handling
         gpu_ids=GPU_IDS,
 
@@ -532,6 +648,8 @@ def build_args() -> argparse.Namespace:
         ddp_static_graph=bool(DDP_STATIC_GRAPH),
 
         lr=float(LR),
+        backbone_lr=float(BACKBONE_LR),
+        proj_lr=float(PROJ_LR),
         min_lr=float(MIN_LR),
         weight_decay=float(WEIGHT_DECAY),
         grad_clip=float(GRAD_CLIP),
@@ -548,8 +666,24 @@ def build_args() -> argparse.Namespace:
 
         # Semi-supervised loss weights
         lambda_u=float(LAMBDA_U),
+        lambda_kd=float(LAMBDA_KD),
         lambda_c=float(LAMBDA_C),
         lambda_h=float(LAMBDA_H),
+
+        # EMA teacher / distillation
+        ema_enabled=bool(EMA_ENABLED),
+        ema_decay=float(EMA_DECAY),
+        ema_update_after_step=int(EMA_UPDATE_AFTER_STEP),
+        ema_update_every=int(EMA_UPDATE_EVERY),
+        kd_temperature=float(KD_TEMPERATURE),
+        kd_every_n_steps=int(KD_EVERY_N_STEPS),
+        kd_on_weak=bool(KD_ON_WEAK),
+        kd_on_strong=bool(KD_ON_STRONG),
+        save_ema_checkpoint=bool(SAVE_EMA_CHECKPOINT),
+        
+        # BatchNorm policy
+        freeze_bn=bool(FREEZE_BN),
+        freeze_bn_affine=bool(FREEZE_BN_AFFINE),
 
         # Contrastive loss
         contrast_tau=float(CONTRAST_TAU),
@@ -619,11 +753,41 @@ def print_run_summary(args: argparse.Namespace):
     print(f"MAX_LEN              = {args.max_len}")
     print(f"MSA_MAX_SIZE          = {args.msa_max_size}")
     print(f"PROJ_IN_DIM          = {args.proj_in_dim}")
+
+    print(f"USE_PSEUDO_PROB      = {USE_PSEUDO_PROB}")
+    print(f"PSEUDO_PROB_PATH     = {args.pseudo_prob_path}")
+    print(f"PSEUDO_PROB_TARGET   = {args.pseudo_prob_target}")
+    print(f"PSEUDO_CONF_POWER    = {args.pseudo_prob_conf_power}")
+    print(f"PSEUDO_MIN_CONF      = {args.pseudo_prob_min_conf}")
+    print(f"PSEUDO_MIN_IC        = {args.pseudo_min_ic}")
+    print(f"PSEUDO_LOSS_REDUCTION= {args.pseudo_loss_reduction}")
+    
+    print(f"ASL_GAMMA_NEG        = {args.asl_gamma_neg}")
+    print(f"ASL_GAMMA_POS        = {args.asl_gamma_pos}")
+    print(f"ASL_CLIP             = {args.asl_clip}")
+    
+    print(f"CONTRAST_ALL_GATHER  = {args.contrast_all_gather}")
+    print(f"CONTRAST_MAX_SAMPLES = {args.contrast_max_samples_per_rank}")
+
     print(f"EPOCHS               = {args.epochs}")
     print(f"BATCH_SIZE           = {args.batch_size}")
     print(f"PSEUDO_BATCH_SIZE    = {args.pseudo_batch_size}")
     print(f"LR                   = {args.lr}")
+    print(f"BACKBONE_LR          = {args.backbone_lr}")
+    print(f"PROJ_LR              = {args.proj_lr}")
+    
+    print(f"EMA_ENABLED          = {args.ema_enabled}")
+    print(f"EMA_DECAY            = {args.ema_decay}")
+    print(f"KD_TEMPERATURE       = {args.kd_temperature}")
+    print(f"KD_EVERY_N_STEPS     = {args.kd_every_n_steps}")
+    print(f"KD_ON_WEAK           = {args.kd_on_weak}")
+    print(f"KD_ON_STRONG         = {args.kd_on_strong}")
+    print(f"FREEZE_BN            = {args.freeze_bn}")
+    print(f"FREEZE_BN_AFFINE     = {args.freeze_bn_affine}")
+    print(f"SAVE_EMA_CHECKPOINT  = {args.save_ema_checkpoint}")
+
     print(f"LAMBDA_U             = {args.lambda_u}")
+    print(f"LAMBDA_KD            = {args.lambda_kd}")
     print(f"LAMBDA_C             = {args.lambda_c}")
     print(f"LAMBDA_H             = {args.lambda_h}")
     print(f"PSEUDO_POS_ONLY      = {args.pseudo_pos_only}")

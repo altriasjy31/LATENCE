@@ -1,0 +1,70 @@
+--- nbs_models/nbs_protein_go/nbs_pg/episode.py
++++ nbs_models/nbs_protein_go/nbs_pg/episode.py
+@@ -524,6 +524,8 @@
+         self._weak_primary_total_owned: int = 0
+         self._weak_primary_selected: int = 0
+         self._weak_primary_candidate_query_selected_current: int = 0
++        self._weak_primary_requested_current: int = 0
++        self._weak_primary_partial_block_current: int = 0
+ 
+     @property
+     def coverage_slots_per_episode(self) -> int:
+@@ -777,6 +779,8 @@
+             int(self.config.weak_primary_proteins_per_episode),
+             len(self._weak_primary_pending),
+         )
++        self._weak_primary_requested_current = int(target)
++        self._weak_primary_partial_block_current = 0
+         if target <= 0:
+             return {}, 0
+ 
+@@ -891,12 +895,30 @@
+             candidate_query_selected
+         )
+         if selected < target:
+-            raise RuntimeError(
+-                "weak-primary sampler could not fill the requested anchor block: "
+-                f"selected={selected}/{target}, scanned={scanned}, "
+-                f"remaining={len(self._weak_primary_pending)}. Increase "
+-                "weak_focus_scan_limit or reduce weak_primary_proteins_per_episode."
+-            )
++            # Near queue exhaustion, the remaining weak proteins are a biased
++            # residue of rows that could not share the current episode's
++            # finite GO/ontology query groups.  If we scanned the *entire*
++            # pending queue and still made forward progress, emit that maximal
++            # partial block and let the next synchronized loader step drain the
++            # deferred rows.  This is not a relaxed steady-state path: a scan
++            # limited by weak_focus_scan_limit still fails, and zero progress
++            # always fails, so malformed/ineligible rows cannot be hidden.
++            scanned_all_pending = scanned >= initial_pending
++            if selected > 0 and scanned_all_pending:
++                self._weak_primary_partial_block_current = 1
++            else:
++                reason = (
++                    "the sampler made no forward progress"
++                    if selected <= 0
++                    else "weak_focus_scan_limit was exhausted before the queue"
++                )
++                raise RuntimeError(
++                    "weak-primary sampler could not fill the requested anchor block: "
++                    f"selected={selected}/{target}, scanned={scanned}/"
++                    f"{initial_pending}, remaining={len(self._weak_primary_pending)}; "
++                    f"{reason}. Audit pseudo eligibility or increase "
++                    "weak_focus_scan_limit."
++                )
+         return {
+             int(go_idx): (
+                 np.asarray(grouped_rows[go_idx], dtype=np.int64),
+@@ -1756,6 +1778,12 @@
+                 "weak_primary_anchor_retained": int(
+                     retained_weak_primary_anchors
+                 ),
++                "weak_primary_requested_count": int(
++                    self._weak_primary_requested_current
++                ),
++                "weak_primary_partial_block": int(
++                    self._weak_primary_partial_block_current
++                ),
+                 "weak_primary_candidate_query_anchor_count": int(
+                     self._weak_primary_candidate_query_selected_current
+                 ),

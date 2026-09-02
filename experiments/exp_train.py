@@ -64,6 +64,9 @@ sys.path.insert(0, str(MSA_ROOT))
 from models import Arch  # noqa: E402
 # import experiments.msa as D  # noqa: E402
 from experiments.msabin import MSABinaryDataset
+from experiments.msaprob import PseudoProbDataset
+from loss_functions.loss import AsymmetricLossOptimized
+
 
 
 TASKS = {
@@ -111,6 +114,17 @@ def normalize_task(task: str) -> str:
     if task not in TASKS:
         raise ValueError(f"Unknown task: {task}")
     return TASKS[task]
+
+def clean_optional_path(x):
+    if x is None:
+        return None
+
+    s = str(x).strip()
+
+    if s == "" or s.lower() in {"none", "null"}:
+        return None
+
+    return s
 
 
 def build_opt_from_config(args: argparse.Namespace) -> SimpleNamespace:
@@ -243,6 +257,10 @@ def get_device(device_arg: str) -> torch.device:
     if device_arg == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(device_arg)
+
+# ---------------------------------------------------------------------
+# Distributed utils
+# ---------------------------------------------------------------------
 
 def dist_is_initialized() -> bool:
     return dist.is_available() and dist.is_initialized()
@@ -411,6 +429,79 @@ def parse_gpu_ids_arg(
 
     return []
 
+def is_dist_avail_and_initialized():
+    return dist.is_available() and dist.is_initialized()
+
+
+def ddp_all_gather_padded(x: torch.Tensor, pad_value=0):
+    """
+    Gather tensors with variable first dimension across ranks.
+    Returns:
+        gathered: [sum_i n_i, ...]
+        sizes:    [world_size]
+        rank:     current rank
+    """
+    if not is_dist_avail_and_initialized():
+        sizes = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
+        return x, sizes, 0
+
+    world_size = dist.get_world_size()
+    rank = dist.get_rank()
+
+    local_n = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
+    sizes_list = [torch.zeros_like(local_n) for _ in range(world_size)]
+    dist.all_gather(sizes_list, local_n)
+
+    sizes = torch.cat(sizes_list, dim=0)
+    max_n = int(sizes.max().item())
+
+    if x.shape[0] < max_n:
+        pad_shape = (max_n - x.shape[0],) + tuple(x.shape[1:])
+        pad = torch.full(
+            pad_shape,
+            fill_value=pad_value,
+            dtype=x.dtype,
+            device=x.device,
+        )
+        x_pad = torch.cat([x, pad], dim=0)
+    else:
+        x_pad = x
+
+    gathered_pad = [torch.empty_like(x_pad) for _ in range(world_size)]
+    dist.all_gather(gathered_pad, x_pad)
+
+    gathered = []
+    for r, t in enumerate(gathered_pad):
+        gathered.append(t[: int(sizes[r].item())])
+
+    gathered = torch.cat(gathered, dim=0)
+    return gathered, sizes, rank
+
+
+def gather_bank_with_local_grad(x: torch.Tensor, pad_value=0):
+    """
+    Gather detached global bank but keep current rank slice with gradient.
+    """
+    if not is_dist_avail_and_initialized():
+        sizes = torch.tensor([x.shape[0]], device=x.device, dtype=torch.long)
+        return x, sizes, 0, 0
+
+    gathered, sizes, rank = ddp_all_gather_padded(x.detach(), pad_value=pad_value)
+
+    start = int(sizes[:rank].sum().item())
+    end = start + x.shape[0]
+
+    # Replace local detached slice with original x so local gradients flow.
+    gathered = torch.cat(
+        [
+            gathered[:start],
+            x,
+            gathered[end:],
+        ],
+        dim=0,
+    )
+
+    return gathered, sizes, rank, start
 
 # ---------------------------------------------------------------------
 # Dataset helpers
@@ -527,6 +618,23 @@ def unpack_batch(batch):
     proteins, X = split_input(input_data)
     return proteins, X, y
 
+def unpack_pseudo_batch(batch):
+    proteins, X, y_pack = unpack_batch(batch)
+
+    prob = None
+
+    if isinstance(y_pack, dict):
+        if "hard_y" not in y_pack:
+            raise KeyError("Pseudo batch dict must contain key 'hard_y'")
+
+        y = y_pack["hard_y"]
+        prob = y_pack.get("prob", None)
+
+    else:
+        y = y_pack
+
+    return proteins, X, y, prob
+
 
 def move_to_device(*xs, device: torch.device):
     out = []
@@ -546,6 +654,44 @@ def combine_proteins(p1, p2):
     if p2 is None:
         return list(p1)
     return list(p1) + list(p2)
+
+def subsample_contrastive(
+    z,
+    y,
+    mask,
+    conf,
+    is_true,
+    max_n: int,
+):
+    if max_n is None or int(max_n) <= 0 or z.shape[0] <= int(max_n):
+        return z, y, mask, conf, is_true
+
+    max_n = int(max_n)
+
+    idx_true = torch.where(is_true.bool())[0]
+    idx_pseudo = torch.where(~is_true.bool())[0]
+
+    keep = []
+
+    n_true_keep = min(len(idx_true), max_n // 2)
+
+    if n_true_keep > 0:
+        perm = torch.randperm(len(idx_true), device=z.device)[:n_true_keep]
+        keep.append(idx_true[perm])
+
+    remain = max_n - n_true_keep
+    n_pseudo_keep = min(len(idx_pseudo), remain)
+
+    if n_pseudo_keep > 0:
+        perm = torch.randperm(len(idx_pseudo), device=z.device)[:n_pseudo_keep]
+        keep.append(idx_pseudo[perm])
+
+    if len(keep) == 0:
+        return z[:0], y[:0], mask[:0], conf[:0], is_true[:0]
+
+    idx = torch.cat(keep, dim=0)
+
+    return z[idx], y[idx], mask[idx], conf[idx], is_true[idx]
 
 
 def build_msa_aug_params(opt, strength: str):
@@ -893,6 +1039,220 @@ def save_backbone_checkpoint(model: nn.Module, path: Union[str, Path]):
     m = unwrap_model(model)
     torch.save(m.backbone.state_dict(), path)
 
+def extract_logits(model_output):
+    if isinstance(model_output, dict):
+        return model_output["logits"]
+
+    if isinstance(model_output, (tuple, list)):
+        return model_output[0]
+
+    return model_output
+
+
+def load_arch_checkpoint(
+    model: nn.Module,
+    ckpt_path: Union[str, Path],
+    strict_shape: bool = True,
+):
+    """
+    Load an Arch checkpoint directly into an Arch model.
+
+    Compatible with:
+        original teacher Arch checkpoint
+        semisup_backbone_*.pt
+        semisup_full_*.pt after strip_state_dict_prefix()
+    """
+    ckpt_path = Path(ckpt_path)
+
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    raw = torch.load(ckpt_path, map_location="cpu")
+
+    if isinstance(raw, dict) and "state_dict" in raw:
+        sd = raw["state_dict"]
+    else:
+        sd = raw
+
+    sd = strip_state_dict_prefix(sd)
+
+    model_sd = model.state_dict()
+    load_sd = {}
+
+    skipped = []
+    ignored = []
+
+    for k, v in sd.items():
+        if k not in model_sd:
+            ignored.append(k)
+            continue
+
+        if tuple(model_sd[k].shape) != tuple(v.shape):
+            skipped.append((k, tuple(v.shape), tuple(model_sd[k].shape)))
+            continue
+
+        load_sd[k] = v
+
+    if strict_shape and len(load_sd) == 0:
+        raise RuntimeError(f"No compatible tensors loaded from {ckpt_path}")
+
+    missing, unexpected = model.load_state_dict(load_sd, strict=False)
+
+    if is_main_process():
+        print(f"[Arch checkpoint] loaded {len(load_sd)} tensors from {ckpt_path}")
+        print(f"[Arch checkpoint] ignored={len(ignored)}, skipped_shape={len(skipped)}")
+        if len(missing) > 0:
+            print(f"[Arch checkpoint] missing after partial load: {len(missing)}")
+        if len(unexpected) > 0:
+            print(f"[Arch checkpoint] unexpected after partial load: {len(unexpected)}")
+
+
+def save_arch_checkpoint(model: nn.Module, path: Union[str, Path]):
+    """
+    Save an Arch model state_dict.
+
+    This is used for EMA teacher backbone.
+    eval_ind_test.py can load this directly.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), path)
+
+
+@torch.no_grad()
+def ema_update_arch(
+    ema_model: nn.Module,
+    student_arch: nn.Module,
+    decay: float,
+):
+    """
+    EMA update:
+        ema = decay * ema + (1 - decay) * student
+
+    Non-floating buffers, e.g. num_batches_tracked, are copied directly.
+    """
+    decay = float(decay)
+
+    ema_state = ema_model.state_dict()
+    stu_state = student_arch.state_dict()
+
+    for k, ema_v in ema_state.items():
+        if k not in stu_state:
+            continue
+
+        stu_v = stu_state[k].detach()
+
+        if torch.is_floating_point(ema_v):
+            ema_v.mul_(decay).add_(stu_v.to(dtype=ema_v.dtype), alpha=1.0 - decay)
+        else:
+            ema_v.copy_(stu_v)
+
+
+def set_batchnorm_eval(
+    model: nn.Module,
+    freeze_affine: bool = False,
+):
+    """
+    Keep BatchNorm running_mean/running_var fixed during fine-tuning.
+
+    Important:
+        model.train() will put BN back into train mode,
+        so this function should be called after every model.train().
+    """
+    for m in model.modules():
+        if isinstance(m, nn.modules.batchnorm._BatchNorm):
+            m.eval()
+
+            if freeze_affine:
+                for p in m.parameters(recurse=False):
+                    p.requires_grad_(False)
+
+
+def build_student_optimizer(
+    model: nn.Module,
+    args: argparse.Namespace,
+):
+    """
+    Use smaller LR for pretrained backbone and optionally larger LR for projection head.
+
+    model may be DDP-wrapped.
+    """
+    m = unwrap_model(model)
+
+    backbone_lr = getattr(args, "backbone_lr", None)
+    proj_lr = getattr(args, "proj_lr", None)
+
+    if backbone_lr is None or float(backbone_lr) <= 0:
+        backbone_lr = args.lr
+
+    if proj_lr is None or float(proj_lr) <= 0:
+        proj_lr = args.lr
+
+    param_groups = []
+
+    backbone_params = [
+        p for p in m.backbone.parameters()
+        if p.requires_grad
+    ]
+
+    proj_params = [
+        p for p in m.proj.parameters()
+        if p.requires_grad
+    ]
+
+    if len(backbone_params) > 0:
+        param_groups.append(
+            {
+                "params": backbone_params,
+                "lr": float(backbone_lr),
+                "name": "backbone",
+            }
+        )
+
+    if len(proj_params) > 0:
+        param_groups.append(
+            {
+                "params": proj_params,
+                "lr": float(proj_lr),
+                "name": "projection",
+            }
+        )
+
+    if len(param_groups) == 0:
+        raise RuntimeError("No trainable parameters found.")
+
+    return torch.optim.AdamW(
+        param_groups,
+        lr=float(args.lr),
+        weight_decay=float(args.weight_decay),
+    )
+
+
+def sigmoid_kd_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    temperature: float = 1.0,
+):
+    """
+    Multi-label sigmoid distillation loss.
+
+    This is more appropriate than softmax KL for GO multi-label prediction.
+
+    L = BCEWithLogits(student_logits / T, sigmoid(teacher_logits / T)) * T^2
+    """
+    T = max(float(temperature), 1e-6)
+
+    with torch.no_grad():
+        teacher_probs = torch.sigmoid(teacher_logits.float() / T)
+
+    loss = F.binary_cross_entropy_with_logits(
+        student_logits.float() / T,
+        teacher_probs,
+        reduction="mean",
+    )
+
+    return loss * (T * T)
+
 
 # ---------------------------------------------------------------------
 # Losses
@@ -908,7 +1268,23 @@ def masked_bce_with_logits(
     mask: torch.Tensor,
     conf: Optional[torch.Tensor] = None,
     pos_only: bool = True,
+    reduction_mode: str = "weighted_mean",
 ):
+    """
+    reduction_mode:
+        weighted_mean:
+            (raw * weight).sum() / weight.sum()
+            当前默认，数值较小。
+
+        batch_mean:
+            (raw * weight).sum() / batch_size
+            pseudo loss 会随每个 protein 的 pseudo positive 数量增加而增大。
+
+        sum:
+            (raw * weight).sum()
+            不推荐，尺度太大。
+    """
+    logits = logits.float()
     target = target.float()
     mask = mask.float()
 
@@ -920,10 +1296,31 @@ def masked_bce_with_logits(
     if pos_only:
         mask = mask * (target > 0.5).float()
 
-    raw = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    raw = F.binary_cross_entropy_with_logits(
+        logits,
+        target,
+        reduction="none",
+    )
+
     weight = mask * conf
-    denom = weight.sum().clamp_min(1.0)
-    return (raw * weight).sum() / denom
+    numerator = (raw * weight).sum()
+
+    if reduction_mode == "weighted_mean":
+        denom = weight.sum().clamp_min(1.0)
+        return numerator / denom
+
+    if reduction_mode == "batch_mean":
+        denom = torch.tensor(
+            logits.shape[0],
+            device=logits.device,
+            dtype=logits.dtype,
+        ).clamp_min(1.0)
+        return numerator / denom
+
+    if reduction_mode == "sum":
+        return numerator
+
+    raise ValueError(f"Unknown reduction_mode: {reduction_mode}")
 
 
 class GOAwareSupConLoss(nn.Module):
@@ -1067,14 +1464,170 @@ class GOAwareSupConLoss(nn.Module):
 
         return loss_per_anchor[valid].mean()
 
+class GOAwareSupConLocalGlobalLoss(nn.Module):
+    def __init__(
+        self,
+        ic: torch.Tensor,
+        tau: float = 0.1,
+        min_r: float = 1e-6,
+        w_true_pseudo: float = 0.7,
+        w_pseudo_pseudo: float = 0.4,
+        eps: float = 1e-8,
+    ):
+        super().__init__()
+        self.register_buffer("ic", ic.float())
+        self.tau = tau
+        self.min_r = min_r
+        self.w_true_pseudo = w_true_pseudo
+        self.w_pseudo_pseudo = w_pseudo_pseudo
+        self.eps = eps
+
+    def forward(
+        self,
+        z_anchor: torch.Tensor,
+        y_anchor: torch.Tensor,
+        is_true_anchor: torch.Tensor,
+        mask_anchor: torch.Tensor,
+        conf_anchor: torch.Tensor,
+        z_bank: torch.Tensor,
+        y_bank: torch.Tensor,
+        is_true_bank: torch.Tensor,
+        mask_bank: torch.Tensor,
+        conf_bank: torch.Tensor,
+        local_start: int = 0,
+    ):
+        if z_anchor.shape[0] <= 0 or z_bank.shape[0] <= 1:
+            return z_anchor.float().sum() * 0.0
+
+        device = z_anchor.device
+        ic = self.ic.to(device=device, dtype=torch.float32)
+
+        z_anchor = F.normalize(z_anchor.float(), dim=-1)
+        z_bank = F.normalize(z_bank.float(), dim=-1)
+
+        y_anchor = y_anchor.float()
+        y_bank = y_bank.float()
+        mask_anchor = mask_anchor.float()
+        mask_bank = mask_bank.float()
+        conf_anchor = conf_anchor.float()
+        conf_bank = conf_bank.float()
+
+        pos_anchor = ((y_anchor > 0.5) & (mask_anchor > 0.5)).float()
+        pos_bank = ((y_bank > 0.5) & (mask_bank > 0.5)).float()
+
+        anchor_ic = pos_anchor * ic[None, :]
+        bank_ic = pos_bank * ic[None, :]
+
+        inter = anchor_ic @ pos_bank.T
+        size_a = anchor_ic.sum(dim=1)
+        size_b = bank_ic.sum(dim=1)
+        union = size_a[:, None] + size_b[None, :] - inter
+
+        r = inter / union.clamp_min(self.eps)
+        r = torch.where(r >= self.min_r, r, torch.zeros_like(r))
+
+        na = z_anchor.shape[0]
+        ng = z_bank.shape[0]
+
+        self_idx = torch.arange(na, device=device) + int(local_start)
+        valid_self = self_idx < ng
+
+        if valid_self.any():
+            r[
+                torch.arange(na, device=device)[valid_self],
+                self_idx[valid_self],
+            ] = 0.0
+
+        conf_mass_a = (conf_anchor * pos_anchor * ic[None, :]).sum(dim=1)
+        conf_den_a = (pos_anchor * ic[None, :]).sum(dim=1).clamp_min(self.eps)
+        sample_conf_a = conf_mass_a / conf_den_a
+
+        conf_mass_b = (conf_bank * pos_bank * ic[None, :]).sum(dim=1)
+        conf_den_b = (pos_bank * ic[None, :]).sum(dim=1).clamp_min(self.eps)
+        sample_conf_b = conf_mass_b / conf_den_b
+
+        sample_conf_a = torch.where(
+            conf_den_a > 0,
+            sample_conf_a,
+            torch.zeros_like(sample_conf_a),
+        )
+
+        sample_conf_b = torch.where(
+            conf_den_b > 0,
+            sample_conf_b,
+            torch.zeros_like(sample_conf_b),
+        )
+
+        sample_conf_a = torch.where(
+            is_true_anchor.bool(),
+            torch.ones_like(sample_conf_a),
+            sample_conf_a,
+        )
+
+        sample_conf_b = torch.where(
+            is_true_bank.bool(),
+            torch.ones_like(sample_conf_b),
+            sample_conf_b,
+        )
+
+        true_a = is_true_anchor.bool()[:, None]
+        true_b = is_true_bank.bool()[None, :]
+
+        pair_type_weight = torch.ones_like(r)
+
+        mixed = true_a ^ true_b
+        pair_type_weight = torch.where(
+            mixed,
+            torch.full_like(pair_type_weight, self.w_true_pseudo),
+            pair_type_weight,
+        )
+
+        pseudo_pseudo = (~true_a) & (~true_b)
+        pair_type_weight = torch.where(
+            pseudo_pseudo,
+            torch.full_like(pair_type_weight, self.w_pseudo_pseudo),
+            pair_type_weight,
+        )
+
+        pair_conf = torch.sqrt(
+            sample_conf_a[:, None].clamp_min(0.0)
+            * sample_conf_b[None, :].clamp_min(0.0)
+        )
+
+        weights = r * pair_type_weight * pair_conf
+
+        row_sum = weights.sum(dim=1, keepdim=True)
+        valid = row_sum.squeeze(1) > self.eps
+
+        if valid.sum() == 0:
+            return z_anchor.float().sum() * 0.0
+
+        pi = weights / row_sum.clamp_min(self.eps)
+
+        logits = z_anchor @ z_bank.T / self.tau
+        logits = logits - logits.max(dim=1, keepdim=True).values.detach()
+
+        if valid_self.any():
+            logits[
+                torch.arange(na, device=device)[valid_self],
+                self_idx[valid_self],
+            ] = -1e9
+
+        log_prob = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+        loss_per_anchor = -(pi * log_prob).sum(dim=1)
+
+        return loss_per_anchor[valid].mean()
+
 
 def hierarchy_violation_loss(logits: torch.Tensor, edges: Optional[torch.Tensor]):
     if edges is None or edges.numel() == 0:
-        return logits.sum() * 0.0
+        return logits.float().sum() * 0.0
 
-    probs = torch.sigmoid(logits)
+    probs = torch.sigmoid(logits.float())
+
     child = edges[:, 0]
     parent = edges[:, 1]
+
     return F.relu(probs[:, child] - probs[:, parent]).mean()
 
 
@@ -1166,6 +1719,85 @@ def pseudo_conf_from_labels(
         return torch.ones_like(pseudo_y)
     raise ValueError(f"Unknown pseudo confidence mode: {mode}")
 
+def build_pseudo_supervision(
+    y_u: torch.Tensor,
+    prob_u: Optional[torch.Tensor],
+    args: argparse.Namespace,
+    ic_device: torch.Tensor,
+):
+    """
+    Build pseudo target / mask / confidence.
+
+    Recommended modes:
+
+    pseudo_prob_target = "hard":
+        target = hard pseudo label
+        conf   = teacher probability
+        mask   = pseudo positive set
+
+    pseudo_prob_target = "soft_pos":
+        target = teacher probability
+        conf   = teacher probability
+        mask   = pseudo positive set
+
+    For current issue where pseudo loss quickly vanishes, "soft_pos" is worth testing.
+    """
+
+    y_hard = y_u.float()
+
+    if bool(args.pseudo_pos_only):
+        mask = (y_hard > 0.5).float()
+    else:
+        mask = torch.ones_like(y_hard)
+
+    pseudo_min_ic = float(getattr(args, "pseudo_min_ic", 0.0))
+
+    if pseudo_min_ic >= 0.0:
+        if ic_device.numel() != y_hard.shape[1]:
+            raise ValueError(
+                f"IC dimension mismatch: ic={ic_device.shape}, y={y_hard.shape}"
+            )
+
+        term_keep = (ic_device > pseudo_min_ic).float()
+        mask = mask * term_keep[None, :]
+
+    if prob_u is None:
+        target = y_hard
+        conf = torch.ones_like(y_hard)
+
+    else:
+        p = prob_u.float().clamp(0.0, 1.0)
+
+        if p.shape != y_hard.shape:
+            raise ValueError(
+                f"Pseudo prob shape mismatch: prob={p.shape}, y={y_hard.shape}"
+            )
+
+        min_conf = float(getattr(args, "pseudo_prob_min_conf", 0.0))
+        if min_conf > 0.0:
+            mask = mask * (p >= min_conf).float()
+
+        conf_power = float(getattr(args, "pseudo_prob_conf_power", 1.0))
+        if conf_power <= 0.0:
+            conf = torch.ones_like(p)
+        else:
+            conf = p.pow(conf_power)
+
+        target_mode = str(getattr(args, "pseudo_prob_target", "hard"))
+
+        if target_mode == "hard":
+            target = y_hard
+
+        elif target_mode == "soft_pos":
+            target = p
+
+        else:
+            raise ValueError(f"Unknown pseudo_prob_target: {target_mode}")
+
+    conf = conf * (mask > 0).float()
+
+    return target, mask, conf
+
 
 # ---------------------------------------------------------------------
 # Training
@@ -1207,12 +1839,44 @@ def train_one_task(args: argparse.Namespace):
         need_proteins=args.need_proteins,
     )
 
-    pseudo_dataset = build_msa_dataset(
+    pseudo_base_dataset = build_msa_dataset(
         opt=opt,
         mode="exp_train",
         task=task,
         need_proteins=args.need_proteins,
     )
+    
+    pseudo_prob_path = clean_optional_path(getattr(args, "pseudo_prob_path", None))
+    args.pseudo_prob_path = pseudo_prob_path
+    
+    if pseudo_prob_path is not None:
+        pseudo_dataset = PseudoProbDataset(
+            base_dataset=pseudo_base_dataset,
+            metadata_file=args.file_address,
+            mode="exp_train",
+            task=task,
+            prob_path=pseudo_prob_path,
+            num_classes=args.num_classes,
+        )
+    
+        if is_main_process():
+            print(
+                "[Pseudo prob] enabled: "
+                f"path={pseudo_prob_path}, "
+                f"shape={pseudo_dataset.prob_shape}, "
+                f"dtype={pseudo_dataset.prob_dtype}, "
+                f"target={args.pseudo_prob_target}, "
+                f"conf_power={args.pseudo_prob_conf_power}, "
+                f"min_conf={args.pseudo_prob_min_conf}, "
+                f"pseudo_min_ic={args.pseudo_min_ic}, "
+                f"loss_reduction={args.pseudo_loss_reduction}"
+            )
+    
+    else:
+        pseudo_dataset = pseudo_base_dataset
+    
+        if is_main_process():
+            print("[Pseudo prob] disabled; using hard prop_annotations only.")
 
     val_dataset = None
     if not args.no_validation:
@@ -1273,21 +1937,55 @@ def train_one_task(args: argparse.Namespace):
     # Model
     # -------------------------
     model = SemiSupMSAGO(opt)
-
+    
     if args.init_ckpt is not None:
         load_backbone_checkpoint(
             model=model,
             ckpt_path=args.init_ckpt,
             strict_shape=True,
         )
-    model = model.to(device)
-    model = wrap_model_for_distributed(model, args=args, device=device)
     
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
+        model = model.to(device)
+        
+        # ------------------------------------------------------------
+        # EMA teacher.
+        # It is an Arch model, not SemiSupMSAGO, because it only provides logits.
+        # Both student and EMA teacher start from the same original teacher checkpoint.
+        # ------------------------------------------------------------
+        teacher_ema = None
+        
+        if bool(args.ema_enabled):
+            teacher_ema = Arch(opt)
+        
+            if args.init_ckpt is None:
+                raise ValueError("EMA teacher requires args.init_ckpt to initialize.")
+        
+            load_arch_checkpoint(
+                model=teacher_ema,
+                ckpt_path=args.init_ckpt,
+                strict_shape=True,
+            )
+        
+            teacher_ema = teacher_ema.to(device)
+            teacher_ema.eval()
+            teacher_ema.requires_grad_(False)
+        
+            if is_main_process():
+                print(
+                    f"[EMA teacher] enabled, decay={args.ema_decay}, "
+                    f"lambda_kd={args.lambda_kd}, temperature={args.kd_temperature}"
+                )
+        
+        # Freeze BN before optimizer construction if affine parameters are also frozen.
+        if bool(args.freeze_bn):
+            set_batchnorm_eval(
+                model,
+                freeze_affine=bool(args.freeze_bn_affine),
+            )
+        
+        model = wrap_model_for_distributed(model, args=args, device=device)
+        
+        optimizer = build_student_optimizer(model, args)
 
     steps_per_epoch = max(len(true_loader), len(pseudo_loader))
     total_steps = max(1, steps_per_epoch * args.epochs)
@@ -1310,7 +2008,8 @@ def train_one_task(args: argparse.Namespace):
     # Loss components
     # -------------------------
     ic = load_ic(args, task, args.num_classes)
-    go_con_loss = GOAwareSupConLoss(
+
+    go_con_global_loss = GOAwareSupConLocalGlobalLoss(
         ic=ic,
         tau=args.contrast_tau,
         min_r=args.contrast_min_r,
@@ -1319,6 +2018,13 @@ def train_one_task(args: argparse.Namespace):
     ).to(device)
 
     go_edges = load_go_edges(args.go_edges_path, device)
+
+    true_loss_func = AsymmetricLossOptimized(
+        gamma_neg=args.asl_gamma_neg,
+        gamma_pos=args.asl_gamma_pos,
+        clip=args.asl_clip,
+        disable_torch_grad_focal_loss=True,
+    )
 
     ic_device = ic.to(device=device, dtype=torch.float32)
 
@@ -1345,6 +2051,15 @@ def train_one_task(args: argparse.Namespace):
 
     for epoch in range(1, args.epochs + 1):
         model.train()
+    
+        if bool(args.freeze_bn):
+            set_batchnorm_eval(
+                model,
+                freeze_affine=False,
+            )
+    
+        if teacher_ema is not None:
+            teacher_ema.eval()
 
         set_loader_epoch(true_loader, epoch)
         set_loader_epoch(pseudo_loader, epoch)
@@ -1359,8 +2074,17 @@ def train_one_task(args: argparse.Namespace):
             "loss": 0.0,
             "loss_true": 0.0,
             "loss_pseudo": 0.0,
+            "loss_kd": 0.0,
             "loss_con": 0.0,
             "loss_hier": 0.0,
+        
+            "w_loss_pseudo": 0.0,
+            "w_loss_kd": 0.0,
+            "w_loss_con": 0.0,
+            "w_loss_hier": 0.0,
+        
+            "pseudo_mask_terms": 0.0,
+            "pseudo_conf_mean": 0.0,
         }
         pbar = tqdm(
             range(steps_per_epoch),
@@ -1380,11 +2104,15 @@ def train_one_task(args: argparse.Namespace):
                 pseudo_batch, pseudo_iter = get_next_batch(pseudo_iter, pseudo_loader)
     
                 proteins_t, X_t, y_t = unpack_batch(true_batch)
-                proteins_u, X_u, y_u = unpack_batch(pseudo_batch)
+                proteins_u, X_u, y_u, prob_u = unpack_pseudo_batch(pseudo_batch)
     
                 X_t, y_t, X_u, y_u = move_to_device(
                     X_t, y_t, X_u, y_u, device=device
                 )
+                
+                if prob_u is not None:
+                    prob_u = prob_u.to(device, non_blocking=True)
+
                 X_t = X_t.long()
                 X_u = X_u.long()
     
@@ -1406,8 +2134,12 @@ def train_one_task(args: argparse.Namespace):
     
                 # pseudo labels from exp_train prop_annotations
                 # Current MSABinaryDataset gives multi-hot y_u. Trust positive pseudo labels only by default.
-                mask_u = (y_u > 0.5).float() if args.pseudo_pos_only else torch.ones_like(y_u)
-                conf_u = pseudo_conf_from_labels(y_u, mode="binary")
+                target_u, mask_u, conf_u = build_pseudo_supervision(
+                    y_u=y_u,
+                    prob_u=prob_u,
+                    args=args,
+                    ic_device=ic_device,
+                )
     
                 labels_for_con = torch.cat([y_t, y_u], dim=0)
                 masks_for_con = torch.cat([mask_t, mask_u], dim=0)
@@ -1422,8 +2154,42 @@ def train_one_task(args: argparse.Namespace):
                 )
     
                 optimizer.zero_grad(set_to_none=True)
-    
-                # with autocast(device_type="cuda", enabled=(device.type == "cuda" and not args.no_amp)):
+                
+                # ------------------------------------------------------------
+                # EMA teacher target.
+                #
+                # Use clean/no-augmentation teacher prediction as a conservative anchor.
+                # This adds one extra forward pass but strongly reduces student drift.
+                # ------------------------------------------------------------
+                teacher_logits = None
+                
+                do_kd = (
+                    teacher_ema is not None
+                    and float(args.lambda_kd) > 0.0
+                    and int(args.kd_every_n_steps) > 0
+                    and (global_step % int(args.kd_every_n_steps) == 0)
+                )
+                
+                if do_kd:
+                    teacher_ema.eval()
+                
+                    with torch.no_grad():
+                        with autocast(
+                            device_type=device.type,
+                            dtype=torch.bfloat16,
+                            enabled=amp_enabled,
+                        ):
+                            teacher_out = teacher_ema(
+                                X,
+                                permute_dims=permute_dims,
+                                aug_params=None,
+                            )
+                
+                        teacher_logits = extract_logits(teacher_out).detach()
+                
+                # ------------------------------------------------------------
+                # Student multi-view forward.
+                # ------------------------------------------------------------
                 with autocast(device_type=device.type, dtype=torch.bfloat16, enabled=amp_enabled):
                     logits_views, z_views = model(
                         X,
@@ -1441,15 +2207,16 @@ def train_one_task(args: argparse.Namespace):
                     logits_t_s = logits_s[:b_t]
                     logits_u_s = logits_s[b_t:]
                     loss_true = 0.5 * (
-                        bce_with_logits(logits_t_w, y_t)
-                        + bce_with_logits(logits_t_s, y_t)
+                        true_loss_func(logits_t_w.float(), y_t.float())
+                        + true_loss_func(logits_t_s.float(), y_t.float())
                     )
                     loss_pseudo = masked_bce_with_logits(
                         logits=logits_u_s,
-                        target=y_u,
+                        target=target_u,
                         mask=mask_u,
                         conf=conf_u,
-                        pos_only=args.pseudo_pos_only,
+                        pos_only=False,
+                        reduction_mode=args.pseudo_loss_reduction,
                     )
     
                     # ----------------------------------------------------
@@ -1466,55 +2233,162 @@ def train_one_task(args: argparse.Namespace):
                     has_pos = ic_mass > 0
     
                     if bool(has_pos.any().item()):
-                        z_con = torch.cat(
-                            [
-                                z_w[has_pos],
-                                z_s[has_pos],
-                            ],
-                            dim=0,
-                        )
-    
+                        z_con = torch.cat([z_w[has_pos], z_s[has_pos]], dim=0)
                         labels_con = labels_for_con[has_pos].repeat(2, 1)
                         masks_con = masks_for_con[has_pos].repeat(2, 1)
                         confs_con = confs_for_con[has_pos].repeat(2, 1)
                         is_true_con = is_true[has_pos].repeat(2)
     
-                        loss_con = go_con_loss(
-                            z=z_con,
-                            y=labels_con,
-                            is_true=is_true_con,
-                            term_mask=masks_con,
-                            term_conf=confs_con,
+                        z_con, labels_con, masks_con, confs_con, is_true_con = subsample_contrastive(
+                            z_con,
+                            labels_con,
+                            masks_con,
+                            confs_con,
+                            is_true_con,
+                            max_n=int(args.contrast_max_samples_per_rank),
                         )
+                        
+                        if bool(args.contrast_all_gather) and is_dist_avail_and_initialized():
+                            # Compress labels/masks/confs before gather.
+                            labels_local = labels_con.bool()
+                            masks_local = masks_con.bool()
+                            confs_local = confs_con.to(torch.float16)
+                            is_true_local = is_true_con.to(torch.int8)
+                        
+                            z_bank, sizes, rank, local_start = gather_bank_with_local_grad(
+                                z_con.float(),
+                                pad_value=0.0,
+                            )
+                        
+                            labels_bank, _, _ = ddp_all_gather_padded(
+                                labels_local,
+                                pad_value=False,
+                            )
+                            masks_bank, _, _ = ddp_all_gather_padded(
+                                masks_local,
+                                pad_value=False,
+                            )
+                            confs_bank, _, _ = ddp_all_gather_padded(
+                                confs_local,
+                                pad_value=0.0,
+                            )
+                            is_true_bank, _, _ = ddp_all_gather_padded(
+                                is_true_local,
+                                pad_value=0,
+                            )
+                        
+                            loss_con = go_con_global_loss(
+                                z_anchor=z_con,
+                                y_anchor=labels_local,
+                                is_true_anchor=is_true_local.bool(),
+                                mask_anchor=masks_local,
+                                conf_anchor=confs_local,
+                                z_bank=z_bank,
+                                y_bank=labels_bank,
+                                is_true_bank=is_true_bank.bool(),
+                                mask_bank=masks_bank,
+                                conf_bank=confs_bank,
+                                local_start=local_start,
+                            )
+                        else:
+                            loss_con = go_con_loss(
+                                z=z_con,
+                                y=labels_con,
+                                is_true=is_true_con,
+                                term_mask=masks_con,
+                                term_conf=confs_con,
+                            )
                     else:
                         loss_con = z_w.float().sum() * 0.0
     
+                    if teacher_logits is not None:
+                        kd_terms = []
+                    
+                        if bool(args.kd_on_weak):
+                            kd_terms.append(
+                                sigmoid_kd_loss(
+                                    student_logits=logits_w,
+                                    teacher_logits=teacher_logits,
+                                    temperature=args.kd_temperature,
+                                )
+                            )
+                    
+                        if bool(args.kd_on_strong):
+                            kd_terms.append(
+                                sigmoid_kd_loss(
+                                    student_logits=logits_s,
+                                    teacher_logits=teacher_logits,
+                                    temperature=args.kd_temperature,
+                                )
+                            )
+                    
+                        if len(kd_terms) > 0:
+                            loss_kd = sum(kd_terms) / float(len(kd_terms))
+                        else:
+                            loss_kd = logits_s.float().sum() * 0.0
+                    else:
+                        loss_kd = logits_s.float().sum() * 0.0
+                    
                     loss_hier = hierarchy_violation_loss(logits_s, go_edges)
-    
+                    
                     loss = (
                         loss_true
                         + args.lambda_u * loss_pseudo
+                        + args.lambda_kd * loss_kd
                         + args.lambda_c * loss_con
                         + args.lambda_h * loss_hier
                     )
-    
+                    
                 scaler.scale(loss).backward()
     
                 if args.grad_clip > 0:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-    
+
                 scaler.step(optimizer)
                 scaler.update()
+                
+                next_global_step = global_step + 1
+                
+                # EMA update after student optimizer step.
+                if (
+                    teacher_ema is not None
+                    and next_global_step >= int(args.ema_update_after_step)
+                    and int(args.ema_update_every) > 0
+                    and next_global_step % int(args.ema_update_every) == 0
+                ):
+                    ema_update_arch(
+                        ema_model=teacher_ema,
+                        student_arch=unwrap_model(model).backbone,
+                        decay=float(args.ema_decay),
+                    )
+                
                 scheduler.step()
-    
-                global_step += 1
+                
+                global_step = next_global_step
+
     
                 running["loss"] += float(loss.detach().cpu())
                 running["loss_true"] += float(loss_true.detach().cpu())
                 running["loss_pseudo"] += float(loss_pseudo.detach().cpu())
+                running["loss_kd"] += float(loss_kd.detach().cpu())
                 running["loss_con"] += float(loss_con.detach().cpu())
                 running["loss_hier"] += float(loss_hier.detach().cpu())
+
+                with torch.no_grad():
+                    pseudo_weight = mask_u * conf_u
+                    pseudo_terms = mask_u.sum()
+                    pseudo_conf_mean = (
+                        pseudo_weight.sum() / pseudo_terms.clamp_min(1.0)
+                    )
+                
+                running["w_loss_pseudo"] += float((args.lambda_u * loss_pseudo).detach().cpu())
+                running["w_loss_kd"] += float((args.lambda_kd * loss_kd).detach().cpu())
+                running["w_loss_con"] += float((args.lambda_c * loss_con).detach().cpu())
+                running["w_loss_hier"] += float((args.lambda_h * loss_hier).detach().cpu())
+                
+                running["pseudo_mask_terms"] += float(pseudo_terms.detach().cpu())
+                running["pseudo_conf_mean"] += float(pseudo_conf_mean.detach().cpu())
     
                 if is_main_process() and step % args.log_interval == 0:
                     denom = step + 1
@@ -1523,9 +2397,13 @@ def train_one_task(args: argparse.Namespace):
                             "loss": running["loss"] / denom,
                             "true": running["loss_true"] / denom,
                             "pseudo": running["loss_pseudo"] / denom,
+                            "kd": running["loss_kd"] / denom,
                             "con": running["loss_con"] / denom,
                             "hier": running["loss_hier"] / denom,
                             "lr": scheduler.get_last_lr()[0],
+                            "w_pseudo": running["w_loss_pseudo"] / denom,
+                            "mask": running["pseudo_mask_terms"] / denom,
+                            "pconf": running["pseudo_conf_mean"] / denom,
                         }
                     )
         epoch_log = {
@@ -1576,10 +2454,17 @@ def train_one_task(args: argparse.Namespace):
                     output_dir / f"semisup_full_epoch{epoch}.pt",
                     extra={"epoch": epoch},
                 )
+            
                 save_backbone_checkpoint(
                     model,
                     output_dir / f"semisup_backbone_epoch{epoch}.pt",
                 )
+            
+                if teacher_ema is not None and bool(args.save_ema_checkpoint):
+                    save_arch_checkpoint(
+                        teacher_ema,
+                        output_dir / f"semisup_ema_backbone_epoch{epoch}.pt",
+                    )
         
         if args.distributed:
             dist.barrier()
@@ -1590,7 +2475,19 @@ def train_one_task(args: argparse.Namespace):
             output_dir / "semisup_full_last.pt",
             extra={"epoch": args.epochs},
         )
-        save_backbone_checkpoint(model, output_dir / "semisup_backbone_last.pt")
+    
+        save_backbone_checkpoint(
+            model,
+            output_dir / "semisup_backbone_last.pt",
+        )
+    
+        if teacher_ema is not None and bool(args.save_ema_checkpoint):
+            save_arch_checkpoint(
+                teacher_ema,
+                output_dir / "semisup_ema_backbone_last.pt",
+            )
+    
+        print(f"[Done] saved to {output_dir}")
     
         print(f"[Done] saved to {output_dir}")
     
@@ -1824,6 +2721,15 @@ def build_argparser():
     parser.add_argument("--ddp_find_unused_parameters", action="store_true")
     parser.add_argument("--ddp_static_graph", action="store_true")
 
+    # BatchNorm fine-tuning policy
+    parser.add_argument("--freeze_bn", action="store_true")
+    parser.add_argument("--no_freeze_bn", dest="freeze_bn", action="store_false")
+    parser.set_defaults(freeze_bn=False)
+
+    parser.add_argument("--freeze_bn_affine", action="store_true")
+    parser.add_argument("--no_freeze_bn_affine", dest="freeze_bn_affine", action="store_false")
+    parser.set_defaults(freeze_bn_affine=False)
+
     # Training
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=8)
@@ -1834,6 +2740,18 @@ def build_argparser():
     parser.add_argument("--drop_last", action="store_true")
 
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument(
+        "--backbone_lr",
+        type=float,
+        default=None,
+        help="LR for pretrained backbone. If None, use --lr.",
+    )
+    parser.add_argument(
+        "--proj_lr",
+        type=float,
+        default=None,
+        help="LR for projection head. If None, use --lr.",
+    )
     parser.add_argument("--min_lr", type=float, default=1e-6)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--grad_clip", type=float, default=1.0)
@@ -1850,14 +2768,48 @@ def build_argparser():
 
     # Semi-supervised loss weights
     parser.add_argument("--lambda_u", type=float, default=0.5)
+    parser.add_argument("--lambda_kd", type=float, default=0.0)
     parser.add_argument("--lambda_c", type=float, default=0.05)
     parser.add_argument("--lambda_h", type=float, default=0.0)
+
+    # EMA teacher / distillation
+    parser.add_argument("--ema_enabled", action="store_true")
+    parser.add_argument("--no_ema", dest="ema_enabled", action="store_false")
+    parser.set_defaults(ema_enabled=False)
+
+    parser.add_argument("--ema_decay", type=float, default=0.9999)
+    parser.add_argument("--ema_update_after_step", type=int, default=0)
+    parser.add_argument("--ema_update_every", type=int, default=1)
+
+    parser.add_argument("--kd_temperature", type=float, default=1.0)
+    parser.add_argument("--kd_every_n_steps", type=int, default=1)
+
+    parser.add_argument("--kd_on_weak", action="store_true")
+    parser.add_argument("--no_kd_on_weak", dest="kd_on_weak", action="store_false")
+    parser.set_defaults(kd_on_weak=True)
+
+    parser.add_argument("--kd_on_strong", action="store_true")
+    parser.add_argument("--no_kd_on_strong", dest="kd_on_strong", action="store_false")
+    parser.set_defaults(kd_on_strong=True)
+
+    parser.add_argument("--save_ema_checkpoint", action="store_true")
+    parser.add_argument(
+        "--no_save_ema_checkpoint",
+        dest="save_ema_checkpoint",
+        action="store_false",
+    )
+    parser.set_defaults(save_ema_checkpoint=True)
 
     # Contrastive loss
     parser.add_argument("--contrast_tau", type=float, default=0.1)
     parser.add_argument("--contrast_min_r", type=float, default=1e-6)
     parser.add_argument("--w_true_pseudo", type=float, default=0.7)
     parser.add_argument("--w_pseudo_pseudo", type=float, default=0.4)
+
+    # ASL loss
+    parser.add_argument("--asl_gamma_neg", type=float, default=4.0)
+    parser.add_argument("--asl_gamma_pos", type=float, default=0.0)
+    parser.add_argument("--asl_clip", type=float, default=0.05)
 
     # Pseudo label treatment.
     # Default is positive-only to avoid treating unknown GO terms as negatives.
@@ -1869,6 +2821,40 @@ def build_argparser():
         help="Use all pseudo-label dimensions, including zeros, as supervised targets.",
     )
     parser.set_defaults(pseudo_pos_only=True)
+
+    parser.add_argument("--pseudo_prob_path", type=str, default=None)
+    
+    parser.add_argument(
+        "--pseudo_prob_target",
+        type=str,
+        choices=["hard", "soft_pos"],
+        default="hard",
+    )
+    
+    parser.add_argument(
+        "--pseudo_prob_conf_power",
+        type=float,
+        default=1.0,
+    )
+    
+    parser.add_argument(
+        "--pseudo_prob_min_conf",
+        type=float,
+        default=0.0,
+    )
+    
+    parser.add_argument(
+        "--pseudo_min_ic",
+        type=float,
+        default=0.0,
+    )
+    
+    parser.add_argument(
+        "--pseudo_loss_reduction",
+        type=str,
+        choices=["weighted_mean", "batch_mean", "sum"],
+        default="weighted_mean",
+    )
 
     # IC / GO hierarchy
     parser.add_argument("--ic_path", type=str, default=None)
@@ -1897,6 +2883,18 @@ def build_argparser():
     parser.add_argument("--strong_shuffle_rows", action="store_true")
     parser.add_argument("--strong_min_keep_rows", type=int, default=2)
     parser.add_argument("--strong_noise_std", type=float, default=0.0)
+
+    # Constrative all gather
+    parser.add_argument("--contrast_all_gather", action="store_true")
+    parser.add_argument("--no_contrast_all_gather", dest="contrast_all_gather", action="store_false")
+    parser.set_defaults(contrast_all_gather=False)
+    
+    parser.add_argument(
+        "--contrast_max_samples_per_rank",
+        type=int,
+        default=0,
+        help="0 means no subsampling before contrastive all_gather.",
+    )
 
     # Validation / logging / saving.
     # Default no_validation=True to avoid accidentally selecting checkpoint on test set.
