@@ -13,6 +13,9 @@ from .local_loader import LatenceNBSLocalGraphMaterializer, LatenceNBSStores
 from .types import ProteinGOQueryBatch
 
 
+NBS_INDUCTIVE_INFERENCE_API_VERSION = 5
+
+
 @dataclass
 class FullTaskInferenceConfig:
     go_chunk_size: int = 256
@@ -65,6 +68,58 @@ class ExternalCandidateEvidenceStore:
                 if idx is not None:
                     out[q, col] = row_attr[idx]
         return out
+
+
+class ExternalPPNeighborhoodStore:
+    """Isolated test-to-core neighbourhoods for inductive protein encoding.
+
+    ``neighbor_index`` is ``[N,K]`` in the role-local core representation
+    space. ``edge_attr`` is ``[N,K,F]`` and follows the trained P--P contract
+    ``[confidence, cosine_score, reciprocal_rank]``.  The stored retrieval
+    direction is test->core, but NBS consumes it as core->test messages through
+    the trained ``similar_to`` operator.  Test proteins never message one
+    another.
+    """
+
+    def __init__(
+        self,
+        core_repr_path: str | Path,
+        neighbor_index_path: str | Path,
+        edge_attr_path: str | Path,
+    ) -> None:
+        self.core_repr = np.load(core_repr_path, mmap_mode="r")
+        self.neighbor_index = np.load(neighbor_index_path, mmap_mode="r")
+        self.edge_attr = np.load(edge_attr_path, mmap_mode="r")
+        if self.core_repr.ndim != 2:
+            raise ValueError("core representation must be [N_core,D]")
+        if self.neighbor_index.ndim != 2:
+            raise ValueError("external P-P neighbor index must be [N,K]")
+        if self.edge_attr.ndim != 3 or self.edge_attr.shape[:2] != self.neighbor_index.shape:
+            raise ValueError("external P-P edge_attr must be [N,K,F]")
+        if self.neighbor_index.size:
+            low = int(np.min(self.neighbor_index))
+            high = int(np.max(self.neighbor_index))
+            if low < 0 or high >= int(self.core_repr.shape[0]):
+                raise IndexError(
+                    f"external P-P neighbor index range [{low},{high}] is outside core rows"
+                )
+        if not np.isfinite(np.asarray(self.edge_attr)).all():
+            raise FloatingPointError("external P-P edge attributes contain NaN/Inf")
+
+    @property
+    def num_rows(self) -> int:
+        return int(self.neighbor_index.shape[0])
+
+    @property
+    def feature_dim(self) -> int:
+        return int(self.core_repr.shape[1])
+
+    def gather(self, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        rows = np.asarray(rows, dtype=np.int64)
+        indices = np.asarray(self.neighbor_index[rows], dtype=np.int64)
+        neighbor_x = np.asarray(self.core_repr[indices], dtype=np.float32)
+        edge_attr = np.asarray(self.edge_attr[rows], dtype=np.float32)
+        return neighbor_x, edge_attr
 
 
 def _deterministic_support(
@@ -148,12 +203,21 @@ def export_full_task_probabilities(
     config: FullTaskInferenceConfig,
     base_values_are_logits: bool = False,
     candidate_evidence_store: Optional[ExternalCandidateEvidenceStore] = None,
+    pp_neighborhood_store: Optional[ExternalPPNeighborhoodStore] = None,
+    pp_neighbor_fanouts: Optional[tuple[int, ...]] = None,
+    logit_delta_output_path: Optional[str | Path] = None,
+    delta_gate_output_path: Optional[str | Path] = None,
+    routing_source_weight_output_path: Optional[str | Path] = None,
+    routing_null_weight_output_path: Optional[str | Path] = None,
     amp_dtype: Optional[torch.dtype] = torch.bfloat16,
 ) -> np.memmap:
     """Export [N_external, num_task_GO] NBS probabilities in GO chunks.
 
     Training-time Q is irrelevant here: every task classifier column is visited
-    exactly once.  ``go_chunk_size`` is only an inference memory/throughput knob.
+    exactly once.  ``go_chunk_size`` is the deterministic support-graph block
+    size, not a free throughput knob: GO terms in one block share a sampled
+    local support graph.  The exporter therefore freezes it to the value in the
+    resolved inference contract.
     """
     config.validate()
     external_repr = np.asarray(external_repr)
@@ -166,8 +230,23 @@ def export_full_task_probabilities(
         raise ValueError("external representation/base rows disagree")
     if base_values.shape[1] != int(stores.num_task_go):
         raise ValueError("base prediction columns do not match task GO space")
-    if candidate_evidence_store is not None and candidate_evidence_store.go_index.shape[0] != external_repr.shape[0]:
-        raise ValueError("external candidate evidence rows disagree with external proteins")
+    if candidate_evidence_store is not None and candidate_evidence_store.go_index.shape[0] < external_repr.shape[0]:
+        raise ValueError("external candidate evidence has fewer rows than external proteins")
+    if pp_neighborhood_store is not None:
+        if pp_neighborhood_store.num_rows < external_repr.shape[0]:
+            raise ValueError("external P-P neighborhood has fewer rows than external proteins")
+        if pp_neighborhood_store.feature_dim != external_repr.shape[1]:
+            raise ValueError("external/core representation dimensions disagree")
+        if pp_neighbor_fanouts is None:
+            raise ValueError("external P-P inference requires frozen per-layer fanouts")
+        if any(
+            int(value) <= 0
+            or int(value) > int(pp_neighborhood_store.neighbor_index.shape[1])
+            for value in pp_neighbor_fanouts
+        ):
+            raise ValueError("external P-P arrays do not cover the frozen per-layer fanouts")
+    elif pp_neighbor_fanouts is not None:
+        raise ValueError("pp_neighbor_fanouts requires an external P-P neighborhood store")
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,13 +256,42 @@ def export_full_task_probabilities(
         dtype=np.float16,
         shape=(external_repr.shape[0], stores.num_task_go),
     )
+    logit_delta_output = None
+    if logit_delta_output_path is not None:
+        logit_delta_output = np.lib.format.open_memmap(
+            Path(logit_delta_output_path),
+            mode="w+",
+            dtype=np.float16,
+            shape=(external_repr.shape[0], stores.num_task_go),
+        )
+    delta_gate_output = None
+    if delta_gate_output_path is not None:
+        delta_gate_output = np.lib.format.open_memmap(
+            Path(delta_gate_output_path),
+            mode="w+",
+            dtype=np.float16,
+            shape=(external_repr.shape[0], stores.num_task_go),
+        )
+    routing_source_output = None
+    routing_null_output = None
     device = torch.device(device)
     model.eval()
     num_go = int(stores.num_task_go)
     num_protein = int(external_repr.shape[0])
+    total_go_chunks = (num_go + int(config.go_chunk_size) - 1) // int(
+        config.go_chunk_size
+    )
 
-    for go_start in range(0, num_go, int(config.go_chunk_size)):
+    for go_chunk_index, go_start in enumerate(
+        range(0, num_go, int(config.go_chunk_size)), start=1
+    ):
         go_end = min(num_go, go_start + int(config.go_chunk_size))
+        print(
+            "[NBS full-task] "
+            f"go_chunk={go_chunk_index}/{total_go_chunks} "
+            f"columns=[{go_start},{go_end}) proteins={num_protein}",
+            flush=True,
+        )
         query_go = np.arange(go_start, go_end, dtype=np.int64)
         support_episode = build_support_episode(
             stores,
@@ -198,6 +306,10 @@ def export_full_task_probabilities(
         graph = local.graph.to(device)
         encoded = model.encode_graph(graph, global_go_cache=global_go_cache)
         template = local.query.to(device)
+
+        # Routing is query/support dependent but independent of which external
+        # protein batch is scored.  It is captured from the first batch below.
+        routing_written = False
 
         for p_start in range(0, num_protein, int(config.protein_batch_size)):
             p_end = min(num_protein, p_start + int(config.protein_batch_size))
@@ -229,6 +341,16 @@ def export_full_task_probabilities(
                 dtype=torch.float32,
                 device=device,
             )
+            neighbor_x = None
+            neighbor_edge_attr = None
+            if pp_neighborhood_store is not None:
+                neighbor_array, neighbor_attr_array = pp_neighborhood_store.gather(rows)
+                neighbor_x = torch.as_tensor(
+                    neighbor_array, dtype=torch.float32, device=device
+                )
+                neighbor_edge_attr = torch.as_tensor(
+                    neighbor_attr_array, dtype=torch.float32, device=device
+                )
             autocast_enabled = device.type == "cuda" and amp_dtype is not None
             with torch.autocast(
                 device_type=device.type,
@@ -239,9 +361,77 @@ def export_full_task_probabilities(
                     encoded,
                     query,
                     candidate_x,
-                    return_aux=False,
+                    neighbor_x=neighbor_x,
+                    neighbor_edge_attr=neighbor_edge_attr,
+                    neighbor_fanouts=pp_neighbor_fanouts,
+                    return_aux=(
+                        logit_delta_output is not None
+                        or delta_gate_output is not None
+                        or routing_source_weight_output_path is not None
+                        or routing_null_weight_output_path is not None
+                    ),
                 )
             probability = torch.sigmoid(result.logits).T.float().cpu().numpy()
+            if not np.isfinite(probability).all():
+                raise FloatingPointError(
+                    "NBS produced NaN/Inf probabilities for "
+                    f"protein rows [{p_start},{p_end}) and GO columns "
+                    f"[{go_start},{go_end})"
+                )
             output[p_start:p_end, go_start:go_end] = probability.astype(np.float16)
+            auxiliary = result.auxiliary or {}
+            if logit_delta_output is not None:
+                applied = auxiliary.get("applied_graph_delta")
+                if applied is None:
+                    raise RuntimeError("NBS auxiliary output lacks applied_graph_delta")
+                logit_delta_output[p_start:p_end, go_start:go_end] = (
+                    applied.T.float().cpu().numpy().astype(np.float16)
+                )
+            if delta_gate_output is not None:
+                gate = auxiliary.get("delta_gate")
+                if gate is None:
+                    raise RuntimeError("NBS auxiliary output lacks delta_gate")
+                delta_gate_output[p_start:p_end, go_start:go_end] = (
+                    gate.T.float().cpu().numpy().astype(np.float16)
+                )
+            if not routing_written and (
+                routing_source_weight_output_path is not None
+                or routing_null_weight_output_path is not None
+            ):
+                weights = auxiliary.get("source_weights")
+                null_weight = auxiliary.get("null_weight")
+                if weights is None or null_weight is None:
+                    raise RuntimeError("NBS auxiliary output lacks routing statistics")
+                if routing_source_output is None and routing_source_weight_output_path is not None:
+                    routing_source_output = np.lib.format.open_memmap(
+                        Path(routing_source_weight_output_path),
+                        mode="w+",
+                        dtype=np.float16,
+                        shape=(num_go, int(weights.shape[1])),
+                    )
+                if routing_null_output is None and routing_null_weight_output_path is not None:
+                    routing_null_output = np.lib.format.open_memmap(
+                        Path(routing_null_weight_output_path),
+                        mode="w+",
+                        dtype=np.float16,
+                        shape=(num_go,),
+                    )
+                if routing_source_output is not None:
+                    routing_source_output[go_start:go_end] = (
+                        weights.float().cpu().numpy().astype(np.float16)
+                    )
+                if routing_null_output is not None:
+                    routing_null_output[go_start:go_end] = (
+                        null_weight.float().cpu().numpy().astype(np.float16)
+                    )
+                routing_written = True
         output.flush()
+        if logit_delta_output is not None:
+            logit_delta_output.flush()
+        if delta_gate_output is not None:
+            delta_gate_output.flush()
+        if routing_source_output is not None:
+            routing_source_output.flush()
+        if routing_null_output is not None:
+            routing_null_output.flush()
     return output

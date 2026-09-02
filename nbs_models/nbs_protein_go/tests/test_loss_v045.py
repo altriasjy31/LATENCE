@@ -4,6 +4,7 @@ from pathlib import Path
 import torch
 
 from nbs_pg.losses import NBSASLConfig, NBSLossWeights, nbs_training_loss
+from nbs_pg.episode import NBSQueryEpisodeConfig
 from nbs_pg.training import NBSLossConfig
 from nbs_pg.types import NBSMatchOutput
 
@@ -107,3 +108,13 @@ def test_formal_bp_config_enables_pseudo_asl_and_messages():
     assert cfg["episode"]["pseudo_confidence_power"] == 0.5
     assert cfg["local_sampling"]["include_pseudo_messages"] is True
     assert cfg["stage"]["use_expert_probability_in_forward"] is False
+
+
+def test_v060_formal_config_retains_all_sampled_supervision():
+    path = Path(__file__).resolve().parents[1] / "configs" / "bp_fixed_epoch_v0.6.0.json"
+    cfg = json.loads(path.read_text())
+    episode = NBSQueryEpisodeConfig(**cfg["episode"])
+    episode.validate()
+    assert cfg["schema_version"] == 16
+    assert episode.require_full_supervision_retention is True
+    assert episode.max_candidates == episode.supervision_candidate_upper_bound == 3136

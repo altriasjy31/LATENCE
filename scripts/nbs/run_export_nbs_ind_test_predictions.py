@@ -12,7 +12,7 @@ def main() -> None:
     task = os.environ.get("TASK", "bp")
     config = Path(os.environ.get(
         "NBS_TRAIN_CONFIG",
-        f"nbs_models/nbs_protein_go/configs/{task}_fixed_epoch_v0.5.3.json",
+        f"nbs_models/nbs_protein_go/configs/{task}_fixed_epoch_v0.6.0.json",
     ))
     checkpoint = os.environ.get("NBS_CHECKPOINT")
     protein_repr = os.environ.get("NBS_IND_TEST_REPR")
@@ -54,6 +54,25 @@ def main() -> None:
         if not candidate_go or not candidate_attr:
             raise SystemExit("Set both NBS_IND_TEST_CANDIDATE_GO and NBS_IND_TEST_CANDIDATE_ATTR")
         cmd += ["--candidate-go-index", candidate_go, "--candidate-edge-attr", candidate_attr]
+    pp_core = os.environ.get("NBS_IND_TEST_CORE_REPR")
+    pp_neighbors = os.environ.get("NBS_IND_TEST_PP_NEIGHBORS")
+    pp_attr = os.environ.get("NBS_IND_TEST_PP_ATTR")
+    if pp_core or pp_neighbors or pp_attr:
+        if not (pp_core and pp_neighbors and pp_attr):
+            raise SystemExit(
+                "Set NBS_IND_TEST_CORE_REPR, NBS_IND_TEST_PP_NEIGHBORS and "
+                "NBS_IND_TEST_PP_ATTR together"
+            )
+        cmd += [
+            "--external-pp-core-repr", pp_core,
+            "--external-pp-neighbors", pp_neighbors,
+            "--external-pp-edge-attr", pp_attr,
+        ]
+    input_manifest = os.environ.get("NBS_IND_TEST_INPUT_MANIFEST")
+    if input_manifest:
+        cmd += ["--input-manifest", input_manifest]
+    if os.environ.get("NBS_SAVE_INFERENCE_DIAGNOSTICS", "1") == "1":
+        cmd += ["--save-diagnostics"]
     limit = os.environ.get("NBS_EVAL_LIMIT_PROTEINS")
     if limit:
         cmd += ["--limit-proteins", limit]

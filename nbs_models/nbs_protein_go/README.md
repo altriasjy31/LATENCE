@@ -330,6 +330,34 @@ The initial candidate encoder equals reciprocal-rank evidence and learns a
 bounded residual from the other two fields. Final logits start exactly at the
 first-stage base logits because graph delta scale is zero initialized.
 
+## v0.6 weak-primary and full-task candidates
+
+v0.6 changes the sampling unit without changing the immutable Stage-1 task GO
+columns.  `weak_primary_exhaustive` owns a deterministic no-replacement queue
+of active weak proteins on every DDP rank.  Each weak anchor induces one of its
+modelout-positive GO labels, preferentially from the intersection with its
+full-task top-512 backbone/selector edges; anchors sharing a GO can occupy the
+same query.  Empty intersections fall back to a modelout-positive label, so an
+unverified candidate edge is never promoted to a positive target.
+Core gold support, hierarchy pairs and shuffled GO-floor queries are sampled
+around these induced queries.  Only forced weak anchors consume the queue;
+ordinary GO-major pseudo fillers do not count toward epoch completion.
+
+Protein--GO candidate construction now defaults to `full_task`: the frozen
+Stage-1 static prefilter and learned selector operate on every task GO column,
+then retain top-512.  `rare_first` remains available for controlled ablation.
+New manifests publish `backbone_candidate_edges` and record the selector scope;
+readers retain compatibility with historical `backbone_rare_edges` manifests.
+
+## v0.6.1 evaluation
+
+v0.6.1 does not change v0.6.0 sampling, model weights or checkpoint semantics.
+It upgrades the independent-test evaluator with sequence-identity, MSA-Neff,
+Foldseek and EXP/IDA slices; candidate/query-channel reliability diagrams and
+ECE; paired protein-bootstrap diagnostics; precision@k/recall@k after `k` is
+predeclared; student–3B-expert error correlation; and a strict external-method
+comparison manifest. See the project-root `NBS_EVALUATION_v0.6.1.md`.
+
 ## Leakage protection
 
 The local materializer excludes candidate proteins from gold message lookup and
@@ -349,6 +377,30 @@ graph = mask_candidate_evidence_edges(
 Gold and pseudo relations are removed for candidate proteins. Backbone
 candidate edges are removed only for the currently scored query GO set, so
 unrelated first-stage functional context remains available.
+
+## Independent-test inference
+
+The v0.5.6.1 inference revision supports two external-protein modes:
+
+- feature-only: the original external input projection with zero relation
+  sources;
+- isolated inductive P-P: retrieve core neighbours for each test protein and
+  aggregate `core -> test` messages through the trained `similar_to` operator.
+
+The latter never inserts test proteins into the training graph and never emits
+test-to-test edges. `ExternalPPNeighborhoodStore` consumes role-local core
+indices and the standard three-column P-P edge attributes. Full-task scoring
+uses the frozen per-layer `similar_to` fanouts and applies the same trained
+hierarchy-adapter projection used for proteins encoded inside the training
+graph. It still visits every classifier column; query width and candidate top-K remain
+mini-batch/sparse-evidence policies only.
+
+The support-graph GO block size is frozen by the resolved inference config. It
+is not exposed as an unconstrained memory-only knob because changing the block
+changes the jointly sampled support graph.
+
+See `NBS_INDUCTIVE_INFERENCE.md` at the project root for FASTA/pickle input,
+cache, temporary deployment workspace, and diagnostic-evaluation commands.
 
 ## Tests
 

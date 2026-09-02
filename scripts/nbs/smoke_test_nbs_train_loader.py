@@ -21,6 +21,50 @@ def _load_callable(spec: str) -> Callable[[dict[str, Any]], Any]:
     return function
 
 
+def _resolve_data_input(root: Path, data_root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    # data.* manifests are relative to data.root in local_loader.py.
+    return (data_root / path).resolve()
+
+
+def _preflight_inputs(root: Path, config: dict[str, Any]) -> dict[str, Path]:
+    data = dict(config.get("data", {}))
+    if "root" not in data:
+        raise KeyError("config.data.root is required")
+    data_root = Path(str(data["root"])).expanduser()
+    if not data_root.is_absolute():
+        data_root = root / data_root
+    data_root = data_root.resolve()
+    required = {
+        "protein_registry": data_root / "features" / "protein_registry.csv",
+        "weak_graph_predictions_manifest": _resolve_data_input(
+            root, data_root, str(data["weak_graph_predictions_manifest"])
+        ),
+        "go_protein_inverted_index_manifest": _resolve_data_input(
+            root, data_root, str(data["go_protein_inverted_index_manifest"])
+        ),
+        "representation_manifest": _resolve_data_input(
+            root, data_root, str(data["representation_manifest"])
+        ),
+        "pp_sampling_indices_manifest": _resolve_data_input(
+            root, data_root, str(data["pp_sampling_indices_manifest"])
+        ),
+    }
+    missing = [(name, path) for name, path in required.items() if not path.is_file()]
+    if missing:
+        details = "\n".join(f"  - {name}: {path}" for name, path in missing)
+        raise FileNotFoundError(
+            "NBS smoke-test prerequisites are missing:\n"
+            f"{details}\n"
+            "For v0.6.0, first export full-task top-512 Protein-GO edges, "
+            "then run scripts/nbs/run_build_go_protein_inverted_index.py with "
+            "GOLD_ONLY=0 and GOLD_EDGE_INDEX set."
+        )
+    return required
+
+
 
 def _metadata_for_json(metadata: dict[str, Any]) -> dict[str, Any]:
     """Keep smoke output compact when transient coverage ID arrays are present."""
@@ -67,6 +111,7 @@ def main() -> None:
     if not config_path.is_absolute():
         config_path = root / config_path
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    resolved_inputs = _preflight_inputs(root, config)
     config["_distributed_runtime"] = {
         "enabled": False,
         "rank": 0,
@@ -113,9 +158,41 @@ def main() -> None:
                 failures.append("candidate query edge remains in reverse relation")
                 break
 
+    metadata = dict(batch.metadata)
+    if bool(metadata.get("full_supervision_retention_required", 0)):
+        before = int(metadata.get("candidate_union_before_cap", -1))
+        after = int(metadata.get("candidate_union_after_cap", -1))
+        if before != after:
+            failures.append(
+                "full-supervision mode truncated the candidate union: "
+                f"before={before}, after={after}"
+            )
+        for prefix in ("gold", "hard", "pseudo"):
+            requested = int(metadata.get(f"{prefix}_pairs_requested", -1))
+            retained = int(metadata.get(f"{prefix}_pairs_retained", -1))
+            if requested != retained:
+                failures.append(
+                    f"full-supervision mode dropped {prefix} pairs: "
+                    f"requested={requested}, retained={retained}"
+                )
+        weak_primary = int(metadata.get("weak_primary_anchor_count", 0))
+        weak_primary_retained = int(
+            metadata.get("weak_primary_anchor_retained", 0)
+        )
+        if weak_primary != weak_primary_retained:
+            failures.append(
+                "full-supervision mode dropped weak-primary anchors: "
+                f"requested={weak_primary}, retained={weak_primary_retained}"
+            )
+        if not bool(metadata.get("full_supervision_retained", 0)):
+            failures.append("full_supervision_retained invariant is false")
+
     report = {
         "schema_version": 1,
         "config": str(config_path),
+        "resolved_inputs": {
+            name: str(path) for name, path in resolved_inputs.items()
+        },
         "epoch": int(args.epoch),
         "query_shape": list(batch.query.base_logits.shape),
         "local_proteins": int(graph["protein"].num_nodes),
@@ -124,7 +201,7 @@ def main() -> None:
             "|".join(edge_type): edge_count(edge_type)
             for edge_type in graph.edge_types
         },
-        "metadata": _metadata_for_json(dict(batch.metadata)),
+        "metadata": _metadata_for_json(metadata),
         "full_go_cache_nodes": int(loader.global_go_graph["go"].num_nodes),
         "direction_safe": not failures,
         "failures": failures,

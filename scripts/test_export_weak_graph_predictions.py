@@ -28,6 +28,7 @@ try:
         rare_first_selector_topk,
         restricted_selector_topk,
         shrink_dense_rows,
+        validate_candidate_environment_contract,
     )
 except ImportError:
     # Formal deployment removes the internal discussion suffix.
@@ -41,6 +42,7 @@ except ImportError:
         rare_first_selector_topk,
         restricted_selector_topk,
         shrink_dense_rows,
+        validate_candidate_environment_contract,
     )
 
 
@@ -53,13 +55,43 @@ class ExportWeakGraphPredictionsTests(unittest.TestCase):
     def test_restricted_is_rare_first_compatibility_alias(self) -> None:
         self.assertIs(restricted_selector_topk, rare_first_selector_topk)
 
-    def test_parser_defaults_to_rare_first(self) -> None:
+    def test_parser_defaults_to_full_task_candidates(self) -> None:
         parser = build_parser()
         action = next(
             item for item in parser._actions if item.dest == "rare_selector_scope"
         )
-        self.assertEqual(action.default, "rare_first")
+        self.assertEqual(action.default, "full_task")
+        self.assertIn("full_task", action.choices)
         self.assertIn("model_topk_filter", action.choices)
+        topk = next(item for item in parser._actions if item.dest == "rare_go_topk")
+        self.assertEqual(topk.default, 512)
+
+    def test_new_environment_contract_rejects_old_launcher_values(self) -> None:
+        class Args:
+            rare_selector_scope = "rare_first"
+            rare_go_topk = 20
+
+        with self.assertRaisesRegex(ValueError, "PROTEIN_GO_SELECTOR_SCOPE"):
+            validate_candidate_environment_contract(
+                Args(),
+                {
+                    "PROTEIN_GO_SELECTOR_SCOPE": "full_task",
+                    "PROTEIN_GO_TOPK": "512",
+                },
+            )
+
+    def test_new_environment_contract_accepts_full_task_top512(self) -> None:
+        class Args:
+            rare_selector_scope = "full_task"
+            rare_go_topk = 512
+
+        validate_candidate_environment_contract(
+            Args(),
+            {
+                "PROTEIN_GO_SELECTOR_SCOPE": "full_task",
+                "PROTEIN_GO_TOPK": "512",
+            },
+        )
 
     def test_registries_and_train_q33(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

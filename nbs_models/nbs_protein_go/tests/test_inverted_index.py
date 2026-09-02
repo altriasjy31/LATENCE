@@ -9,6 +9,23 @@ from nbs_pg.inverted_index import (
 )
 
 
+def test_v060_export_regression_test_uses_full_task_top512_contract():
+    """Prevent deployment of the historical rare-first/top-20 assertion."""
+    import importlib.util
+
+    script = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "test_export_weak_graph_predictions.py"
+    )
+    source = script.read_text(encoding="utf-8")
+    assert "test_parser_defaults_to_full_task_candidates" in source
+    assert 'self.assertEqual(action.default, "full_task")' in source
+    assert "self.assertEqual(topk.default, 512)" in source
+    assert "test_parser_defaults_to_rare_first" not in source
+    assert importlib.util.spec_from_file_location("export_regression", script) is not None
+
+
 def test_edge_index_two_pass_inversion(tmp_path: Path):
     # Three proteins, fixed degree two, protein-major source order.
     edge = np.array([[0, 0, 1, 1, 2, 2], [2, 0, 1, 2, 0, 2]], dtype=np.int32)
@@ -81,13 +98,13 @@ def test_incremental_gold_build_preserves_existing_candidate_manifest(tmp_path: 
     np.save(source / "candidate_attr.npy", np.ones((4, 3), dtype=np.float32))
     weak_manifest = {
         "go_registry": {"num_terms": 2},
-        "backbone_rare_edges": {
+        "backbone_candidate_edges": {
             "edge_index_file": "candidate_edge.npy",
             "edge_attr_file": "candidate_attr.npy",
             "edge_attr_columns": ["backbone_probability", "selector_score", "reciprocal_rank"],
         },
         "roles": [
-            {"role": "core", "rare_degree_mean": 2},
+            {"role": "core", "candidate_degree_mean": 2},
         ],
     }
     manifest_path = source / "weak.json"

@@ -189,22 +189,31 @@ class FixedDegreeProteinGOStore:
         topk: Optional[int] = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         degree = self.fixed_degree if topk is None else min(int(topk), self.fixed_degree)
-        blocks: list[np.ndarray] = []
-        attrs: list[np.ndarray] = []
-        for protein in np.unique(np.fromiter((int(x) for x in protein_idx), dtype=np.int64)):
-            local = protein - self.source_start
-            if local < 0 or local >= self.num_sources:
-                continue
-            start = local * self.fixed_degree
-            end = start + degree
-            edge = np.asarray(self.edge_index[:, start:end], dtype=np.int64)
-            if edge.size and not np.all(edge[0] == protein):
-                raise ValueError("candidate source is not protein-major fixed-degree")
-            blocks.append(edge)
-            attrs.append(np.asarray(self.edge_attr[start:end], dtype=np.float32))
-        if not blocks:
+        if degree <= 0:
             return np.empty((2, 0), np.int64), np.empty((0, 3), np.float32)
-        return np.concatenate(blocks, axis=1), np.concatenate(attrs, axis=0)
+        proteins = np.unique(
+            np.fromiter((int(x) for x in protein_idx), dtype=np.int64)
+        )
+        local = proteins - self.source_start
+        valid = (local >= 0) & (local < self.num_sources)
+        proteins = proteins[valid]
+        local = local[valid]
+        if proteins.size == 0:
+            return np.empty((2, 0), np.int64), np.empty((0, 3), np.float32)
+
+        # Candidate files are protein-major fixed-degree arrays.  Build all
+        # requested mmap offsets in one vectorized operation instead of doing
+        # tens of thousands of tiny Python slices and concatenations.
+        offsets = (
+            local[:, None] * self.fixed_degree
+            + np.arange(degree, dtype=np.int64)[None, :]
+        ).reshape(-1)
+        edge = np.asarray(self.edge_index[:, offsets], dtype=np.int64)
+        expected_source = np.repeat(proteins, degree)
+        if edge.size and not np.array_equal(edge[0], expected_source):
+            raise ValueError("candidate source is not protein-major fixed-degree")
+        attr = np.asarray(self.edge_attr[offsets], dtype=np.float32)
+        return edge, attr
 
 
 class RoleLocalProteinGOCSRStore:

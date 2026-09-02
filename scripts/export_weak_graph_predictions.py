@@ -10,9 +10,9 @@ downstream ``nbs_protein_go`` pipeline.
 Default scientific contract
 ---------------------------
 * ``backbone_prob`` is computed without external/expert probabilities.
-* rare Protein--GO candidates follow an explicit rare-first pipeline:
-  determine the train-defined rare-GO vocabulary, run the trained selector
-  inside that vocabulary, and retain the requested top-k rare terms.
+* Protein--GO candidates use the trained selector over the complete task GO
+  vocabulary and retain the requested top-k terms.  The historical rare-first
+  universe remains available as an explicit ablation/compatibility mode.
 * weak ``modelout`` uses the external expert probability as decoder input and
   therefore corresponds to:
 
@@ -54,7 +54,7 @@ import numpy as np
 
 
 EXPORTER_ID = "export_weak_graph_predictions_v2"
-EXPORTER_VERSION = "1.1.0-rare-first-selector"
+EXPORTER_VERSION = "1.2.1-full-task-selector-contract"
 
 ROLE_TO_MODE = {
     "core": "train",
@@ -85,6 +85,38 @@ def parse_bool(value: str | bool) -> bool:
     if normalized in {"0", "false", "no", "n", "off"}:
         return False
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value!r}")
+
+
+def validate_candidate_environment_contract(
+    args: argparse.Namespace,
+    environ: Mapping[str, str] | None = None,
+) -> None:
+    """Fail fast when an old launcher ignores the v0.6 environment names.
+
+    v0.6 introduced ``PROTEIN_GO_SELECTOR_SCOPE`` and ``PROTEIN_GO_TOPK``.
+    Historical launchers passed their own rare-first/top-20 CLI defaults while
+    leaving these new variables in the child environment.  Without this check,
+    a long export could silently use the wrong candidate contract.
+    """
+
+    env = os.environ if environ is None else environ
+    expected_scope = str(env.get("PROTEIN_GO_SELECTOR_SCOPE", "")).strip()
+    expected_topk = str(env.get("PROTEIN_GO_TOPK", "")).strip()
+    if expected_scope and str(args.rare_selector_scope) != expected_scope:
+        raise ValueError(
+            "candidate selector scope conflicts with "
+            "PROTEIN_GO_SELECTOR_SCOPE: "
+            f"CLI resolved {args.rare_selector_scope!r}, environment requires "
+            f"{expected_scope!r}. Update scripts/run_export_weak_graph_predictions.py "
+            "or pass matching --rare-selector-scope explicitly."
+        )
+    if expected_topk and int(args.rare_go_topk) != int(expected_topk):
+        raise ValueError(
+            "candidate top-k conflicts with PROTEIN_GO_TOPK: "
+            f"CLI resolved {args.rare_go_topk}, environment requires "
+            f"{expected_topk}. Update scripts/run_export_weak_graph_predictions.py "
+            "or pass matching --rare-go-topk explicitly."
+        )
 
 
 def csv_items(value: str) -> List[str]:
@@ -176,13 +208,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rare-max-train-count", type=float, default=5.0)
     parser.add_argument("--rare-go-ids", type=Path, default=None)
     parser.add_argument("--include-zero-train-go", type=parse_bool, default=False)
-    parser.add_argument("--rare-go-topk", type=int, default=20)
+    parser.add_argument("--rare-go-topk", type=int, default=512)
+    parser.add_argument(
+        "--selector-affinity-chunk-size",
+        type=int,
+        default=256,
+        help=(
+            "term-axis chunk used by the inference-only protein/GO cosine "
+            "affinity (0 disables chunking)"
+        ),
+    )
     parser.add_argument(
         "--rare-selector-scope",
-        choices=["rare_first", "restricted", "model_topk_filter"],
-        default="rare_first",
+        choices=["full_task", "rare_first", "restricted", "model_topk_filter"],
+        default="full_task",
         help=(
-            "rare_first first restricts the candidate universe to rare GO, then "
+            "full_task applies the trained selector to the complete task GO "
+            "vocabulary and returns the requested top-k terms; rare_first first "
+            "restricts the candidate universe to rare GO, then "
             "applies the trained selector and returns K rare terms per protein; "
             "restricted is a backward-compatible alias of rare_first; "
             "model_topk_filter filters rare terms from the model's original full-vocabulary top-k."
@@ -902,12 +945,15 @@ def rare_first_selector_topk(
     h: Any,
     allowed_go_idx: Any,
     requested_k: int,
+    affinity_chunk_size: int = 256,
 ) -> Tuple[Any, Any]:
-    """Select rare GO first, then run the trained selector inside that universe.
+    """Run the trained selector inside an explicit allowed GO universe.
 
-    This preserves the selector architecture used in training:
+    ``allowed_go_idx`` can be the complete task vocabulary (v1.2 default) or
+    the historical train-defined rare vocabulary.  Both preserve the selector
+    architecture used in training:
 
-        rare vocabulary
+        selected GO universe
           -> backbone/static top-M prefilter
           -> learnable selector reranking
           -> graph edge top-k
@@ -973,11 +1019,30 @@ def rare_first_selector_topk(
         has_external_selected,
     ]
     if bool(selector.use_protein_term_affinity):
-        affinity = selector._protein_term_affinity(
-            prefilter_idx,
-            pooled_feature,
-            model.classifier.weight,
-        )
+        chunk_size = int(affinity_chunk_size)
+        if chunk_size > 0 and int(prefilter_idx.shape[1]) > chunk_size:
+            # The original private helper gathers [B,M,D] classifier weights.
+            # BP uses M=6144 and D=2048, which is a 384 MiB tensor at B=8
+            # before cosine-similarity temporaries.  Term-axis chunks are
+            # mathematically independent and preserve the trained selector
+            # while bounding this inference-only temporary.
+            affinity = torch_module.cat(
+                [
+                    selector._protein_term_affinity(
+                        prefilter_idx[:, start : start + chunk_size],
+                        pooled_feature,
+                        model.classifier.weight,
+                    )
+                    for start in range(0, int(prefilter_idx.shape[1]), chunk_size)
+                ],
+                dim=1,
+            )
+        else:
+            affinity = selector._protein_term_affinity(
+                prefilter_idx,
+                pooled_feature,
+                model.classifier.weight,
+            )
         features.append(affinity)
 
     feature_tensor = torch_module.stack(features, dim=-1)
@@ -996,6 +1061,7 @@ def rare_first_selector_topk(
 
 
 restricted_selector_topk = rare_first_selector_topk
+scoped_selector_topk = rare_first_selector_topk
 
 
 def original_selector_then_filter(
@@ -1092,8 +1158,8 @@ def expected_outputs(args: argparse.Namespace) -> List[Path]:
         args.output_dir / "rare_go_indices.i32.npy",
         args.output_dir / "rare_go_registry.tsv",
         args.output_dir / "train_go_label_counts.f64.npy",
-        args.output_dir / "pg_backbone_rare_edge_index.i32.npy",
-        args.output_dir / "pg_backbone_rare_edge_attr.f32.npy",
+        args.output_dir / "pg_backbone_candidate_edge_index.i32.npy",
+        args.output_dir / "pg_backbone_candidate_edge_attr.f32.npy",
         args.output_dir / "weak_graph_predictions_manifest.json",
     ]
     if args.save_dense_backbone:
@@ -1127,6 +1193,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             flush=True,
         )
         args.rare_selector_scope = "rare_first"
+    validate_candidate_environment_contract(args)
     args.project_root = args.project_root.expanduser().resolve()
     args.diagnostic_eval_script = args.diagnostic_eval_script.expanduser().resolve()
     args.checkpoint = args.checkpoint.expanduser().resolve()
@@ -1275,7 +1342,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         ids_path=args.rare_go_ids,
     )
     rare_indices = np.flatnonzero(rare_mask).astype(np.int32)
-    if args.rare_go_topk > len(rare_indices):
+    if args.rare_selector_scope != "full_task" and args.rare_go_topk > len(rare_indices):
         print(
             f"[Warning] RARE_GO_TOPK={args.rare_go_topk} exceeds rare terms="
             f"{len(rare_indices)}; using all rare terms.",
@@ -1302,23 +1369,30 @@ def main(argv: Sequence[str] | None = None) -> None:
         flush=True,
     )
     print(
-        f"[Rare GO] policy={args.rare_policy} terms={len(rare_indices)} "
+        f"[Protein-GO candidates] rare_policy={args.rare_policy} "
+        f"rare_terms={len(rare_indices)} task_terms={args.num_classes} "
         f"edge_topk={args.rare_go_topk} scope={args.rare_selector_scope}",
         flush=True,
     )
-    if args.rare_selector_scope == "rare_first":
+    if args.rare_selector_scope in {"rare_first", "full_task"}:
+        selector_universe_size = (
+            int(args.num_classes)
+            if args.rare_selector_scope == "full_task"
+            else len(rare_indices)
+        )
         effective_prefilter_topm = min(
             max(
                 int(model.query_decoder.selector.prefilter_topm),
-                min(int(args.rare_go_topk), len(rare_indices)),
+                min(int(args.rare_go_topk), selector_universe_size),
             ),
-            len(rare_indices),
+            selector_universe_size,
         )
         print(
-            "[Rare selector pipeline] "
-            f"rare({len(rare_indices)}) -> "
+            "[Candidate selector pipeline] "
+            f"{args.rare_selector_scope}({selector_universe_size}) -> "
             f"static_prefilter({effective_prefilter_topm}) -> "
-            f"learned_rerank -> topk({min(int(args.rare_go_topk), len(rare_indices))})",
+            f"learned_rerank -> "
+            f"topk({min(int(args.rare_go_topk), selector_universe_size)})",
             flush=True,
         )
     else:
@@ -1347,10 +1421,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
 
     rare_edge_index_writer = RawArrayWriter(
-        stage_dir / ".pg_backbone_rare_edge_index.raw", np.int32, columns=2
+        stage_dir / ".pg_backbone_candidate_edge_index.raw", np.int32, columns=2
     )
     rare_edge_attr_writer = RawArrayWriter(
-        stage_dir / ".pg_backbone_rare_edge_attr.raw", np.float32, columns=3
+        stage_dir / ".pg_backbone_candidate_edge_attr.raw", np.float32, columns=3
     )
     pseudo_edge_index_writer: RawArrayWriter | None = None
     pseudo_edge_attr_writer: RawArrayWriter | None = None
@@ -1379,6 +1453,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     pseudo_indptr: np.ndarray | None = None
     pseudo_row_offset = 0
     rare_allowed_tensor = torch.from_numpy(rare_indices.astype(np.int64)).to(device)
+    full_task_allowed_tensor = torch.arange(
+        int(args.num_classes), device=device, dtype=torch.long
+    )
     rare_mask_tensor = torch.from_numpy(rare_mask).to(device=device, dtype=torch.bool)
     amp_enabled = device.type == "cuda" and not bool(args.no_amp)
     amp_dtype = torch.float16 if args.amp_dtype == "float16" else torch.bfloat16
@@ -1472,6 +1549,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 0 if pseudo_edge_index_writer is None else pseudo_edge_index_writer.rows
             )
             selector_hit_counts: List[int] = []
+            role_candidate_rare_edges = 0
             backbone_probability_sum = 0.0
             modelout_probability_sum = 0.0
 
@@ -1529,15 +1607,23 @@ def main(argv: Sequence[str] | None = None) -> None:
                         )
                         base_prob = torch.sigmoid(base_logits.float())
 
-                        if args.rare_selector_scope == "rare_first":
+                        if args.rare_selector_scope in {"rare_first", "full_task"}:
+                            allowed_go_idx = (
+                                full_task_allowed_tensor
+                                if args.rare_selector_scope == "full_task"
+                                else rare_allowed_tensor
+                            )
                             selected_idx, selector_score = rare_first_selector_topk(
                                 torch_module=torch,
                                 weak_module=weak_module,
                                 model=model,
                                 base_logits=base_logits,
                                 h=h,
-                                allowed_go_idx=rare_allowed_tensor,
+                                allowed_go_idx=allowed_go_idx,
                                 requested_k=int(args.rare_go_topk),
+                                affinity_chunk_size=int(
+                                    args.selector_affinity_chunk_size
+                                ),
                             )
                         else:
                             selected_idx, selector_score = original_selector_then_filter(
@@ -1619,7 +1705,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                     valid &= (
                         selected_prob_np >= float(args.rare_min_backbone_prob)
                     )
-                    if np.any(valid & ~rare_mask[selected_idx_np.clip(min=0)]):
+                    if (
+                        args.rare_selector_scope != "full_task"
+                        and np.any(valid & ~rare_mask[selected_idx_np.clip(min=0)])
+                    ):
                         raise RuntimeError("Selector emitted a non-rare GO index")
 
                     batch_global = global_indices[role_offset:end].astype(
@@ -1649,6 +1738,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                     )
                     rare_edge_index_writer.append(edge_index_rows)
                     rare_edge_attr_writer.append(edge_attr_rows)
+                    role_candidate_rare_edges += int(
+                        np.count_nonzero(rare_mask[selected_idx_np[valid]])
+                    )
                     selector_hit_counts.extend(valid.sum(axis=1).astype(int).tolist())
 
                     if use_modelout:
@@ -1709,8 +1801,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                     role_offset = end
                     if batch_idx == 0 or (batch_idx + 1) % 100 == 0:
                         print(
-                            f"[{role}] batches={batch_idx + 1} rows={role_offset}/{len(dataset)} "
-                            f"rare_edges={rare_edge_index_writer.rows - role_rare_edges_before}",
+                            f"[{role}] batches={batch_idx + 1} "
+                            f"rows={role_offset}/{len(dataset)} "
+                            "candidate_edges="
+                            f"{rare_edge_index_writer.rows - role_rare_edges_before} "
+                            f"candidate_rare_edges={role_candidate_rare_edges}",
                             flush=True,
                         )
 
@@ -1753,16 +1848,21 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             selector_hit_array = np.asarray(selector_hit_counts, dtype=np.int64)
             if (
-                args.rare_selector_scope == "rare_first"
+                args.rare_selector_scope in {"rare_first", "full_task"}
                 and float(args.rare_min_backbone_prob) == 0.0
             ):
-                expected_rare_degree = min(
-                    int(args.rare_go_topk), len(rare_indices)
+                selector_universe_size = (
+                    int(args.num_classes)
+                    if args.rare_selector_scope == "full_task"
+                    else len(rare_indices)
                 )
-                if not np.all(selector_hit_array == expected_rare_degree):
+                expected_candidate_degree = min(
+                    int(args.rare_go_topk), selector_universe_size
+                )
+                if not np.all(selector_hit_array == expected_candidate_degree):
                     raise RuntimeError(
-                        f"role={role}: rare_first must emit exactly "
-                        f"{expected_rare_degree} rare GO edges per protein when "
+                        f"role={role}: {args.rare_selector_scope} must emit exactly "
+                        f"{expected_candidate_degree} candidate GO edges per protein when "
                         "--rare-min-backbone-prob=0, observed degree range="
                         f"[{selector_hit_array.min()}, {selector_hit_array.max()}]"
                     )
@@ -1786,6 +1886,16 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "rare_degree_min": int(selector_hit_array.min()),
                 "rare_degree_mean": float(selector_hit_array.mean()),
                 "rare_degree_max": int(selector_hit_array.max()),
+                # Canonical v1.2 names.  The rare_* aliases above are retained
+                # so old inverted-index builders can still read new manifests.
+                "candidate_edge_count": int(role_rare_edges),
+                "candidate_degree_min": int(selector_hit_array.min()),
+                "candidate_degree_mean": float(selector_hit_array.mean()),
+                "candidate_degree_max": int(selector_hit_array.max()),
+                "candidate_rare_edge_count": int(role_candidate_rare_edges),
+                "candidate_rare_edge_fraction": float(
+                    role_candidate_rare_edges / max(1, role_rare_edges)
+                ),
                 "elapsed_seconds": round(time.time() - role_started, 3),
             }
             if use_modelout:
@@ -1809,11 +1919,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             role_records.append(record)
 
         rare_edge_index_writer.finalize(
-            stage_dir / "pg_backbone_rare_edge_index.i32.npy",
+            stage_dir / "pg_backbone_candidate_edge_index.i32.npy",
             transpose_two_columns=True,
         )
         rare_edge_attr_writer.finalize(
-            stage_dir / "pg_backbone_rare_edge_attr.f32.npy"
+            stage_dir / "pg_backbone_candidate_edge_attr.f32.npy"
         )
         if args.modelout_role in args.roles:
             assert pseudo_indices_writer is not None
@@ -1866,7 +1976,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "backbone": (
                     "sigmoid(backbone logits); no expert probability and no label hint"
                 ),
-                "rare_selector": {
+                "protein_go_selector": {
                     "uses_learnable_selector": bool(
                         model.query_decoder.selector.use_learnable_selector
                     ),
@@ -1876,12 +1986,16 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "scope": args.rare_selector_scope,
                     "candidate_order": (
                         [
-                            "train_defined_rare_go_vocabulary",
-                            "backbone_static_prefilter_within_rare",
+                            (
+                                "complete_task_go_vocabulary"
+                                if args.rare_selector_scope == "full_task"
+                                else "train_defined_rare_go_vocabulary"
+                            ),
+                            "backbone_static_prefilter_within_selected_universe",
                             "trained_learnable_selector_rerank",
                             "graph_edge_topk",
                         ]
-                        if args.rare_selector_scope == "rare_first"
+                        if args.rare_selector_scope in {"rare_first", "full_task"}
                         else [
                             "trained_full_vocabulary_selector_topk",
                             "filter_selected_terms_to_rare",
@@ -1889,6 +2003,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                     ),
                     "rare_before_selector_topk": (
                         args.rare_selector_scope == "rare_first"
+                    ),
+                    "candidate_universe_count": int(
+                        args.num_classes
+                        if args.rare_selector_scope == "full_task"
+                        else len(rare_indices)
                     ),
                     "rare_candidate_count": int(len(rare_indices)),
                     "selector_prefilter_topm_checkpoint": int(
@@ -1953,9 +2072,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 "rare_registry_file": "rare_go_registry.tsv",
                 "train_counts_file": "train_go_label_counts.f64.npy",
             },
-            "backbone_rare_edges": {
-                "edge_index_file": "pg_backbone_rare_edge_index.i32.npy",
-                "edge_attr_file": "pg_backbone_rare_edge_attr.f32.npy",
+            "backbone_candidate_edges": {
+                "edge_index_file": "pg_backbone_candidate_edge_index.i32.npy",
+                "edge_attr_file": "pg_backbone_candidate_edge_attr.f32.npy",
                 "edge_attr_columns": [
                     "backbone_probability",
                     "selector_score",
@@ -1963,6 +2082,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 ],
                 "column_0_is_absolute_message_weight": True,
                 "edge_count": int(rare_edge_index_writer.rows),
+                "selector_scope": args.rare_selector_scope,
             },
             "weak_pseudo_targets": (
                 {

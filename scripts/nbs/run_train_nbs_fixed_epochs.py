@@ -18,11 +18,18 @@ def main() -> None:
             / "nbs_models"
             / "nbs_protein_go"
             / "configs"
-            / "bp_fixed_epoch_v0.5.6.json",
+            / "bp_fixed_epoch_v0.6.0.json",
         )
     )
     train_script = project_root / "scripts" / "nbs" / "train_nbs_fixed_epochs.py"
     num_gpus = int(os.environ.get("NBS_NUM_GPUS", "1"))
+    child_env = os.environ.copy()
+    # NBS episodes have deliberately variable graph sizes. Expandable CUDA
+    # segments reduce the otherwise large allocator slivers left by changing
+    # allocation shapes. Preserve any explicit operator configuration.
+    child_env.setdefault(
+        "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
+    )
     applied_overrides: list[str] = []
     if num_gpus > 1:
         command = [
@@ -68,6 +75,7 @@ def main() -> None:
     env_arg_map = {
         "NBS_NUM_QUERIES": "--num-queries",
         "NBS_MAX_CANDIDATES": "--max-candidates",
+        "NBS_REQUIRE_FULL_SUPERVISION_RETENTION": "--require-full-supervision-retention",
         "NBS_HARD_CANDIDATE_PER_QUERY": "--hard-candidate-per-query",
         "NBS_BACKGROUND_UNLABELLED_PER_QUERY": "--background-unlabelled-per-query",
         "NBS_BACKGROUND_UNLABELLED_WEIGHT": "--background-unlabelled-weight",
@@ -76,6 +84,8 @@ def main() -> None:
         "NBS_PSEUDO_SAMPLING_MODE": "--pseudo-sampling-mode",
         "NBS_WEAK_FOCUS_QUERIES": "--weak-focus-queries",
         "NBS_WEAK_FOCUS_TARGETS": "--weak-focus-targets",
+        "NBS_WEAK_PRIMARY_PROTEINS_PER_EPISODE": "--weak-primary-proteins-per-episode",
+        "NBS_WEAK_PRIMARY_QUERY_SOURCE": "--weak-primary-query-source",
         "NBS_WEAK_FOCUS_SCAN_LIMIT": "--weak-focus-scan-limit",
         "NBS_WEAK_FOCUS_SPECIFICITY_POWER": "--weak-focus-specificity-power",
         "NBS_WEAK_FOCUS_MIN_PROBABILITY": "--weak-focus-min-probability",
@@ -87,6 +97,7 @@ def main() -> None:
         "NBS_SINGLETON_REQUIRES_PSEUDO": "--singleton-requires-pseudo",
         "NBS_CANDIDATE_MESSAGE_TOPK": "--candidate-message-topk",
         "NBS_PSEUDO_MESSAGE_TOPK": "--pseudo-message-topk",
+        "NBS_PREFETCH_BATCHES": "--prefetch-batches",
         "NBS_STEPS_PER_EPOCH_PER_RANK": "--steps-per-epoch-per-rank",
         "NBS_COVERAGE_CYCLES_PER_EPOCH": "--coverage-cycles-per-epoch",
         "NBS_EPOCH_UNIT": "--epoch-unit",
@@ -95,6 +106,7 @@ def main() -> None:
         "NBS_WEAK_UNIQUE_COVERAGE_TARGET": "--weak-unique-coverage-target",
         "NBS_WEAK_FOCUS_PLANNING_EFFICIENCY": "--weak-focus-planning-efficiency",
         "NBS_PROGRESS_BAR": "--progress-bar",
+        "NBS_EMPTY_CACHE_BETWEEN_EPOCHS": "--empty-cache-between-epochs",
         "NBS_SCHEDULER": "--scheduler-name",
         "NBS_ONECYCLE_PCT_START": "--onecycle-pct-start",
         "NBS_ONECYCLE_DIV_FACTOR": "--onecycle-div-factor",
@@ -135,12 +147,17 @@ def main() -> None:
         f"[NBS launcher] config={config} num_gpus={num_gpus}",
         flush=True,
     )
+    print(
+        "[NBS CUDA allocator] "
+        f"PYTORCH_CUDA_ALLOC_CONF={child_env['PYTORCH_CUDA_ALLOC_CONF']}",
+        flush=True,
+    )
     if applied_overrides:
         print(
             "[NBS launcher overrides] " + ", ".join(applied_overrides),
             flush=True,
         )
-    subprocess.run(command, cwd=project_root, check=True)
+    subprocess.run(command, cwd=project_root, env=child_env, check=True)
 
 
 if __name__ == "__main__":

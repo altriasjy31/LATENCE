@@ -1,6 +1,6 @@
 """Neighborhood--BoxSquare (NBS) with BoxSquaredEL protein--GO geometry."""
 
-__version__ = "0.5.3"
+__version__ = "0.6.1"
 
 from .boxsqel_manifest import (
     BoxSquaredELTrainingContract,
@@ -32,7 +32,12 @@ from .boxsqel_relations import (
     build_boxsqel_gg_relations,
     parse_boxsqel_normalized_axioms,
 )
-from .inference import ExternalCandidateEvidenceStore, FullTaskInferenceConfig, export_full_task_probabilities
+from .inference import (
+    ExternalCandidateEvidenceStore,
+    ExternalPPNeighborhoodStore,
+    FullTaskInferenceConfig,
+    export_full_task_probabilities,
+)
 from .inverted_index import (
     InvertedIndexFiles,
     ProteinMajorAnnotationFiles,
@@ -129,6 +134,7 @@ __all__ = [
     "NBSRunComponents",
     "freeze_go_geometry",
     "ExternalCandidateEvidenceStore",
+    "ExternalPPNeighborhoodStore",
     "FullTaskInferenceConfig",
     "export_full_task_probabilities",
     "GOProteinCSRStore",

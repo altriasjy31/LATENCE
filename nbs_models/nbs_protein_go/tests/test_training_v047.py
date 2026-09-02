@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from nbs_pg.episode import GOQueryEpisodeSampler, NBSQueryEpisodeConfig
 from nbs_pg.latence_stores import GOProteinCSRStore, RoleAwareBaseLogitStore, RoleProbabilitySlice
@@ -122,6 +123,32 @@ def test_candidate_budget_diagnostics_report_truncation(tmp_path: Path):
     assert episode.metadata["candidate_union_before_cap"] >= episode.metadata["candidate_union_after_cap"]
     assert 0.0 <= episode.metadata["candidate_truncation_fraction"] <= 1.0
     assert episode.metadata["hard_pairs_retained"] <= episode.metadata["hard_pairs_requested"]
+
+
+def test_full_supervision_retention_rejects_undersized_candidate_cap():
+    cfg = NBSQueryEpisodeConfig(
+        num_queries=64,
+        gold_positive_per_query=1,
+        hard_candidate_per_query=16,
+        pseudo_positive_per_query=32,
+        max_candidates=1536,
+        require_full_supervision_retention=True,
+    )
+    assert cfg.supervision_candidate_upper_bound == 3136
+    with pytest.raises(ValueError, match="required_upper_bound=3136"):
+        cfg.validate()
+
+
+def test_full_supervision_retention_accepts_exact_candidate_upper_bound():
+    cfg = NBSQueryEpisodeConfig(
+        num_queries=64,
+        gold_positive_per_query=1,
+        hard_candidate_per_query=16,
+        pseudo_positive_per_query=32,
+        max_candidates=3136,
+        require_full_supervision_retention=True,
+    )
+    cfg.validate()
 
 
 def test_coverage_based_epoch_config_accepts_auto_steps():

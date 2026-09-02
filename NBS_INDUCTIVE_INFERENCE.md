@@ -8,10 +8,11 @@ changing the v0.5.6 scientific training configuration or checkpoint weights.
 The preparation program accepts either:
 
 1. a project pickle containing ordered `ind_test` protein IDs. If sequences are
-   absent, the configured Stage-1 `working_address` / `--msa-index` is read and
-   the original MSA binary is used;
+   absent, `data/ind_MSA_bin/index.pkl` (or an explicit `--msa-index`) is read
+   and the original independent-test MSA binary is used. The training
+   checkpoint's `sprot_2204_MSA_bin` path is never inherited for this mode;
 2. a FASTA file. Each sequence is encoded as a query-only singleton MSA and
-   padded to the original Stage-1 `top_k 脳 max_len` input shape;
+   padded to the original Stage-1 `top_k × max_len` input shape;
 3. FASTA plus pickle. The pickle defines evaluation order and FASTA sequences
    are aligned strictly by protein ID.
 
@@ -54,6 +55,21 @@ For a relocated MSA binary or Stage-1 model config:
 export STAGE1_MSA_INDEX=/path/to/ind_MSA_bin/index.pkl
 export STAGE1_MODEL_CONFIG=/path/to/model_config.pkl
 ```
+
+Before importing the Stage-1 model, the preparation program requires exact
+coverage of every requested protein ID in the independent-test binary index.
+This catches accidental selection of the much larger training MSA binary with
+an explicit matched/total diagnostic.
+
+For a true two-protein end-to-end smoke test:
+
+```bash
+export NBS_RUN_EVALUATION=0
+export NBS_EVAL_LIMIT_PROTEINS=2
+```
+
+The limit applies to Stage-1 MSA loading, representation/candidate export,
+test-to-core retrieval, and NBS forward, rather than only the final NBS call.
 
 The default experiment workspace is
 `$NBS_EVAL_OUTPUT_DIR/inductive_inputs`. Its manifest is checked before Stage-1
@@ -113,6 +129,15 @@ Two inference modes remain available:
 - `inductive_feature_candidate`: the v0.5.3-compatible feature-only ablation,
   with all external relation-source residuals set to zero.
 
+The r5 launcher exposes these as `NBS_EVAL_USE_EXTERNAL_PP` and
+`NBS_EVAL_USE_CANDIDATE_EVIDENCE` (both default to `1`). Keep both enabled for
+the formal run; disabled channels are post-hoc attribution diagnostics.
+
+Independent-test routing uses two deliberately separate protein index spaces.
+GO-query source weights are obtained from the sampled training-support graph;
+candidate logits are evaluated on the isolated external-protein hierarchy.
+Support `seed_index` values are never clipped or remapped into a test batch.
+
 `go_chunk_size` is frozen to the resolved config value (256 for the current BP
 run). It defines a shared sampled support-graph block and is therefore a
 scientific inference parameter, not a free memory knob. The exporter rejects a
@@ -120,6 +145,11 @@ different CLI value instead of silently changing predictions. Protein batch
 size remains a throughput setting and must not change a protein's result.
 
 ## Evaluation output
+
+By default, the overall primary result calls the exact Stage-1
+`evalperf_torch` backend (`NBS_METRIC_BACKEND=stage1`). The separately recorded
+flattened micro metrics are diagnostics and are not interchangeable with the
+Stage-1 Fmax definition.
 
 `nbs_ind_test_metrics.json` reports:
 

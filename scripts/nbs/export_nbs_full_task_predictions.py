@@ -3,11 +3,89 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import numpy as np
 import torch
+
+
+EXPECTED_INDUCTIVE_API_VERSION = 5
+EXPECTED_INDUCTIVE_ROUTING_API_VERSION = 1
+
+
+def validate_inductive_inference_api(
+    inference_api: ModuleType | Any,
+    model_class: type[Any],
+    matcher_class: type[Any],
+) -> int:
+    """Reject mixed exporter/inference/model deployments with one clear error."""
+    required_inference = (
+        "ExternalCandidateEvidenceStore",
+        "ExternalPPNeighborhoodStore",
+        "FullTaskInferenceConfig",
+        "export_full_task_probabilities",
+    )
+    missing = [name for name in required_inference if not hasattr(inference_api, name)]
+    inference_version = getattr(
+        inference_api, "NBS_INDUCTIVE_INFERENCE_API_VERSION", None
+    )
+    model_version = getattr(model_class, "INDUCTIVE_INFERENCE_API_VERSION", None)
+    score = getattr(model_class, "score_external_candidates", None)
+    score_parameters = set() if score is None else set(inspect.signature(score).parameters)
+    missing_score_parameters = sorted(
+        {"neighbor_x", "neighbor_edge_attr", "neighbor_fanouts"} - score_parameters
+    )
+    matcher_version = getattr(
+        matcher_class, "INDUCTIVE_ROUTING_API_VERSION", None
+    )
+    matcher_forward = getattr(matcher_class, "forward", None)
+    matcher_parameters = (
+        set()
+        if matcher_forward is None
+        else set(inspect.signature(matcher_forward).parameters)
+    )
+    problems: list[str] = []
+    if missing:
+        problems.append(f"inference.py missing symbols={missing}")
+    if inference_version != EXPECTED_INDUCTIVE_API_VERSION:
+        problems.append(
+            "inference.py API version="
+            f"{inference_version!r}, expected={EXPECTED_INDUCTIVE_API_VERSION}"
+        )
+    if model_version != EXPECTED_INDUCTIVE_API_VERSION:
+        problems.append(
+            f"model.py API version={model_version!r}, "
+            f"expected={EXPECTED_INDUCTIVE_API_VERSION}"
+        )
+    if missing_score_parameters:
+        problems.append(
+            "ProteinGONBSModel.score_external_candidates missing parameters="
+            f"{missing_score_parameters}"
+        )
+    if matcher_version != EXPECTED_INDUCTIVE_ROUTING_API_VERSION:
+        problems.append(
+            f"matcher.py routing API version={matcher_version!r}, "
+            f"expected={EXPECTED_INDUCTIVE_ROUTING_API_VERSION}"
+        )
+    if "routing_hierarchy" not in matcher_parameters:
+        problems.append(
+            "NBSGatedDeltaAttnRes.forward missing parameter='routing_hierarchy'"
+        )
+    if problems:
+        detail = "; ".join(problems)
+        raise RuntimeError(
+            "Incompatible NBS isolated-inductive inference deployment: "
+            f"{detail}. This normally means a newer exporter was copied over an "
+            "older nbs_pg package. Replace inference.py, model.py and matcher.py "
+            "together with the exporter/launcher patch; do not delete "
+            "ExternalPPNeighborhoodStore "
+            "or fall back to feature-only inference for the formal result."
+        )
+    return EXPECTED_INDUCTIVE_API_VERSION
 
 
 def _sha256(path: Path) -> str:
@@ -45,6 +123,12 @@ def main() -> None:
     parser.add_argument("--support-seed", type=int, default=3407)
     parser.add_argument("--probability-clip", type=float, default=1e-5)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--min-free-gpu-gb",
+        type=float,
+        default=8.0,
+        help="fail before model materialization when the selected CUDA device lacks headroom",
+    )
     parser.add_argument("--limit-proteins", type=int, default=None)
     parser.add_argument(
         "--save-diagnostics",
@@ -52,6 +136,8 @@ def main() -> None:
         help="Save applied logit delta, delta gate and per-GO routing arrays.",
     )
     args = parser.parse_args()
+    if args.min_free_gpu_gb < 0:
+        raise ValueError("--min-free-gpu-gb must be non-negative")
 
     project_root = Path(__file__).resolve().parents[2]
     import sys
@@ -59,17 +145,43 @@ def main() -> None:
     sys.path.insert(0, str(project_root))
     sys.path.insert(0, str(project_root / "nbs_models" / "nbs_protein_go"))
     from nbs_pg import NBSConfig, ProteinGONBSModel  # pylint: disable=import-outside-toplevel
-    from nbs_pg.inference import (  # pylint: disable=import-outside-toplevel
-        ExternalCandidateEvidenceStore,
-        ExternalPPNeighborhoodStore,
-        FullTaskInferenceConfig,
-        export_full_task_probabilities,
+    import nbs_pg.inference as inference_api  # pylint: disable=import-outside-toplevel
+    from nbs_pg.matcher import (  # pylint: disable=import-outside-toplevel
+        NBSGatedDeltaAttnRes,
     )
+
+    api_version = validate_inductive_inference_api(
+        inference_api, ProteinGONBSModel, NBSGatedDeltaAttnRes
+    )
+    ExternalCandidateEvidenceStore = inference_api.ExternalCandidateEvidenceStore
+    ExternalPPNeighborhoodStore = inference_api.ExternalPPNeighborhoodStore
+    FullTaskInferenceConfig = inference_api.FullTaskInferenceConfig
+    export_full_task_probabilities = inference_api.export_full_task_probabilities
+    print(f"[NBS inference API] version={api_version} status=ok", flush=True)
     from nbs_pg.local_loader import (  # pylint: disable=import-outside-toplevel
         LatenceNBSLocalGraphMaterializer,
         NBSLocalGraphSamplingConfig,
         build_latence_nbs_stores,
     )
+
+    device = torch.device(args.device)
+    if device.type == "cuda" and float(args.min_free_gpu_gb) > 0:
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"CUDA device requested but CUDA is unavailable: {device}")
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        free_gb = float(free_bytes) / (1024 ** 3)
+        total_gb = float(total_bytes) / (1024 ** 3)
+        print(
+            f"[CUDA preflight] device={device} free={free_gb:.2f}GB/"
+            f"{total_gb:.2f}GB required={float(args.min_free_gpu_gb):.2f}GB",
+            flush=True,
+        )
+        if free_gb < float(args.min_free_gpu_gb):
+            raise RuntimeError(
+                f"NBS inference device {device} has only {free_gb:.2f}GB free, "
+                f"below --min-free-gpu-gb={float(args.min_free_gpu_gb):.2f}. "
+                "Select another NBS_EVAL_DEVICE or wait for training."
+            )
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
     frozen_support_block = int(config.get("inference", {}).get("go_chunk_size", 256))
@@ -94,7 +206,6 @@ def main() -> None:
         go_box_dim=int(config["model_inputs"]["go_box_dim"]),
     )
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
-    device = torch.device(args.device)
     model.to(device).eval()
 
     global_go_graph = materializer.build_global_go_graph().to(device)
@@ -228,15 +339,19 @@ def main() -> None:
         output_ids.write_text("\n".join(ids) + "\n", encoding="utf-8")
 
     manifest = {
-        "schema_version": 2,
-        "exporter": "NBS full-task isolated inductive inference v0.5.6.1-inductive-r1",
+        "schema_version": 3,
+        "exporter": "NBS full-task isolated inductive inference v0.6.0-inductive-r5",
+        "inductive_inference_api_version": api_version,
         "task": config.get("task"),
         "checkpoint": str(args.checkpoint),
         "checkpoint_sha256": _sha256(args.checkpoint),
-        "inference_mode": (
-            "inductive_pp_feature_candidate"
-            if pp_neighborhood is not None
-            else "inductive_feature_candidate"
+        "inference_mode": "_".join(
+            [
+                "inductive",
+                *([] if pp_neighborhood is None else ["pp"]),
+                "feature",
+                *([] if evidence is None else ["candidate"]),
+            ]
         ),
         "prediction_space": "complete_task_classifier_columns",
         "num_proteins": int(output.shape[0]),
@@ -265,6 +380,11 @@ def main() -> None:
             "edge_attr_sha256": (
                 None if args.external_pp_edge_attr is None else _sha256(args.external_pp_edge_attr)
             ),
+        },
+        "routing_contract": {
+            "query_routing_hierarchy": "sampled_training_support_graph",
+            "candidate_scoring_hierarchy": "isolated_external_proteins",
+            "index_spaces_separate": True,
         },
         "output_probability": str(probability_path),
         "output_probability_sha256": _sha256(probability_path),

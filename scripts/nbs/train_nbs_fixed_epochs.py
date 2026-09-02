@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -74,8 +75,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps-per-epoch", type=int, default=None)
     parser.add_argument("--log-interval", type=int, default=None)
     parser.add_argument("--progress-bar", type=int, choices=[0, 1], default=None)
+    parser.add_argument(
+        "--empty-cache-between-epochs",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help=(
+            "release unused PyTorch CUDA allocator segments after each epoch; "
+            "live model/optimizer/GO-cache tensors remain on device"
+        ),
+    )
     parser.add_argument("--num-queries", type=int, default=None)
     parser.add_argument("--max-candidates", type=int, default=None)
+    parser.add_argument(
+        "--require-full-supervision-retention",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help=(
+            "require max_candidates to retain every sampled gold, pseudo-positive "
+            "and hard-negative protein"
+        ),
+    )
     parser.add_argument("--hard-candidate-per-query", type=int, default=None)
     parser.add_argument("--background-unlabelled-per-query", type=int, default=None)
     parser.add_argument("--background-unlabelled-weight", type=float, default=None)
@@ -88,6 +109,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--weak-focus-queries", type=int, default=None)
     parser.add_argument("--weak-focus-targets", type=int, default=None)
+    parser.add_argument("--weak-primary-proteins-per-episode", type=int, default=None)
+    parser.add_argument(
+        "--weak-primary-query-source",
+        choices=["pseudo", "pseudo_candidate_intersection"],
+        default=None,
+    )
     parser.add_argument("--weak-focus-scan-limit", type=int, default=None)
     parser.add_argument("--weak-focus-specificity-power", type=float, default=None)
     parser.add_argument("--weak-focus-min-probability", type=float, default=None)
@@ -99,6 +126,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--singleton-requires-pseudo", type=int, choices=[0, 1], default=None)
     parser.add_argument("--candidate-message-topk", type=int, default=None)
     parser.add_argument("--pseudo-message-topk", type=int, default=None)
+    parser.add_argument(
+        "--prefetch-batches",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="materialize one CPU batch ahead while the current batch runs on GPU",
+    )
     parser.add_argument("--steps-per-epoch-per-rank", type=int, default=None)
     parser.add_argument("--coverage-cycles-per-epoch", type=float, default=None)
     parser.add_argument(
@@ -107,6 +141,7 @@ def parse_args() -> argparse.Namespace:
             "eligible_go_coverage_cycle",
             "protein_major_with_go_floor",
             "hybrid_go_weak_coverage",
+            "weak_primary_exhaustive",
         ],
         default=None,
     )
@@ -133,6 +168,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # Must be set before importing nbs_pg/torch.  The wrapper sets the same
+    # default, but keeping it here also covers direct and torchrun invocation.
+    os.environ.setdefault(
+        "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
+    )
     project_root = _project_root_from_script()
     _install_package_path(project_root)
     from nbs_pg.distributed import (  # pylint: disable=import-outside-toplevel
@@ -179,6 +219,10 @@ def main() -> None:
         training_raw["log_interval"] = int(args.log_interval)
     if args.progress_bar is not None:
         training_raw["progress_bar"] = bool(args.progress_bar)
+    if args.empty_cache_between_epochs is not None:
+        training_raw["empty_cache_between_epochs"] = bool(
+            args.empty_cache_between_epochs
+        )
 
     episode_raw = config.setdefault("episode", {})
     episode_overrides = {
@@ -189,6 +233,9 @@ def main() -> None:
         "pseudo_positive_per_query": args.pseudo_positive_per_query,
         "weak_focus_queries_per_episode": args.weak_focus_queries,
         "weak_focus_targets_per_query": args.weak_focus_targets,
+        "weak_primary_proteins_per_episode": (
+            args.weak_primary_proteins_per_episode
+        ),
         "weak_focus_scan_limit": args.weak_focus_scan_limit,
         "support_per_query": args.support_per_query,
         "gold_positive_per_query": args.gold_positive_per_query,
@@ -197,6 +244,10 @@ def main() -> None:
     for key, value in episode_overrides.items():
         if value is not None:
             episode_raw[key] = int(value)
+    if args.require_full_supervision_retention is not None:
+        episode_raw["require_full_supervision_retention"] = bool(
+            args.require_full_supervision_retention
+        )
     if args.background_unlabelled_weight is not None:
         episode_raw["background_unlabelled_weight"] = float(
             args.background_unlabelled_weight
@@ -217,6 +268,10 @@ def main() -> None:
         episode_raw["query_sampling_mode"] = str(args.query_sampling_mode)
     if args.pseudo_sampling_mode is not None:
         episode_raw["pseudo_sampling_mode"] = str(args.pseudo_sampling_mode)
+    if args.weak_primary_query_source is not None:
+        episode_raw["weak_primary_query_source"] = str(
+            args.weak_primary_query_source
+        )
     if args.gold_support_policy is not None:
         episode_raw["gold_support_policy"] = str(args.gold_support_policy)
     if args.singleton_requires_pseudo is not None:
@@ -227,6 +282,7 @@ def main() -> None:
         "candidate_message_topk": args.candidate_message_topk,
         "pseudo_message_topk": args.pseudo_message_topk,
         "steps_per_epoch_per_rank": args.steps_per_epoch_per_rank,
+        "prefetch_batches": args.prefetch_batches,
     }
     for key, value in sampling_overrides.items():
         if value is not None:

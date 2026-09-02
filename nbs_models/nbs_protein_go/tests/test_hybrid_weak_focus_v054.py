@@ -8,7 +8,10 @@ import numpy as np
 from nbs_pg.episode import GOQueryEpisodeSampler, NBSQueryEpisodeConfig
 from nbs_pg.latence_graph_stores import ProteinRegistryStore, RoleLocalProteinGOCSRStore
 from nbs_pg.latence_stores import GOProteinCSRStore, RoleAwareBaseLogitStore, RoleProbabilitySlice
-from nbs_pg.local_loader import resolve_hybrid_epoch_requirements
+from nbs_pg.local_loader import (
+    resolve_hybrid_epoch_requirements,
+    resolve_weak_primary_epoch_requirements,
+)
 
 
 def _save(path: Path, value: np.ndarray) -> Path:
@@ -192,6 +195,37 @@ def test_hybrid_epoch_planner_uses_unique_weak_target():
     assert plan["core_steps_required"] == 13
     assert plan["resolved_steps"] == 50
     assert plan["weak_unique_target_count"] == 700
+
+
+def test_weak_primary_queue_exhausts_only_on_forced_anchors(tmp_path: Path):
+    sampler = _sampler(tmp_path)
+    sampler.config.weak_primary_proteins_per_episode = 2
+    remaining = []
+    for episode_index in range(10):
+        episode = sampler.sample(
+            seed=200 + episode_index,
+            epoch=1,
+            global_episode=episode_index,
+            rank=0,
+            world_size=1,
+        )
+        assert episode.metadata["weak_primary_anchor_count"] == 2
+        assert episode.metadata["weak_primary_anchor_retained"] == 2
+        remaining.append(int(episode.metadata["weak_primary_remaining"]))
+    assert remaining == list(range(18, -1, -2))
+    progress = sampler.weak_primary_progress(epoch=1, rank=0, world_size=1)
+    assert progress == {"owned": 20, "selected": 20, "remaining": 0}
+
+
+def test_weak_primary_epoch_plan_uses_largest_ddp_shard():
+    plan = resolve_weak_primary_epoch_requirements(
+        pseudo_eligible_active_weak=1001,
+        weak_primary_proteins_per_episode=32,
+        world_size=2,
+    )
+    assert plan["largest_owned_weak_shard"] == 501
+    assert plan["resolved_steps"] == 16
+    assert plan["weak_primary_global_capacity_per_step"] == 64
 
 
 def test_active_rows_only_count_eligible_pseudo_go(tmp_path: Path):

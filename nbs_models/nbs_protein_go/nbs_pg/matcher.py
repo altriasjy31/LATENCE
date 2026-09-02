@@ -19,6 +19,8 @@ class NBSGatedDeltaAttnRes(nn.Module):
     exact baseline and learns a gated graph delta rather than replacing it.
     """
 
+    INDUCTIVE_ROUTING_API_VERSION = 1
+
     def __init__(self, config: NBSConfig, num_sources: int) -> None:
         super().__init__()
         if num_sources <= 0:
@@ -259,9 +261,37 @@ class NBSGatedDeltaAttnRes(nn.Module):
         hierarchy: NBSNeighborhoodHierarchy,
         condition: NBSQueryCondition,
         return_aux: bool = False,
+        *,
+        routing_hierarchy: Optional[NBSNeighborhoodHierarchy] = None,
     ) -> NBSMatchOutput:
-        q_out, weights, gates, null_weight = self._route(hierarchy, condition)
-        graph_logits = self._score_candidates(hierarchy, condition, q_out, weights, gates)
+        # Training uses one hierarchy for both support-conditioned routing and
+        # candidate scoring.  Isolated inductive inference is different: query
+        # seeds remain indices in the sampled support graph, while the scored
+        # candidates live in a separate external-protein index space.  Keeping
+        # these hierarchies explicit prevents support seed indices from being
+        # interpreted as external candidate indices and preserves batching
+        # invariance for independent-test proteins.
+        score_hierarchy = hierarchy
+        route_hierarchy = (
+            hierarchy if routing_hierarchy is None else routing_hierarchy
+        )
+        score_hierarchy.validate()
+        route_hierarchy.validate()
+        if score_hierarchy.source_contexts.size(0) != self.num_sources:
+            raise ValueError(
+                f"Expected {self.num_sources} scoring sources, got "
+                f"{score_hierarchy.source_contexts.size(0)}"
+            )
+        if score_hierarchy.source_names != route_hierarchy.source_names:
+            raise ValueError(
+                "routing and scoring hierarchies must use the same source order"
+            )
+        q_out, weights, gates, null_weight = self._route(
+            route_hierarchy, condition
+        )
+        graph_logits = self._score_candidates(
+            score_hierarchy, condition, q_out, weights, gates
+        )
         logits, delta_gate = self._refine_base_logits(graph_logits, condition)
 
         for name, value in (

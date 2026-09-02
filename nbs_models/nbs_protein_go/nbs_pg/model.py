@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -17,6 +17,7 @@ from .backbones import (
     Metadata,
     NBSHeterogeneousResidualBackbone,
     NBSHomogeneousResidualBackbone,
+    edge_type_key,
 )
 from .box_geometry import (
     BoxHierarchyCalibrator,
@@ -78,6 +79,11 @@ def default_nbs_edge_input_dims(config: NBSConfig) -> dict[EdgeType, int]:
 
 class ProteinGONBSModel(nn.Module):
     """Neighborhood--BoxSquare model using BoxSquaredEL GO geometry."""
+
+    # Bump this only when the public isolated-inductive scoring contract
+    # changes.  The exporter checks it before reading data or a checkpoint so
+    # that a new exporter cannot silently run against an older model module.
+    INDUCTIVE_INFERENCE_API_VERSION = 5
 
     def __init__(
         self,
@@ -252,16 +258,24 @@ class ProteinGONBSModel(nn.Module):
         self,
         protein_x: Tensor,
         *,
+        neighbor_x: Optional[Tensor] = None,
+        neighbor_edge_attr: Optional[Tensor] = None,
+        neighbor_relation: EdgeType = SIMILAR_TO,
+        neighbor_fanouts: Optional[Sequence[int]] = None,
         source_names: Optional[tuple[str, ...]] = None,
     ) -> NBSNeighborhoodHierarchy:
         """Encode inductive proteins without inserting them into the train graph.
 
         This path is intended for independent-test inference.  The external
         protein uses the same protein input projection/type embedding as the
-        heterogeneous backbone, while graph-relation residual sources are set
-        to zero.  The GO/query side still uses the trained NBS graph and full
-        BoxSquaredEL ontology.  This provides a deterministic inductive
-        fallback for proteins absent from the 2022 training registry.
+        heterogeneous backbone.  When ``neighbor_x`` is supplied, its
+        ``[N,K,D_in]`` core-neighbour representations are aggregated as
+        ``core -> external`` messages through the already-trained P--P relation
+        operator (``similar_to`` by default).  No external protein is inserted
+        into the frozen training graph and no test--test message is permitted.
+
+        With no neighbours this remains the exact v0.5.3 feature-only fallback:
+        all graph-relation residual sources are zero.
         """
         if protein_x.dim() != 2:
             raise ValueError("protein_x must be [N,D]")
@@ -272,15 +286,150 @@ class ProteinGONBSModel(nn.Module):
             )
         )
         source_count = int(self.backbone.num_target_sources)
-        if source_names is None:
-            source_names = tuple(f"external_source:{i}" for i in range(source_count))
-        if len(source_names) != source_count:
-            raise ValueError("source_names do not match NBS target-source count")
+
+        if neighbor_x is None:
+            if neighbor_edge_attr is not None:
+                raise ValueError("neighbor_edge_attr requires neighbor_x")
+            if source_names is None:
+                source_names = tuple(f"external_source:{i}" for i in range(source_count))
+            if len(source_names) != source_count:
+                raise ValueError("source_names do not match NBS target-source count")
+            projected_h = self.hierarchy_adapter.projection(h)
+            hierarchy = NBSNeighborhoodHierarchy(
+                final_context=projected_h,
+                source_contexts=projected_h.new_zeros(
+                    source_count, projected_h.size(0), projected_h.size(1)
+                ),
+                source_names=tuple(source_names),
+            )
+            hierarchy.validate()
+            return hierarchy
+
+        if neighbor_x.dim() != 3 or neighbor_x.size(0) != protein_x.size(0):
+            raise ValueError("neighbor_x must be [N,K,D_in] and align with protein_x")
+        if neighbor_x.size(2) != protein_x.size(1):
+            raise ValueError("neighbor and external protein input dimensions disagree")
+        if neighbor_x.size(1) <= 0:
+            raise ValueError("inductive P-P inference needs at least one neighbour")
+        if neighbor_fanouts is None:
+            resolved_fanouts = (int(neighbor_x.size(1)),) * self.config.num_layers
+        else:
+            resolved_fanouts = tuple(int(value) for value in neighbor_fanouts)
+            if len(resolved_fanouts) != self.config.num_layers:
+                raise ValueError("neighbor_fanouts must contain one value per NBS layer")
+            if any(value <= 0 or value > neighbor_x.size(1) for value in resolved_fanouts):
+                raise ValueError(
+                    "every external P-P fanout must lie in [1, stored neighbour count]"
+                )
+        if neighbor_relation not in self.backbone.incoming_target_relations:
+            raise ValueError(f"relation {neighbor_relation!r} does not point to protein")
+
+        relation_key = edge_type_key(neighbor_relation)
+        relation_dim = default_nbs_edge_input_dims(self.config).get(neighbor_relation)
+        if relation_dim is not None:
+            if neighbor_edge_attr is None:
+                raise ValueError("the selected P-P relation requires neighbor_edge_attr")
+            if neighbor_edge_attr.shape != (
+                neighbor_x.size(0),
+                neighbor_x.size(1),
+                int(relation_dim),
+            ):
+                raise ValueError(
+                    "neighbor_edge_attr must be [N,K,F] with the trained relation feature width"
+                )
+        elif neighbor_edge_attr is not None and neighbor_edge_attr.shape[:2] != neighbor_x.shape[:2]:
+            raise ValueError("neighbor_edge_attr rows do not align with neighbor_x")
+
+        # Neighbours are immutable core anchors.  The external target evolves
+        # across NBS layers, while the same retrieved core evidence is available
+        # at every layer.  This is deliberately isolated per test protein.
+        n_external, k_neighbors, _ = neighbor_x.shape
+        flat_neighbor_x = neighbor_x.reshape(n_external * k_neighbors, -1)
+        neighbor_h = self.backbone.input_drop(
+            self.backbone.activation(
+                proj(flat_neighbor_x) + self.backbone.type_embedding[PROTEIN]
+            )
+        ).reshape(n_external, k_neighbors, -1)
+
+        relation_sources: list[Tensor] = []
+        relation_names: list[str] = []
+        layer_sources: list[Tensor] = []
+        for layer_idx in range(self.config.num_layers):
+            layer_fanout = resolved_fanouts[layer_idx]
+            layer_neighbor_h = neighbor_h[:, :layer_fanout].reshape(
+                n_external * layer_fanout, -1
+            )
+            src = torch.arange(
+                n_external * layer_fanout, device=h.device, dtype=torch.long
+            )
+            dst = torch.arange(
+                n_external, device=h.device, dtype=torch.long
+            ).repeat_interleave(layer_fanout)
+            edge_index = torch.stack([src, dst], dim=0)
+            flat_edge_attr = (
+                None
+                if neighbor_edge_attr is None
+                else neighbor_edge_attr[:, :layer_fanout].reshape(
+                    n_external * layer_fanout, -1
+                )
+            )
+            pre_norm = self.backbone.pre_norms[layer_idx][PROTEIN]
+            normalized_neighbor = pre_norm(layer_neighbor_h)
+            normalized_target = pre_norm(h)
+            raw = self.backbone.relation_layers[layer_idx][relation_key](
+                (normalized_neighbor, normalized_target),
+                edge_index,
+                flat_edge_attr,
+            )
+            raw = self.backbone.relation_dropout(
+                self.backbone.activation(
+                    self.backbone.relation_norms[layer_idx][relation_key](raw)
+                )
+            )
+            raw = self.backbone.relation_scales[relation_key][layer_idx] * raw
+            if self.config.relation_aggr == "gated_sum":
+                gate = self.backbone.relation_gates[layer_idx][relation_key](
+                    normalized_target, raw
+                )
+                contribution = gate * raw
+            else:
+                contribution = raw
+            delta = self.backbone.residual_scales[PROTEIN][layer_idx] * contribution
+            h = h + delta
+            layer_sources.append(delta)
+
+            for edge_type in self.backbone.incoming_target_relations:
+                relation_sources.append(delta if edge_type == neighbor_relation else torch.zeros_like(delta))
+                relation_names.append(
+                    f"layer:{layer_idx + 1}|relation:{'-'.join(edge_type)}"
+                )
+
+        if self.config.source_mode == "layer":
+            contexts = torch.stack(
+                [self.hierarchy_adapter.projection(value) for value in layer_sources],
+                dim=0,
+            )
+            generated_names = tuple(
+                f"layer:{i + 1}|target:{PROTEIN}" for i in range(self.config.num_layers)
+            )
+        else:
+            contexts = torch.stack(
+                [self.hierarchy_adapter.projection(value) for value in relation_sources],
+                dim=0,
+            )
+            generated_names = tuple(relation_names)
+        if source_names is not None and tuple(source_names) != generated_names:
+            raise ValueError(
+                "external P-P source order does not match the encoded support graph"
+            )
+        source_names = generated_names
         hierarchy = NBSNeighborhoodHierarchy(
-            final_context=h,
-            source_contexts=h.new_zeros(source_count, h.size(0), h.size(1)),
+            final_context=self.hierarchy_adapter.projection(h),
+            source_contexts=contexts,
             source_names=tuple(source_names),
         )
+        if hierarchy.source_contexts.size(0) != source_count:
+            raise RuntimeError("external P-P hierarchy has the wrong source count")
         hierarchy.validate()
         return hierarchy
 
@@ -290,6 +439,10 @@ class ProteinGONBSModel(nn.Module):
         query: ProteinGOQueryBatch,
         candidate_x: Tensor,
         *,
+        neighbor_x: Optional[Tensor] = None,
+        neighbor_edge_attr: Optional[Tensor] = None,
+        neighbor_relation: EdgeType = SIMILAR_TO,
+        neighbor_fanouts: Optional[Sequence[int]] = None,
         return_aux: bool = False,
     ) -> NBSMatchOutput:
         """Score external proteins against GO queries using full NBS queries.
@@ -310,11 +463,31 @@ class ProteinGONBSModel(nn.Module):
             global_cache=encoded_support.global_go_cache,
         )
         external_hierarchy = self.encode_external_protein_candidates(
-            candidate_x, source_names=encoded_support.hierarchy.source_names
+            candidate_x,
+            neighbor_x=neighbor_x,
+            neighbor_edge_attr=neighbor_edge_attr,
+            neighbor_relation=neighbor_relation,
+            neighbor_fanouts=neighbor_fanouts,
+            source_names=encoded_support.hierarchy.source_names,
         )
-        output = self.matcher(external_hierarchy, condition, return_aux=return_aux)
+        output = self.matcher(
+            external_hierarchy,
+            condition,
+            return_aux=return_aux,
+            routing_hierarchy=encoded_support.hierarchy,
+        )
         if return_aux and output.auxiliary is not None:
             output.auxiliary["inference/external_candidate_mode"] = output.logits.new_tensor(1.0)
+            output.auxiliary["inference/separate_support_routing"] = output.logits.new_tensor(1.0)
+            output.auxiliary["inference/external_pp_enabled"] = output.logits.new_tensor(
+                float(neighbor_x is not None)
+            )
+            output.auxiliary["inference/external_source_norm"] = (
+                external_hierarchy.source_contexts.float().norm(dim=-1)
+            )
+            output.auxiliary["inference/external_final_context_norm"] = (
+                external_hierarchy.final_context.float().norm(dim=-1)
+            )
         return output
 
     def score_encoded(

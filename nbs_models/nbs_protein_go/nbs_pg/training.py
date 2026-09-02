@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import gc
 import json
 import math
 import os
@@ -37,6 +38,7 @@ _PROTEIN_COVERAGE_METADATA_KEYS: dict[str, str] = {
     "gold_target": "gold_target_protein_idx",
     "hard_target": "hard_target_protein_idx",
     "pseudo_target": "pseudo_target_protein_idx",
+    "weak_primary_anchor": "weak_primary_anchor_protein_idx",
     "root_core": "root_core_protein_idx",
     "root_weak": "root_weak_protein_idx",
     "local_core": "local_core_protein_idx",
@@ -507,6 +509,7 @@ class NBSFixedEpochTrainingConfig:
     log_interval: int = 20
     progress_bar: bool = True
     progress_mininterval: float = 0.5
+    empty_cache_between_epochs: bool = True
     max_steps_per_epoch: Optional[int] = None
     scheduler_step: str = "batch"
     seed: int = 3407
@@ -761,6 +764,76 @@ class NBSFixedEpochTrainer:
         self.global_go_cache = self.base_model.make_go_cache(go_graph)
         del go_graph
 
+    def _finish_cuda_epoch(self) -> dict[str, Any]:
+        """Report allocator state and optionally return cached blocks to CUDA.
+
+        The local NBS graph changes shape from episode to episode.  PyTorch's
+        caching allocator can therefore retain substantially more memory than
+        is occupied by live tensors.  ``max_memory_allocated`` alone hides
+        this gap from both the training log and operators running other jobs.
+
+        This hook runs only after ``_train_epoch`` has returned, so its local
+        batch/loss tensors are already out of scope.  It never moves the model,
+        optimizer, or the detached global GO cache off the device.
+        """
+
+        if self.device.type != "cuda":
+            return {}
+        self.distributed.barrier()
+
+        def snapshot() -> dict[str, float]:
+            stats = torch.cuda.memory_stats(self.device)
+            return {
+                "allocated": float(torch.cuda.memory_allocated(self.device)) / (1024 ** 3),
+                "reserved": float(torch.cuda.memory_reserved(self.device)) / (1024 ** 3),
+                "inactive_split": float(
+                    stats.get("inactive_split_bytes.all.current", 0)
+                )
+                / (1024 ** 3),
+            }
+
+        before = snapshot()
+        if self.config.empty_cache_between_epochs:
+            # Reference-counted batch tensors have normally been reclaimed at
+            # this point; collect cycles before asking the allocator to release
+            # wholly unused segments.  Calling this per batch would be costly
+            # and is intentionally avoided.
+            gc.collect()
+            torch.cuda.empty_cache()
+        after = snapshot()
+        local = {
+            "before": before,
+            "after": after,
+            "released": max(0.0, before["reserved"] - after["reserved"]),
+        }
+        gathered = self.distributed.all_gather_object(local)
+        self.distributed.barrier()
+
+        def maximum(section: str, key: str) -> float:
+            return max(float(item[section][key]) for item in gathered)
+
+        return {
+            "gpu_epoch_end_allocated_gb": maximum("before", "allocated"),
+            "gpu_epoch_end_reserved_before_empty_cache_gb": maximum(
+                "before", "reserved"
+            ),
+            "gpu_epoch_end_reserved_after_empty_cache_gb": maximum(
+                "after", "reserved"
+            ),
+            "gpu_epoch_end_inactive_split_before_gb": maximum(
+                "before", "inactive_split"
+            ),
+            "gpu_epoch_end_inactive_split_after_gb": maximum(
+                "after", "inactive_split"
+            ),
+            "gpu_epoch_end_cache_released_gb": max(
+                float(item["released"]) for item in gathered
+            ),
+            "gpu_empty_cache_between_epochs": bool(
+                self.config.empty_cache_between_epochs
+            ),
+        }
+
     @property
     def selection_policy(self) -> dict[str, Any]:
         return {
@@ -785,8 +858,8 @@ class NBSFixedEpochTrainer:
     ) -> dict[str, Any]:
         model_config = getattr(self.base_model, "config", None)
         payload: dict[str, Any] = {
-            "checkpoint_type": "latence_nbs_fixed_epoch_v0.5.1",
-            "nbs_version": "0.5.1",
+            "checkpoint_type": "latence_nbs_fixed_epoch_v0.6.0",
+            "nbs_version": "0.6.0",
             "epoch": int(epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.base_model.state_dict(),
@@ -998,6 +1071,9 @@ class NBSFixedEpochTrainer:
                 "support_proteins",
                 "candidate_union_before_cap",
                 "candidate_union_after_cap",
+                "candidate_capacity_required_upper_bound",
+                "full_supervision_retention_required",
+                "full_supervision_retained",
                 "candidate_dropped_by_cap",
                 "candidate_truncation_fraction",
                 "gold_pairs_requested",
@@ -1021,9 +1097,28 @@ class NBSFixedEpochTrainer:
                 "weak_focus_queries_realized",
                 "weak_focus_scan_count",
                 "weak_focus_anchor_new_count",
+                "weak_primary_anchor_count",
+                "weak_primary_anchor_retained",
+                "weak_primary_candidate_query_anchor_count",
+                "weak_primary_candidate_query_hit_rate",
+                "weak_primary_remaining",
+                "weak_primary_total_owned",
                 "weak_focus_target_capacity_requested",
                 "weak_focus_targets_requested",
                 "weak_focus_targets_retained",
+                # CPU materialization diagnostics.  These are wall-clock
+                # timings from the loader worker and do not synchronize CUDA.
+                "episode_sample_seconds",
+                "loader_materialize_seconds",
+                "materialize_total_seconds",
+                "pp_sample_seconds",
+                "candidate_gather_seconds",
+                "pseudo_gather_seconds",
+                "gold_gather_seconds",
+                "go_sample_seconds",
+                "feature_box_gather_seconds",
+                "edge_localize_seconds",
+                "graph_build_seconds",
             )
             if isinstance(raw_batch.metadata, Mapping):
                 for key in scalar_metadata_keys:
@@ -1129,8 +1224,13 @@ class NBSFixedEpochTrainer:
                     value = parts.get(name)
                     return float(value.detach().cpu()) if isinstance(value, Tensor) else float("nan")
 
-                memory_gb = (
+                memory_allocated_gb = (
                     float(torch.cuda.memory_allocated(self.device)) / (1024 ** 3)
+                    if self.device.type == "cuda"
+                    else 0.0
+                )
+                memory_reserved_gb = (
+                    float(torch.cuda.memory_reserved(self.device)) / (1024 ** 3)
                     if self.device.type == "cuda"
                     else 0.0
                 )
@@ -1148,6 +1248,11 @@ class NBSFixedEpochTrainer:
                     "negrows": int(meta.get("negative_query_rows", 0)),
                     "wfq": int(meta.get("weak_focus_queries_realized", 0)),
                     "wfa": int(meta.get("weak_focus_anchor_new_count", 0)),
+                    "wpa": int(meta.get("weak_primary_anchor_retained", 0)),
+                    "wpq": int(
+                        meta.get("weak_primary_candidate_query_anchor_count", 0)
+                    ),
+                    "wpr": int(meta.get("weak_primary_remaining", 0)),
                     "wft": int(meta.get("weak_focus_targets_retained", 0)),
                     "qps": int(meta.get("query_with_pseudo_pool", 0)),
                     "qcan": int(meta.get("query_with_backbone_candidate_pool", 0)),
@@ -1161,7 +1266,9 @@ class NBSFixedEpochTrainer:
                     ),
                 }
                 if self.device.type == "cuda":
-                    status["mem"] = f"{memory_gb:.1f}G"
+                    status["mem"] = (
+                        f"{memory_allocated_gb:.1f}A/{memory_reserved_gb:.1f}R"
+                    )
                 if progress is not None:
                     progress.set_postfix(status, refresh=False)
                 else:
@@ -1403,6 +1510,26 @@ class NBSFixedEpochTrainer:
         metrics["weak_focus_target_retention_rate"] = (
             1.0 if focus_selected <= 0 else min(1.0, focus_retained / focus_selected)
         )
+        weak_primary_anchor_occurrences = int(round(float(
+            reduced.get("batch/weak_primary_anchor_count", 0.0)
+        )))
+        weak_primary_candidate_query_occurrences = int(round(float(
+            reduced.get("batch/weak_primary_candidate_query_anchor_count", 0.0)
+        )))
+        metrics["weak_primary_anchor_occurrences"] = (
+            weak_primary_anchor_occurrences
+        )
+        metrics["weak_primary_candidate_query_anchor_occurrences"] = (
+            weak_primary_candidate_query_occurrences
+        )
+        metrics["weak_primary_candidate_query_hit_rate_global"] = (
+            0.0
+            if weak_primary_anchor_occurrences <= 0
+            else float(
+                weak_primary_candidate_query_occurrences
+                / weak_primary_anchor_occurrences
+            )
+        )
         total_pseudo_target_occurrences = int(round(float(
             reduced.get("batch/pseudo_pairs_retained", 0.0)
         )))
@@ -1434,6 +1561,7 @@ class NBSFixedEpochTrainer:
             "support": core_proteins,
             "gold_target": core_proteins,
             "pseudo_target": weak_proteins,
+            "weak_primary_anchor": pseudo_eligible_active_weak,
             "root_core": core_proteins,
             "root_weak": weak_proteins,
             "local_core": core_proteins,
@@ -1459,8 +1587,13 @@ class NBSFixedEpochTrainer:
                 protein_coverage_counts.get("pseudo_target", 0)
                 / pseudo_eligible_active_weak
             )
+            metrics["weak_primary_anchor_eligible_coverage_rate"] = float(
+                protein_coverage_counts.get("weak_primary_anchor", 0)
+                / pseudo_eligible_active_weak
+            )
         else:
             metrics["pseudo_target_eligible_weak_coverage_rate"] = 0.0
+            metrics["weak_primary_anchor_eligible_coverage_rate"] = 0.0
         unique_pseudo_targets = int(protein_coverage_counts.get("pseudo_target", 0))
         metrics["pseudo_target_unique_efficiency"] = (
             0.0
@@ -1576,6 +1709,9 @@ class NBSFixedEpochTrainer:
                 f"core_occ/cycle={coverage_plan.get('predicted_core_gold_occurrences_per_go_cycle', 0)}, "
                 f"weak_focus_q={coverage_plan.get('weak_focus_queries_per_episode', 0)}, "
                 f"weak_focus_t={coverage_plan.get('weak_focus_targets_per_query', 0)}, "
+                f"weak_primary_p={coverage_plan.get('weak_primary_proteins_per_episode', 0)}, "
+                f"weak_primary_source={coverage_plan.get('weak_primary_query_source', 'pseudo')}, "
+                f"weak_primary_steps={dict(coverage_plan.get('weak_primary_plan', {}) or {}).get('resolved_steps', 0)}, "
                 f"weak_target={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('weak_unique_target_count', 0)}, "
                 f"weak_steps={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('weak_unique_steps_required', 0)}, "
                 f"pseudo_global/step={dict(coverage_plan.get('hybrid_plan', {}) or {}).get('estimated_pseudo_pairs_per_global_step', 0):.1f}, "
@@ -1629,6 +1765,7 @@ class NBSFixedEpochTrainer:
         save_epochs = self.config.epochs_to_save()
         for epoch in range(self.start_epoch, self.config.epochs + 1):
             metrics = self._train_epoch(epoch)
+            metrics.update(self._finish_cuda_epoch())
             if self.distributed.is_main_process:
                 self.history.append(metrics)
             self.logger(
@@ -1673,6 +1810,8 @@ class NBSFixedEpochTrainer:
                 f"wfq={metrics.get('avg_weak_focus_queries_realized', 0.0):.1f}/"
                 f"{metrics.get('avg_weak_focus_queries_requested', 0.0):.1f} "
                 f"wfa={metrics.get('avg_weak_focus_anchor_new_count', 0.0):.1f} "
+                f"wpa={metrics.get('avg_weak_primary_anchor_retained', 0.0):.1f} "
+                f"wpq={metrics.get('weak_primary_candidate_query_hit_rate_global', 0.0):.1%} "
                 f"wft={metrics.get('avg_weak_focus_targets_retained', 0.0):.1f} "
                 f"wft_fill={metrics.get('weak_focus_target_fill_rate', 1.0):.1%} "
                 f"wft_keep={metrics.get('weak_focus_target_retention_rate', 1.0):.1%} "
@@ -1703,6 +1842,9 @@ class NBSFixedEpochTrainer:
                 f"pweak_all={metrics.get('unique_pseudo_target_protein_count', 0)}/"
                 f"{metrics.get('protein_universe', {}).get('role_counts', {}).get('weak', 0)}"
                 f"({metrics.get('pseudo_target_protein_coverage_rate', 0.0):.1%}) "
+                f"wprim={metrics.get('unique_weak_primary_anchor_protein_count', 0)}/"
+                f"{metrics.get('protein_universe', {}).get('pseudo_eligible_active_weak', 0)}"
+                f"({metrics.get('weak_primary_anchor_eligible_coverage_rate', 0.0):.1%}) "
                 f"root_pass={metrics.get('root_protein_occurrence_equivalent_passes', 0.0):.2f} "
                 f"local_pass={metrics.get('local_protein_occurrence_equivalent_passes', 0.0):.2f} "
                 f"ont_local={metrics.get('unique_local_ontology_go_count', 0)}/"
@@ -1714,9 +1856,17 @@ class NBSFixedEpochTrainer:
                 f"task_ctx={metrics.get('unique_context_only_task_ontology_go_count', 0)}/"
                 f"{metrics.get('ontology_universe', {}).get('unique_context_only_task_ontology_rows', 0)}"
                 f"({metrics.get('context_only_task_ontology_go_coverage_rate', 0.0):.1%}) "
+                f"cpu_mat={metrics.get('avg_loader_materialize_seconds', 0.0):.3f}s "
+                f"cpu_cand={metrics.get('avg_candidate_gather_seconds', 0.0):.3f}s "
+                f"cpu_loc={metrics.get('avg_edge_localize_seconds', 0.0):.3f}s "
+                f"cpu_graph={metrics.get('avg_graph_build_seconds', 0.0):.3f}s "
                 f"lr={(metrics.get('learning_rates') or [float('nan')])[0]:.2e} "
                 f"slr={((metrics.get('learning_rates') or [float('nan'), float('nan')]) + [float('nan')])[1]:.2e} "
-                f"peak_mem={metrics.get('gpu_peak_allocated_gb', float('nan')):.2f}GB "
+                f"peak_alloc={metrics.get('gpu_peak_allocated_gb', float('nan')):.2f}GB "
+                f"peak_resv={metrics.get('gpu_peak_reserved_gb', float('nan')):.2f}GB "
+                f"end_resv={metrics.get('gpu_epoch_end_reserved_before_empty_cache_gb', float('nan')):.2f}->"
+                f"{metrics.get('gpu_epoch_end_reserved_after_empty_cache_gb', float('nan')):.2f}GB "
+                f"cache_rel={metrics.get('gpu_epoch_end_cache_released_gb', float('nan')):.2f}GB "
                 f"elapsed={metrics['elapsed_seconds']:.3f}s"
             )
             if epoch in save_epochs:

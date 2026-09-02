@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Optional
@@ -54,9 +56,9 @@ class NBSLocalGraphSamplingConfig:
     # not provide a full target block after filtering and DDP partitioning.
     weak_unique_coverage_target_per_epoch: float = 0.0
     weak_focus_planning_efficiency: float = 0.85
-    # NBS epochs are defined by GO-query coverage, not by the number of
-    # first-stage protein mini-batches.  The optional stage-1 reference is
-    # diagnostic only and never changes the resolved loader length.
+    # ``weak_primary_exhaustive`` is the protein-major v0.6 contract: every
+    # rank-owned active weak protein is consumed once as a primary anchor and
+    # the epoch ends when that queue is exhausted.
     epoch_unit: str = "eligible_go_coverage_cycle"
     stage1_reference_global_steps_per_epoch: Optional[int] = None
     pp_hops: int = 2
@@ -72,6 +74,9 @@ class NBSLocalGraphSamplingConfig:
     go_part_of_fanout: int = 8
     go_has_part_fanout: int = 8
     include_pseudo_messages: bool = False
+    # One worker is enough for one-batch-ahead materialization.  Zero keeps the
+    # original synchronous iterator for regression/debug runs.
+    prefetch_batches: int = 0
     base_seed: int = 3407
 
     @classmethod
@@ -122,10 +127,12 @@ class NBSLocalGraphSamplingConfig:
             "eligible_go_coverage_cycle",
             "protein_major_with_go_floor",
             "hybrid_go_weak_coverage",
+            "weak_primary_exhaustive",
         }:
             raise ValueError(
                 "epoch_unit must be eligible_go_coverage_cycle, "
-                "protein_major_with_go_floor or hybrid_go_weak_coverage"
+                "protein_major_with_go_floor, hybrid_go_weak_coverage or "
+                "weak_primary_exhaustive"
             )
         if self.epoch_unit == "protein_major_with_go_floor":
             if self.weak_pseudo_equivalent_passes_per_epoch <= 0:
@@ -137,6 +144,12 @@ class NBSLocalGraphSamplingConfig:
                 raise ValueError("hybrid epochs require a positive unique weak coverage target")
             if self.core_gold_equivalent_passes_per_epoch <= 0:
                 raise ValueError("hybrid epochs require a positive core gold pass target")
+        if self.epoch_unit == "weak_primary_exhaustive":
+            if self.weak_unique_coverage_target_per_epoch not in {0.0, 1.0}:
+                raise ValueError(
+                    "weak-primary exhaustive epochs require weak unique coverage 1.0 "
+                    "(or 0.0 to use the implicit exhaustive contract)"
+                )
         if (
             self.stage1_reference_global_steps_per_epoch is not None
             and self.stage1_reference_global_steps_per_epoch <= 0
@@ -152,6 +165,8 @@ class NBSLocalGraphSamplingConfig:
             raise ValueError("candidate_message_topk must be positive")
         if self.pseudo_message_topk <= 0:
             raise ValueError("pseudo_message_topk must be positive")
+        if self.prefetch_batches not in {0, 1}:
+            raise ValueError("prefetch_batches must be 0 or 1")
         for name in ("ppi_fanouts", "similar_to_fanouts", "weak_to_core_fanouts"):
             values = getattr(self, name)
             if len(values) < self.pp_hops:
@@ -251,7 +266,55 @@ def _validate_supervision_provenance(
     if not bool(weak.get("forbid_exp_train_prop_annotations", True)):
         raise ValueError("NBS must forbid exp_train.prop_annotations as weak supervision")
 
+    stage = config.get("stage", {})
+    expected_candidate_scope = stage.get("protein_go_candidate_scope")
+    expected_candidate_topk = stage.get("protein_go_candidate_topk")
+    selector_semantics = weak_manifest.get("model_semantics", {}).get(
+        "protein_go_selector"
+    )
+    if selector_semantics is None:
+        selector_semantics = weak_manifest.get("model_semantics", {}).get(
+            "rare_selector", {}
+        )
+    observed_candidate_scope = str(
+        selector_semantics.get("scope", "rare_first")
+    )
+    if observed_candidate_scope == "restricted":
+        observed_candidate_scope = "rare_first"
+    if (
+        expected_candidate_scope is not None
+        and observed_candidate_scope != str(expected_candidate_scope)
+    ):
+        raise ValueError(
+            "Protein-GO candidate selector scope disagrees with the training "
+            f"contract: manifest={observed_candidate_scope!r}, "
+            f"expected={expected_candidate_scope!r}"
+        )
+
     indices = inverted.get("indices", {})
+    candidate_spec = indices.get("candidate")
+    if not isinstance(candidate_spec, Mapping):
+        raise ValueError("GO->Protein inverted index lacks candidate supervision")
+    if (
+        expected_candidate_topk is not None
+        and int(candidate_spec.get("fixed_degree", -1))
+        != int(expected_candidate_topk)
+    ):
+        raise ValueError(
+            "Protein-GO candidate fixed degree disagrees with the training "
+            f"contract: index={candidate_spec.get('fixed_degree')!r}, "
+            f"expected={expected_candidate_topk!r}"
+        )
+    inverted_source = inverted.get("source_manifest")
+    if isinstance(inverted_source, str):
+        inverted_source_path = resolve_data_path(
+            inverted_manifest.parent, inverted_source
+        )
+        if inverted_source_path.resolve() != weak_manifest_path.resolve():
+            raise ValueError(
+                "GO->Protein inverted index was built from a different weak "
+                "graph manifest"
+            )
     pseudo_spec = indices.get("pseudo")
     if not isinstance(pseudo_spec, Mapping):
         raise ValueError("GO->Protein inverted index lacks weak pseudo supervision")
@@ -291,6 +354,55 @@ def _dedupe_edges(edge: np.ndarray, attr: np.ndarray) -> tuple[np.ndarray, np.nd
     keep[1:] = sorted_key[1:] != sorted_key[:-1]
     chosen = order[keep]
     return edge[:, chosen].astype(np.int64, copy=False), attr[chosen].astype(np.float32, copy=False)
+
+
+def _dedupe_grouped_fixed_degree_edges(
+    edge: np.ndarray,
+    attr: np.ndarray,
+    *,
+    block_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Deduplicate protein-major fixed-degree edges without a global sort.
+
+    Candidate gather returns sorted source blocks of equal size.  Mapping task
+    GO columns into canonical ontology rows can create duplicates, but only
+    inside a source block.  Sorting each short block avoids a global lexsort of
+    roughly two million edges.  Unexpected input falls back to the generic
+    implementation so this optimization cannot silently alter semantics.
+    """
+
+    if edge.shape[1] == 0:
+        return edge.astype(np.int64, copy=False), attr.astype(np.float32, copy=False)
+    size = int(block_size)
+    if (
+        size <= 0
+        or edge.shape[1] % size != 0
+        or attr.shape[0] != edge.shape[1]
+        or attr.ndim != 2
+        or attr.shape[1] == 0
+    ):
+        return _dedupe_edges(edge, attr)
+
+    sources = edge[0].reshape(-1, size)
+    source_ids = sources[:, 0]
+    if (
+        not np.all(sources == source_ids[:, None])
+        or (source_ids.size > 1 and not np.all(source_ids[1:] > source_ids[:-1]))
+    ):
+        return _dedupe_edges(edge, attr)
+
+    destinations = edge[1].reshape(-1, size)
+    confidence = attr[:, 0].reshape(-1, size)
+    order = np.lexsort((-confidence, destinations), axis=1)
+    sorted_destination = np.take_along_axis(destinations, order, axis=1)
+    keep = np.ones_like(sorted_destination, dtype=bool)
+    keep[:, 1:] = sorted_destination[:, 1:] != sorted_destination[:, :-1]
+    offsets = np.arange(source_ids.size, dtype=np.int64)[:, None] * size
+    chosen = (offsets + order)[keep]
+    return (
+        edge[:, chosen].astype(np.int64, copy=False),
+        attr[chosen].astype(np.float32, copy=False),
+    )
 
 
 def _map_edge(edge: np.ndarray, source_nodes: np.ndarray, destination_nodes: Optional[np.ndarray] = None) -> np.ndarray:
@@ -491,28 +603,36 @@ class LatenceNBSLocalGraphMaterializer:
     def materialize(self, episode: NBSGlobalEpisode, *, seed: int) -> NBSLocalBatch:
         if not PYG_AVAILABLE or build_nbs_protein_go_heterodata is None or mask_candidate_evidence_edges is None:
             raise ModuleNotFoundError("torch_geometric is required for local graph materialization")
+        materialize_started = time.perf_counter()
         rng = np.random.default_rng(int(seed))
         roots = np.unique(np.concatenate([episode.seed_protein_idx, episode.candidate_protein_idx]))
+        phase_started = time.perf_counter()
         protein_nodes, pp = self._sample_pp(roots, rng)
+        pp_sample_seconds = time.perf_counter() - phase_started
 
         # Message evidence remains source-major on disk and is only sliced for
         # local proteins.  This is the critical boundary preventing the 281M
         # candidate relation from becoming a monolithic PyG graph.
+        phase_started = time.perf_counter()
         candidate_task_edge, candidate_attr = self.stores.candidate_messages.gather(
             protein_nodes, topk=self.config.candidate_message_topk
         )
+        candidate_gather_seconds = time.perf_counter() - phase_started
         pseudo_task_edge = np.empty((2, 0), np.int64)
         pseudo_prob = np.empty(0, np.float32)
+        phase_started = time.perf_counter()
         if self.config.include_pseudo_messages and self.stores.pseudo_messages is not None:
             pseudo_task_edge, pseudo_prob = self.stores.pseudo_messages.gather(
                 protein_nodes, topk=self.config.pseudo_message_topk
             )
+        pseudo_gather_seconds = time.perf_counter() - phase_started
 
         # Materialize true annotations for every locally sampled non-candidate
         # protein.  This preserves the intended weak->core->GO route without
         # loading the complete gold graph.  Explicit support edges are unioned
         # afterwards so a configurable top-k cap can never remove the query
         # support relation itself.
+        phase_started = time.perf_counter()
         gold_message_proteins = np.setdiff1d(
             protein_nodes, episode.candidate_protein_idx, assume_unique=False
         )
@@ -524,6 +644,7 @@ class LatenceNBSLocalGraphMaterializer:
         gold_task_edge = np.unique(
             np.concatenate([gold_task_edge, support_edge], axis=1), axis=1
         )
+        gold_gather_seconds = time.perf_counter() - phase_started
 
         def to_ontology(edge: np.ndarray) -> np.ndarray:
             if edge.shape[1] == 0:
@@ -545,7 +666,9 @@ class LatenceNBSLocalGraphMaterializer:
                 ]
             )
         )
+        phase_started = time.perf_counter()
         go_nodes, is_a_global_rows, part_global_rows = self._sample_go(go_initial, rng)
+        go_sample_seconds = time.perf_counter() - phase_started
 
         protein_nodes = np.unique(
             np.concatenate(
@@ -557,9 +680,12 @@ class LatenceNBSLocalGraphMaterializer:
                 ]
             )
         )
+        phase_started = time.perf_counter()
         protein_x = self.stores.features.gather(protein_nodes)
         boxes = self.stores.full_boxes.gather(go_nodes)
+        feature_box_gather_seconds = time.perf_counter() - phase_started
 
+        phase_started = time.perf_counter()
         ppi_edge, ppi_attr = pp["ppi"]
         similar_edge, similar_attr = pp["similar_to"]
         weak_edge, weak_attr = pp["weak_to_core"]
@@ -567,7 +693,20 @@ class LatenceNBSLocalGraphMaterializer:
         similar_local = _map_edge(similar_edge, protein_nodes)
         weak_local = _map_edge(weak_edge, protein_nodes)
         gold_local = _map_edge(gold_edge, protein_nodes, go_nodes)
-        candidate_edge, candidate_attr = _dedupe_edges(candidate_edge, candidate_attr)
+        candidate_edge, candidate_attr = _dedupe_grouped_fixed_degree_edges(
+            candidate_edge,
+            candidate_attr,
+            block_size=min(
+                int(self.config.candidate_message_topk),
+                int(
+                    getattr(
+                        self.stores.candidate_messages,
+                        "fixed_degree",
+                        self.config.candidate_message_topk,
+                    )
+                ),
+            ),
+        )
         candidate_local = _map_edge(candidate_edge, protein_nodes, go_nodes)
         pseudo_attr = np.stack(
             [pseudo_prob, np.zeros_like(pseudo_prob), np.ones_like(pseudo_prob)], axis=1
@@ -578,7 +717,9 @@ class LatenceNBSLocalGraphMaterializer:
         part_local = _map_edge(part_global_rows.T, go_nodes) if part_global_rows.size else np.empty((2, 0), np.int64)
         topology_is_a = np.ones((is_a_local.shape[1], 2), dtype=np.float32)
         topology_part = np.ones((part_local.shape[1], 2), dtype=np.float32)
+        edge_localize_seconds = time.perf_counter() - phase_started
 
+        phase_started = time.perf_counter()
         graph = build_nbs_protein_go_heterodata(
             torch.as_tensor(protein_x, dtype=torch.float32),
             torch.as_tensor(boxes["center"], dtype=torch.float32),
@@ -620,6 +761,7 @@ class LatenceNBSLocalGraphMaterializer:
             candidate_protein_local=candidate_local_idx,
             query_go_local=query_go_local,
         )
+        graph_build_seconds = time.perf_counter() - phase_started
 
         query_position = {int(value): row for row, value in enumerate(episode.query_ontology_go_idx.tolist())}
         hierarchy: list[tuple[int, int]] = []
@@ -643,6 +785,7 @@ class LatenceNBSLocalGraphMaterializer:
         local_task_mask = self.stores.task_ontology_mask[go_nodes]
         local_context_only_mask = self.stores.context_only_task_ontology_mask[go_nodes]
         local_non_task_mask = ~local_task_mask
+        materialize_total_seconds = time.perf_counter() - materialize_started
 
         return NBSLocalBatch(
             graph=graph,
@@ -682,6 +825,15 @@ class LatenceNBSLocalGraphMaterializer:
                     getattr(self.stores.candidate_messages, "num_edges", -1)
                 ),
                 "hierarchy_query_edges": 0 if hierarchy_edges is None else int(hierarchy_edges.shape[1]),
+                "materialize_total_seconds": float(materialize_total_seconds),
+                "pp_sample_seconds": float(pp_sample_seconds),
+                "candidate_gather_seconds": float(candidate_gather_seconds),
+                "pseudo_gather_seconds": float(pseudo_gather_seconds),
+                "gold_gather_seconds": float(gold_gather_seconds),
+                "go_sample_seconds": float(go_sample_seconds),
+                "feature_box_gather_seconds": float(feature_box_gather_seconds),
+                "edge_localize_seconds": float(edge_localize_seconds),
+                "graph_build_seconds": float(graph_build_seconds),
                 "direction_safe": True,
             },
         )
@@ -725,6 +877,7 @@ class LatenceNBSLocalBatchLoader:
         steps_per_epoch_per_rank: int,
         base_seed: int,
         coverage_plan: Optional[Mapping[str, Any]] = None,
+        prefetch_batches: int = 0,
     ) -> None:
         self.sampler = sampler
         self.materializer = materializer
@@ -733,14 +886,19 @@ class LatenceNBSLocalBatchLoader:
         self.steps = int(steps_per_epoch_per_rank)
         self.base_seed = int(base_seed)
         self.coverage_plan = dict(coverage_plan or {})
+        self.prefetch_batches = int(prefetch_batches)
         sample_parameters = inspect.signature(self.sampler.sample).parameters
         self._sampler_supports_episode_context = (
             "epoch" in sample_parameters and "global_episode" in sample_parameters
         )
+        self._sampler_supports_rank = "rank" in sample_parameters
+        self._sampler_supports_world_size = "world_size" in sample_parameters
         self.epoch = 1
         self.global_go_graph = materializer.build_global_go_graph()
         if self.steps <= 0 or self.world_size <= 0 or not 0 <= self.rank < self.world_size:
             raise ValueError("invalid DDP loader shard")
+        if self.prefetch_batches not in {0, 1}:
+            raise ValueError("prefetch_batches must be 0 or 1")
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
@@ -748,29 +906,74 @@ class LatenceNBSLocalBatchLoader:
     def __len__(self) -> int:
         return self.steps
 
-    def __iter__(self) -> Iterator[NBSLocalBatch]:
-        for local_step in range(self.steps):
-            global_episode = self.rank + local_step * self.world_size
-            seed = (
-                self.base_seed
-                + self.epoch * 1_000_003
-                + global_episode * 97
+    def _materialize_step(self, local_step: int) -> NBSLocalBatch:
+        global_episode = self.rank + int(local_step) * self.world_size
+        seed = self.base_seed + self.epoch * 1_000_003 + global_episode * 97
+        phase_started = time.perf_counter()
+        if self._sampler_supports_episode_context:
+            kwargs = {
+                "seed": seed,
+                "epoch": self.epoch,
+                "global_episode": global_episode,
+            }
+            if self._sampler_supports_rank:
+                kwargs["rank"] = self.rank
+            if self._sampler_supports_world_size:
+                kwargs["world_size"] = self.world_size
+            episode = self.sampler.sample(**kwargs)
+        else:
+            episode = self.sampler.sample(seed=seed)
+        if (
+            local_step + 1 == self.steps
+            and self.coverage_plan.get("epoch_unit") == "weak_primary_exhaustive"
+            and hasattr(self.sampler, "weak_primary_progress")
+        ):
+            progress = self.sampler.weak_primary_progress(
+                epoch=self.epoch,
+                rank=self.rank,
+                world_size=self.world_size,
             )
-            if self._sampler_supports_episode_context:
-                kwargs = {
-                    "seed": seed,
-                    "epoch": self.epoch,
-                    "global_episode": global_episode,
-                }
-                sample_parameters = inspect.signature(self.sampler.sample).parameters
-                if "rank" in sample_parameters:
-                    kwargs["rank"] = self.rank
-                if "world_size" in sample_parameters:
-                    kwargs["world_size"] = self.world_size
-                episode = self.sampler.sample(**kwargs)
-            else:
-                episode = self.sampler.sample(seed=seed)
-            yield self.materializer.materialize(episode, seed=seed + 31)
+            if int(progress["remaining"]) != 0:
+                raise RuntimeError(
+                    "weak-primary exhaustive epoch ended before the rank-owned "
+                    "queue was drained: "
+                    f"rank={self.rank}, selected={int(progress['selected'])}/"
+                    f"{int(progress['owned'])}, remaining="
+                    f"{int(progress['remaining'])}. The epoch planner needs "
+                    "additional drain steps for this data/configuration."
+                )
+        episode_sample_seconds = time.perf_counter() - phase_started
+        phase_started = time.perf_counter()
+        batch = self.materializer.materialize(episode, seed=seed + 31)
+        loader_materialize_seconds = time.perf_counter() - phase_started
+        metadata = getattr(batch, "metadata", None)
+        if isinstance(metadata, dict):
+            metadata["episode_sample_seconds"] = float(episode_sample_seconds)
+            metadata["loader_materialize_seconds"] = float(
+                loader_materialize_seconds
+            )
+            metadata["prefetch_batches"] = int(self.prefetch_batches)
+        return batch
+
+    def __iter__(self) -> Iterator[NBSLocalBatch]:
+        if self.prefetch_batches == 0:
+            for local_step in range(self.steps):
+                yield self._materialize_step(local_step)
+            return
+
+        # The sampler and materializer stay serialized on one worker, keeping
+        # RNG/order deterministic while overlapping batch n+1 CPU work with
+        # batch n accelerator compute in the trainer.
+        with ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"nbs-prefetch-rank{self.rank}",
+        ) as executor:
+            future = executor.submit(self._materialize_step, 0)
+            for local_step in range(self.steps):
+                batch = future.result()
+                if local_step + 1 < self.steps:
+                    future = executor.submit(self._materialize_step, local_step + 1)
+                yield batch
 
 
 def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
@@ -853,9 +1056,21 @@ def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
     task_to_ontology = np.load(alignment_path.parent / alignment["arrays"]["source_row"]["file"], mmap_mode="r")
 
     candidate_spec = indices["candidate"]
-    candidate_source = weak_manifest["backbone_rare_edges"]
+    candidate_source = weak_manifest.get("backbone_candidate_edges")
+    if candidate_source is None:
+        candidate_source = weak_manifest["backbone_rare_edges"]
     candidate_attributes = FixedDegreeCandidateAttributeStore(
         resolve_data_path(weak_manifest_path.parent, candidate_source["edge_attr_file"]),
+        fixed_degree=int(candidate_spec["fixed_degree"]),
+        source_protein_start=int(candidate_spec["source_protein_start"] or 0),
+    )
+    candidate_messages = FixedDegreeProteinGOStore(
+        resolve_data_path(
+            weak_manifest_path.parent, candidate_source["edge_index_file"]
+        ),
+        resolve_data_path(
+            weak_manifest_path.parent, candidate_source["edge_attr_file"]
+        ),
         fixed_degree=int(candidate_spec["fixed_degree"]),
         source_protein_start=int(candidate_spec["source_protein_start"] or 0),
     )
@@ -918,18 +1133,13 @@ def build_latence_nbs_stores(config: Mapping[str, Any]) -> LatenceNBSStores:
         train_go_counts=np.asarray(train_counts),
         task_to_ontology_go=np.asarray(task_to_ontology),
         candidate_attributes=candidate_attributes,
+        candidate_by_protein=candidate_messages,
         config=episode_cfg,
         seed=int(config.get("training", {}).get("seed", 3407)),
         weak_global_start=weak_role_start,
         weak_global_end=weak_role_end,
     )
 
-    candidate_messages = FixedDegreeProteinGOStore(
-        resolve_data_path(weak_manifest_path.parent, candidate_source["edge_index_file"]),
-        resolve_data_path(weak_manifest_path.parent, candidate_source["edge_attr_file"]),
-        fixed_degree=int(candidate_spec["fixed_degree"]),
-        source_protein_start=int(candidate_spec["source_protein_start"] or 0),
-    )
     sampling_manifest_path = root / data["pp_sampling_indices_manifest"]
     sampling = _load_json(sampling_manifest_path)
     pp: dict[str, EdgeOffsetCSRStore] = {}
@@ -1213,6 +1423,56 @@ def resolve_hybrid_epoch_requirements(
     }
 
 
+def resolve_weak_primary_epoch_requirements(
+    *,
+    pseudo_eligible_active_weak: int,
+    weak_primary_proteins_per_episode: int,
+    world_size: int,
+    active_role_rows: Optional[np.ndarray] = None,
+) -> dict[str, int]:
+    """Resolve a synchronized epoch from exact rank-owned weak queues.
+
+    Rank ownership uses ``role_row % world_size``.  The largest shard defines
+    the common DDP step count; smaller shards naturally emit a shorter final
+    anchor block and then fill the remaining query slots from the GO floor.
+    """
+    if pseudo_eligible_active_weak <= 0:
+        raise ValueError("weak-primary epochs require active weak proteins")
+    if weak_primary_proteins_per_episode <= 0:
+        raise ValueError(
+            "weak-primary epochs require weak_primary_proteins_per_episode > 0"
+        )
+    if world_size <= 0:
+        raise ValueError("world_size must be positive")
+    if active_role_rows is None:
+        largest_owned_shard = int(np.ceil(
+            int(pseudo_eligible_active_weak) / int(world_size)
+        ))
+    else:
+        rows = np.asarray(active_role_rows, dtype=np.int64).reshape(-1)
+        if rows.size != int(pseudo_eligible_active_weak):
+            raise ValueError("active weak row count differs from planner input")
+        if rows.size and np.any(rows < 0):
+            raise ValueError("active weak role rows cannot be negative")
+        owned_counts = np.bincount(
+            rows % int(world_size), minlength=int(world_size)
+        )
+        largest_owned_shard = int(owned_counts.max())
+    steps = int(np.ceil(
+        largest_owned_shard / int(weak_primary_proteins_per_episode)
+    ))
+    return {
+        "resolved_steps": int(steps),
+        "largest_owned_weak_shard": int(largest_owned_shard),
+        "weak_primary_proteins_per_rank_step": int(
+            weak_primary_proteins_per_episode
+        ),
+        "weak_primary_global_capacity_per_step": int(
+            weak_primary_proteins_per_episode * world_size
+        ),
+    }
+
+
 def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocalBatchLoader:
     runtime = dict(config.get("_distributed_runtime", {}))
     rank = int(runtime.get("rank", 0))
@@ -1248,7 +1508,36 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
 
     pseudo_eligible_active_weak = int(sampler.pseudo_active_role_rows.size)
     hybrid_plan: dict[str, float | int] = {}
-    if sampling_cfg.epoch_unit == "hybrid_go_weak_coverage":
+    weak_primary_plan: dict[str, int] = {}
+    if sampling_cfg.epoch_unit == "weak_primary_exhaustive":
+        weak_primary_plan = resolve_weak_primary_epoch_requirements(
+            pseudo_eligible_active_weak=int(pseudo_eligible_active_weak),
+            weak_primary_proteins_per_episode=int(
+                sampler.config.weak_primary_proteins_per_episode
+            ),
+            world_size=int(world_size),
+            active_role_rows=np.asarray(sampler.pseudo_active_role_rows),
+        )
+        resolved_steps = (
+            int(explicit_steps)
+            if explicit_steps is not None
+            else int(weak_primary_plan["resolved_steps"])
+        )
+        if explicit_steps is not None and int(explicit_steps) != int(
+            weak_primary_plan["resolved_steps"]
+        ):
+            raise ValueError(
+                "weak-primary exhaustive epochs derive their exact step count; "
+                "steps_per_epoch_per_rank must be null or equal to the resolved value"
+            )
+        resolved_cycles = float(
+            resolved_steps * coverage_slots * world_size
+            / max(1, eligible_go_count)
+        )
+        go_cycles_required = 0.0
+        weak_cycles_required = 1.0
+        core_cycles_required = 0.0
+    elif sampling_cfg.epoch_unit == "hybrid_go_weak_coverage":
         if sampler.config.weak_focus_queries_per_episode <= 0:
             raise ValueError(
                 "hybrid_go_weak_coverage requires episode.weak_focus_queries_per_episode > 0"
@@ -1337,6 +1626,13 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
         "weak_focus_targets_per_query": int(
             sampler.config.weak_focus_targets_per_query
         ),
+        "weak_primary_proteins_per_episode": int(
+            sampler.config.weak_primary_proteins_per_episode
+        ),
+        "weak_primary_query_source": str(
+            sampler.config.weak_primary_query_source
+        ),
+        "weak_primary_plan": dict(weak_primary_plan),
         "world_size": int(world_size),
         "coverage_cycles_per_epoch": float(sampling_cfg.coverage_cycles_per_epoch),
         "resolved_coverage_cycles_per_epoch": float(resolved_cycles),
@@ -1392,8 +1688,8 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
             "global_steps_per_epoch": sampling_cfg.stage1_reference_global_steps_per_epoch,
             "used_to_resolve_nbs_steps": False,
             "reason": (
-                "stage 1 iterates protein mini-batches, whereas NBS uses "
-                "GO coverage plus explicit weak-first query slots"
+                "weak_primary_exhaustive derives its own exact active-weak "
+                "queue length; other NBS modes use GO coverage/query budgets"
             ),
         },
     }
@@ -1405,4 +1701,5 @@ def build_latence_nbs_train_loader(config: Mapping[str, Any]) -> LatenceNBSLocal
         steps_per_epoch_per_rank=resolved_steps,
         base_seed=sampling_cfg.base_seed,
         coverage_plan=coverage_plan,
+        prefetch_batches=sampling_cfg.prefetch_batches,
     )

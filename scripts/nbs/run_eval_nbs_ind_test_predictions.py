@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any
 
 
+EVALUATION_VERSION = "0.6.1"
+
+
 def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -44,6 +47,29 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def preflight_inductive_inference_api(root: Path) -> int:
+    """Fail before Stage-1 preparation when patch files are version-mixed."""
+    import importlib
+
+    for value in (root, root / "nbs_models" / "nbs_protein_go"):
+        text = str(value)
+        if text not in sys.path:
+            sys.path.insert(0, text)
+    nbs_pg = importlib.import_module("nbs_pg")
+    inference_api = importlib.import_module("nbs_pg.inference")
+    matcher_api = importlib.import_module("nbs_pg.matcher")
+    exporter = importlib.import_module(
+        "scripts.nbs.export_nbs_full_task_predictions"
+    )
+    version = exporter.validate_inductive_inference_api(
+        inference_api,
+        nbs_pg.ProteinGONBSModel,
+        matcher_api.NBSGatedDeltaAttnRes,
+    )
+    print(f"[NBS inference API preflight] version={version} status=ok", flush=True)
+    return int(version)
+
+
 def resolve_data_root(root: Path, config_path: Path) -> Path:
     explicit = env("NBS_DATA_ROOT")
     if explicit:
@@ -65,6 +91,13 @@ def evaluation_command(
     prediction_dir: Path | None,
     input_dir: Path | None,
 ) -> list[str]:
+    def explicit_file(value: str, env_name: str) -> Path:
+        path = Path(value).expanduser()
+        path = (path if path.is_absolute() else root / path).resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"{env_name} does not name a file: {path}")
+        return path
+
     cmd = [
         sys.executable,
         str(root / "scripts" / "nbs" / "eval_nbs_ind_test_predictions.py"),
@@ -77,15 +110,48 @@ def evaluation_command(
         ("--protein-ids", protein_ids),
         ("--backbone-prob", backbone_prob),
     ]
-    modelout = env("MODELOUT_IND_TEST_PROB")
+    explicit_expert = env("EXPERT_3B_IND_TEST_PROB")
+    modelout = explicit_expert or env("MODELOUT_IND_TEST_PROB")
     if modelout:
-        optional_paths.append(("--modelout-prob", Path(modelout)))
+        optional_paths.append(
+            (
+                "--expert-3b-prob",
+                explicit_file(
+                    modelout,
+                    "EXPERT_3B_IND_TEST_PROB"
+                    if explicit_expert
+                    else "MODELOUT_IND_TEST_PROB",
+                ),
+            )
+        )
+    comparison_manifest = env("NBS_EVAL_COMPARISON_MANIFEST")
+    if comparison_manifest:
+        optional_paths.append(
+            (
+                "--comparison-manifest",
+                explicit_file(comparison_manifest, "NBS_EVAL_COMPARISON_MANIFEST"),
+            )
+        )
+    protein_strata = env("NBS_EVAL_PROTEIN_STRATA")
+    if protein_strata:
+        optional_paths.append(
+            ("--protein-strata", explicit_file(protein_strata, "NBS_EVAL_PROTEIN_STRATA"))
+        )
+    label_evidence = env("NBS_EVAL_LABEL_EVIDENCE")
+    if label_evidence:
+        optional_paths.append(
+            ("--label-evidence", explicit_file(label_evidence, "NBS_EVAL_LABEL_EVIDENCE"))
+        )
     train_counts = env("TRAIN_GO_COUNTS")
     if train_counts:
-        optional_paths.append(("--train-counts", Path(train_counts)))
+        optional_paths.append(
+            ("--train-counts", explicit_file(train_counts, "TRAIN_GO_COUNTS"))
+        )
     go_registry = env("NBS_GO_REGISTRY")
     if go_registry:
-        optional_paths.append(("--go-registry", Path(go_registry)))
+        optional_paths.append(
+            ("--go-registry", explicit_file(go_registry, "NBS_GO_REGISTRY"))
+        )
     elif input_dir is not None and (input_dir / "ind_test_input_manifest.json").is_file():
         input_contract = load_json(input_dir / "ind_test_input_manifest.json")
         recorded_go_registry = input_contract.get("registries", {}).get("go_registry")
@@ -118,6 +184,24 @@ def evaluation_command(
         cmd.extend(["--auprc-mode", env("NBS_AUPRC_MODE")])
     if env("NBS_THRESHOLD_STEP"):
         cmd.extend(["--threshold-step", env("NBS_THRESHOLD_STEP")])
+    for env_name, flag, default in (
+        ("NBS_EVAL_CALIBRATION_BINS", "--calibration-bins", "15"),
+        ("NBS_EVAL_BOOTSTRAP_REPLICATES", "--bootstrap-replicates", "1000"),
+        ("NBS_EVAL_BOOTSTRAP_SEED", "--bootstrap-seed", "6061"),
+        ("NBS_EVAL_CI_ALPHA", "--ci-alpha", "0.05"),
+        ("NBS_EVAL_TARGET_POWER", "--target-power", "0.80"),
+        ("NBS_EVAL_STRONG_EVIDENCE_CODES", "--strong-evidence-codes", "EXP,IDA"),
+        ("NBS_EVAL_EXPECTED_COMPARISONS", "--expected-comparisons", ",".join((
+            "BLAST_best_hit", "label_propagation", "NetGO3.0", "SPROF-GO", "PANDA2"
+        ))),
+    ):
+        cmd.extend([flag, env(env_name, default)])
+    precision_k = env("NBS_EVAL_PRECISION_K")
+    if precision_k:
+        cmd.extend(["--precision-k", precision_k])
+    if enabled("NBS_EVAL_REQUIRE_EXPECTED_COMPARISONS", False):
+        cmd.append("--require-expected-comparisons")
+    cmd.extend(["--metric-backend", env("NBS_METRIC_BACKEND", "stage1")])
     return cmd
 
 
@@ -133,6 +217,7 @@ def main() -> None:
         metadata_override or str(root / "data" / "unidata_with_exp_train_pseudo.pkl")
     ).resolve()
     run_evaluation = enabled("NBS_RUN_EVALUATION", True)
+    print(f"[NBS evaluation] version={EVALUATION_VERSION}", flush=True)
 
     # Legacy/precomputed result path: evaluate exactly as before, with new
     # diagnostics accepted when their paths are supplied.
@@ -157,7 +242,7 @@ def main() -> None:
     config_path = Path(
         env(
             "NBS_TRAIN_CONFIG",
-            f"nbs_models/nbs_protein_go/configs/{task}_fixed_epoch_v0.5.6.json",
+            f"nbs_models/nbs_protein_go/configs/{task}_fixed_epoch_v0.6.0.json",
         )
     )
     if not config_path.is_absolute():
@@ -169,6 +254,16 @@ def main() -> None:
         raise ValueError("NBS_CHECKPOINT and STAGE1_CHECKPOINT are required")
     if not fasta and not metadata.is_file():
         raise ValueError("provide NBS_IND_TEST_FASTA or a METADATA_FILE containing sequences")
+    preflight_inductive_inference_api(root)
+
+    use_external_pp = enabled("NBS_EVAL_USE_EXTERNAL_PP", True)
+    use_candidate_evidence = enabled("NBS_EVAL_USE_CANDIDATE_EVIDENCE", True)
+    print(
+        "[NBS inference mode] "
+        f"external_pp={int(use_external_pp)} "
+        f"candidate_evidence={int(use_candidate_evidence)}",
+        flush=True,
+    )
 
     prediction_dir = Path(
         env("NBS_PRED_OUTPUT_DIR", str(output / "predictions"))
@@ -219,6 +314,16 @@ def main() -> None:
             "--cache-policy", env("NBS_INPUT_CACHE_POLICY", "reuse"),
             "--batch-size", env("STAGE1_EVAL_BATCH", "8"),
             "--device", env("STAGE1_EVAL_DEVICE", env("NBS_EVAL_DEVICE", "cuda:0")),
+            "--min-free-gpu-gb", env(
+                "STAGE1_EVAL_MIN_FREE_GPU_GB",
+                env("NBS_EVAL_MIN_FREE_GPU_GB", "8"),
+            ),
+            "--selector-affinity-chunk-size", env(
+                "STAGE1_SELECTOR_AFFINITY_CHUNK_SIZE", "256"
+            ),
+            "--candidate-selector-scope", env(
+                "NBS_EVAL_CANDIDATE_SELECTOR_SCOPE", "auto"
+            ),
             "--pp-topk", pp_topk,
             "--faiss-backend", env("NBS_IND_TEST_FAISS_BACKEND", "faiss"),
             "--faiss-gpu-id", env("NBS_IND_TEST_FAISS_GPU_ID", "-1"),
@@ -249,10 +354,11 @@ def main() -> None:
                 prepare_cmd.extend([flag, value])
         if enabled("STAGE1_EVAL_NO_AMP", False):
             prepare_cmd.append("--no-amp")
+        if limit:
+            prepare_cmd.extend(["--limit-proteins", limit])
         run(prepare_cmd, root, "Prepare inductive inputs")
 
         input_manifest = load_json(input_dir / "ind_test_input_manifest.json")
-        core_repr = Path(input_manifest["external_pp"]["core_representation"])
         export_cmd = [
             sys.executable,
             str(root / "scripts" / "nbs" / "export_nbs_full_task_predictions.py"),
@@ -261,18 +367,35 @@ def main() -> None:
             "--protein-repr", str(input_dir / "ind_test_repr.f16.npy"),
             "--base-values", str(input_dir / "backbone_ind_test_prob.f16.npy"),
             "--protein-ids", str(input_dir / "protein_ids.txt"),
-            "--candidate-go-index", str(input_dir / "candidate_go_index.i32.npy"),
-            "--candidate-edge-attr", str(input_dir / "candidate_edge_attr.f32.npy"),
-            "--external-pp-core-repr", str(core_repr),
-            "--external-pp-neighbors", str(input_dir / "test_core_neighbors.i32.npy"),
-            "--external-pp-edge-attr", str(input_dir / "test_core_edge_attr.f32.npy"),
             "--input-manifest", str(input_dir / "ind_test_input_manifest.json"),
             "--output-dir", str(prediction_dir),
             "--go-chunk-size", env("NBS_EVAL_GO_CHUNK", "256"),
             "--protein-batch-size", env("NBS_EVAL_PROTEIN_BATCH", "256"),
             "--support-per-query", env("NBS_EVAL_SUPPORT_PER_QUERY", "2"),
             "--device", env("NBS_EVAL_DEVICE", "cuda:0"),
+            "--min-free-gpu-gb", env("NBS_EVAL_MIN_FREE_GPU_GB", "8"),
         ]
+        if use_candidate_evidence:
+            export_cmd.extend(
+                [
+                    "--candidate-go-index",
+                    str(input_dir / "candidate_go_index.i32.npy"),
+                    "--candidate-edge-attr",
+                    str(input_dir / "candidate_edge_attr.f32.npy"),
+                ]
+            )
+        if use_external_pp:
+            core_repr = Path(input_manifest["external_pp"]["core_representation"])
+            export_cmd.extend(
+                [
+                    "--external-pp-core-repr",
+                    str(core_repr),
+                    "--external-pp-neighbors",
+                    str(input_dir / "test_core_neighbors.i32.npy"),
+                    "--external-pp-edge-attr",
+                    str(input_dir / "test_core_edge_attr.f32.npy"),
+                ]
+            )
         if enabled("NBS_SAVE_INFERENCE_DIAGNOSTICS", True):
             export_cmd.append("--save-diagnostics")
         if limit:

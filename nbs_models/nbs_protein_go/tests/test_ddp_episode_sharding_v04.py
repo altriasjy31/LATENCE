@@ -44,3 +44,21 @@ def test_rank_shards_are_disjoint_and_reproducible():
     loader_repeat.set_epoch(3)
     list(loader_repeat)
     assert sampler0.seeds == repeat.seeds
+
+
+def test_one_batch_prefetch_preserves_episode_order_and_seed_contract():
+    synchronous_sampler = FakeSampler()
+    synchronous = LatenceNBSLocalBatchLoader(
+        synchronous_sampler, FakeMaterializer(), rank=1, world_size=2,
+        steps_per_epoch_per_rank=5, base_seed=17, prefetch_batches=0,
+    )
+    prefetched_sampler = FakeSampler()
+    prefetched = LatenceNBSLocalBatchLoader(
+        prefetched_sampler, FakeMaterializer(), rank=1, world_size=2,
+        steps_per_epoch_per_rank=5, base_seed=17, prefetch_batches=1,
+    )
+    synchronous.set_epoch(4)
+    prefetched.set_epoch(4)
+
+    assert list(synchronous) == list(prefetched)
+    assert synchronous_sampler.seeds == prefetched_sampler.seeds

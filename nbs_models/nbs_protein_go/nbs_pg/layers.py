@@ -88,7 +88,17 @@ class WeightedSAGEConv(nn.Module):
             raise ModuleNotFoundError("torch_geometric is required for WeightedSAGEConv")
         x_src, x_dst = x
         src, dst = edge_index
-        message = self.source_proj(x_src[src])
+        # ``source_proj`` is edge independent and bias free.  Project each
+        # source node once, then gather by edge.  The previous order projected
+        # the same 256-D source once per outgoing edge, which dominates the
+        # large fixed-degree Protein-GO relations while producing the same
+        # mathematical result.
+        if src.numel() >= x_src.size(0):
+            message = self.source_proj(x_src)[src]
+        else:
+            # Sparse relations can touch fewer source occurrences than there
+            # are local nodes, so retain the edge-first path for those cases.
+            message = self.source_proj(x_src[src])
         if self.edge_gate is None:
             weight = message.new_ones(src.numel(), 1)
         else:

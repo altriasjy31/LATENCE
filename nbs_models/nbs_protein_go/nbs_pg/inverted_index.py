@@ -442,11 +442,13 @@ def build_latence_go_protein_indices(
         }
 
     if build_candidate:
-        candidate = source_manifest["backbone_rare_edges"]
+        candidate = source_manifest.get("backbone_candidate_edges")
+        if candidate is None:
+            candidate = source_manifest["backbone_rare_edges"]
         degree_values = {
-            int(role["rare_degree_mean"])
+            int(role.get("candidate_degree_mean", role.get("rare_degree_mean")))
             for role in source_manifest.get("roles", [])
-            if "rare_degree_mean" in role
+            if "candidate_degree_mean" in role or "rare_degree_mean" in role
         }
         expected_degree = degree_values.pop() if len(degree_values) == 1 else None
         candidate_result = build_go_inverted_from_edge_index(

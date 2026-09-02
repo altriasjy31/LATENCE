@@ -25,7 +25,7 @@ from typing import Iterable
 
 
 LAUNCHER_ID = "run_export_weak_graph_predictions_v2"
-LAUNCHER_VERSION = "1.1.0"
+LAUNCHER_VERSION = "1.2.1"
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -137,7 +137,7 @@ GO_REGISTRY = env_path(
     "GO_REGISTRY", DEFAULT_NBS_DIR / "gg_relations" / "go_registry.tsv"
 )
 OUTPUT_DIR = env_path(
-    "OUTPUT_DIR", DEFAULT_NBS_DIR / "weak_graph_predictions"
+    "OUTPUT_DIR", DEFAULT_NBS_DIR / "weak_graph_predictions_full_task_top512"
 )
 
 ROLES = os.environ.get("ROLES", "core,weak").strip()
@@ -176,9 +176,12 @@ RARE_POLICY = os.environ.get("RARE_POLICY", "train_q33").strip()
 RARE_MAX_TRAIN_COUNT = float(os.environ.get("RARE_MAX_TRAIN_COUNT", "5"))
 RARE_GO_IDS = os.environ.get("RARE_GO_IDS", "").strip()
 INCLUDE_ZERO_TRAIN_GO = env_bool("INCLUDE_ZERO_TRAIN_GO", False)
-RARE_GO_TOPK = int(os.environ.get("RARE_GO_TOPK", "20"))
+RARE_GO_TOPK = int(os.environ.get(
+    "PROTEIN_GO_TOPK", os.environ.get("RARE_GO_TOPK", "512")
+))
 RARE_SELECTOR_SCOPE = os.environ.get(
-    "RARE_SELECTOR_SCOPE", "rare_first"
+    "PROTEIN_GO_SELECTOR_SCOPE",
+    os.environ.get("RARE_SELECTOR_SCOPE", "full_task"),
 ).strip()
 RARE_MIN_BACKBONE_PROB = float(
     os.environ.get("RARE_MIN_BACKBONE_PROB", "0")

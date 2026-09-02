@@ -21,6 +21,7 @@ input.  They remain an evaluation-only concern.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
@@ -230,6 +231,9 @@ def resolve_records(args: argparse.Namespace) -> tuple[list[tuple[str, str | Non
                 f"FASTA/pickle protein sets differ: missing={missing[:5]}, extra={extra[:5]}"
             )
         records = [(protein_id, fasta_by_id[protein_id]) for protein_id in pickle_ids]
+    total_records = len(records)
+    if args.limit_proteins:
+        records = records[: int(args.limit_proteins)]
     source = {
         "fasta": None if args.fasta is None else str(args.fasta),
         "fasta_sha256": None if args.fasta is None else sha256_file(args.fasta),
@@ -239,8 +243,61 @@ def resolve_records(args: argparse.Namespace) -> tuple[list[tuple[str, str | Non
         ),
         "ordered_input_sha256": sha256_records(records),
         "protein_ids_sha256": sha256_ids([protein_id for protein_id, _ in records]),
+        "num_proteins_before_limit": total_records,
+        "limit_proteins": None if not args.limit_proteins else int(args.limit_proteins),
     }
     return records, source
+
+
+def resolve_and_audit_msa_index(
+    args: argparse.Namespace,
+    records: Sequence[tuple[str, str | None]],
+) -> None:
+    """Resolve the independent-test MSA index and verify exact ID coverage.
+
+    A Stage-1 training checkpoint normally records the Swiss-Prot training MSA
+    index.  That path must never be inherited for metadata-only independent-test
+    inference.  The project-local independent-test index is the default unless
+    the caller explicitly supplies ``--msa-index``.
+    """
+    use_binary_msa = any(sequence is None for _, sequence in records)
+    if not use_binary_msa:
+        return
+    if not all(sequence is None for _, sequence in records):
+        raise ValueError("cannot mix sequence-backed and MSA-binary-backed rows")
+    if args.msa_index is None:
+        args.msa_index = (
+            args.project_root / "data" / "ind_MSA_bin" / "index.pkl"
+        ).resolve()
+    if not args.msa_index.is_file():
+        raise FileNotFoundError(
+            "Independent-test MSA index not found: "
+            f"{args.msa_index}. Set STAGE1_MSA_INDEX or --msa-index to the "
+            "ind_MSA_bin/index.pkl file; do not use the Stage-1 training "
+            "sprot_2204_MSA_bin index."
+        )
+
+    with args.msa_index.open("rb") as handle:
+        index = pickle.load(handle)
+    if not isinstance(index, Mapping) or "proteins" not in index:
+        raise KeyError(f"MSA index has no proteins field: {args.msa_index}")
+    indexed_ids = {str(value) for value in index["proteins"]}
+    requested_ids = [protein_id for protein_id, _ in records]
+    missing = [protein_id for protein_id in requested_ids if protein_id not in indexed_ids]
+    if missing:
+        matched = len(requested_ids) - len(missing)
+        raise ValueError(
+            "Independent-test protein/MSA index mismatch before model loading: "
+            f"matched={matched}/{len(requested_ids)}, "
+            f"binary_records={len(indexed_ids)}, missing_examples={missing[:10]}, "
+            f"msa_index={args.msa_index}. This commonly means the training "
+            "sprot_2204_MSA_bin index was selected instead of ind_MSA_bin."
+        )
+    print(
+        f"[MSA index] exact ID coverage={len(requested_ids)}/{len(requested_ids)}, "
+        f"binary_records={len(indexed_ids)}, path={args.msa_index}",
+        flush=True,
+    )
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -268,6 +325,7 @@ class Stage1Artifacts:
     core_repr: Path
     rare_indices: Path
     candidate_topk: int
+    candidate_selector_scope: str
 
 
 def resolve_stage1_artifacts(args: argparse.Namespace) -> Stage1Artifacts:
@@ -296,7 +354,23 @@ def resolve_stage1_artifacts(args: argparse.Namespace) -> Stage1Artifacts:
         if not go_value.is_file():
             go_value = data_root / "gg_relations" / "go_registry.tsv"
     go_registry = go_value.resolve()
-    candidate_topk = int(args.candidate_topk or weak["model_semantics"]["rare_selector"]["requested_topk"])
+    selector = weak.get("model_semantics", {}).get("protein_go_selector")
+    if selector is None:
+        selector = weak["model_semantics"]["rare_selector"]
+    manifest_scope = str(selector.get("scope", "rare_first"))
+    candidate_selector_scope = (
+        manifest_scope
+        if args.candidate_selector_scope == "auto"
+        else str(args.candidate_selector_scope)
+    )
+    if candidate_selector_scope == "restricted":
+        candidate_selector_scope = "rare_first"
+    if candidate_selector_scope not in {"rare_first", "full_task"}:
+        raise ValueError(
+            "inductive candidate preparation supports rare_first or full_task, "
+            f"got {candidate_selector_scope!r}"
+        )
+    candidate_topk = int(args.candidate_topk or selector["requested_topk"])
     return Stage1Artifacts(
         representation_manifest=representation_manifest,
         weak_manifest=weak_manifest,
@@ -304,6 +378,7 @@ def resolve_stage1_artifacts(args: argparse.Namespace) -> Stage1Artifacts:
         core_repr=core_repr,
         rare_indices=rare_indices,
         candidate_topk=candidate_topk,
+        candidate_selector_scope=candidate_selector_scope,
     )
 
 
@@ -351,6 +426,8 @@ def build_cache_signature(
         ),
         "num_proteins": len(records),
         "candidate_topk": artifacts.candidate_topk,
+        "candidate_selector_scope": artifacts.candidate_selector_scope,
+        "selector_affinity_chunk_size": int(args.selector_affinity_chunk_size),
         "pp_topk": int(args.pp_topk),
         "sequence_encoding": (
             "metadata_msa_binary" if any(sequence is None for _, sequence in records) else "singleton_msa"
@@ -456,6 +533,22 @@ def load_stage1_model(args: argparse.Namespace, artifacts: Stage1Artifacts) -> t
         payload_model_args=training_args,
     )
     device = exporter.resolve_device(torch, args.device)
+    if device.type == "cuda" and float(args.min_free_gpu_gb) > 0:
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device)
+        free_gb = float(free_bytes) / (1024 ** 3)
+        total_gb = float(total_bytes) / (1024 ** 3)
+        print(
+            f"[CUDA preflight] device={device} free={free_gb:.2f}GB/"
+            f"{total_gb:.2f}GB required={float(args.min_free_gpu_gb):.2f}GB",
+            flush=True,
+        )
+        if free_gb < float(args.min_free_gpu_gb):
+            raise RuntimeError(
+                f"Stage-1 device {device} has only {free_gb:.2f}GB free, below "
+                f"--min-free-gpu-gb={float(args.min_free_gpu_gb):.2f}. "
+                "Do not run independent inference on a GPU occupied by NBS "
+                "training; select another STAGE1_EVAL_DEVICE or wait for training."
+            )
     model_args.device = str(device)
     model_args.gpu_ids = "" if device.type == "cpu" else str(device.index or 0)
     opt = weak_module.build_weak_opt_from_config(model_args)
@@ -525,8 +618,15 @@ def run_stage1(
     alphabet = None if use_binary_msa else load_alphabet(args.project_root)
     rare_indices_np = np.asarray(np.load(artifacts.rare_indices), dtype=np.int64)
     rare_indices = torch.from_numpy(rare_indices_np).to(device=device, dtype=torch.long)
-    if artifacts.candidate_topk > rare_indices.numel():
-        raise ValueError("candidate top-k exceeds the train-defined rare GO vocabulary")
+    selector_universe = (
+        torch.arange(TASK_NUM_CLASSES[args.task], device=device, dtype=torch.long)
+        if artifacts.candidate_selector_scope == "full_task"
+        else rare_indices
+    )
+    if artifacts.candidate_topk > selector_universe.numel():
+        raise ValueError(
+            "candidate top-k exceeds the configured selector GO vocabulary"
+        )
 
     top_k = int(model_args.top_k)
     max_len = int(model_args.max_len)
@@ -559,8 +659,26 @@ def run_stage1(
     feature_dim = None
     if use_binary_msa:
         metadata_task = TASK_KEYS[args.task][1]
+        # Build a label-free selection pickle from the already resolved ordered
+        # records.  This makes smoke limits effective during Stage-1 encoding
+        # and prevents the original evaluation annotations from entering the
+        # dataset object at all.
+        selection_metadata = stage_dir / "msa_selection.pkl"
+        selection_payload = {
+            args.mode: {
+                metadata_task: {
+                    "proteins": [protein_id for protein_id, _ in records],
+                    "prop_annotations": [[] for _ in records],
+                }
+            }
+        }
+        with selection_metadata.open("wb") as handle:
+            pickle.dump(selection_payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        dataset_opt = copy.copy(opt)
+        dataset_opt.file_address = str(selection_metadata)
+        dataset_opt.working_address = str(args.msa_index)
         dataset = exp_module.build_msa_dataset(
-            opt,
+            dataset_opt,
             mode=args.mode,
             task=metadata_task,
             need_proteins=True,
@@ -654,8 +772,9 @@ def run_stage1(
                     model=model,
                     base_logits=base_logits,
                     h=h,
-                    allowed_go_idx=rare_indices,
+                    allowed_go_idx=selector_universe,
                     requested_k=artifacts.candidate_topk,
+                    affinity_chunk_size=int(args.selector_affinity_chunk_size),
                 )
             pooled_np = pooled.float().cpu().numpy()
             if representation is None:
@@ -692,6 +811,7 @@ def run_stage1(
         "truncated_proteins": truncated_total,
         "unknown_residues": unknown_total,
         "checkpoint_type": "weak_detr_decoder_v3",
+        "selector_affinity_chunk_size": int(args.selector_affinity_chunk_size),
     }
 
 
@@ -837,6 +957,15 @@ def build_parser() -> argparse.ArgumentParser:
     model.add_argument("--weak-graph-manifest", type=Path, default=None)
     model.add_argument("--go-registry", type=Path, default=None)
     model.add_argument("--candidate-topk", type=int, default=0)
+    model.add_argument(
+        "--candidate-selector-scope",
+        choices=("auto", "rare_first", "full_task"),
+        default="auto",
+        help=(
+            "auto follows the weak-graph manifest; full_task selects top-k from "
+            "all task GO terms; rare_first retains the historical rare-only universe"
+        ),
+    )
     model.add_argument("--unknown-residue", choices=("error", "x", "pad"), default="x")
 
     runtime = parser.add_argument_group("runtime/cache")
@@ -844,8 +973,26 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--cache-policy", choices=("reuse", "refresh", "require"), default="reuse")
     runtime.add_argument("--batch-size", type=int, default=8)
     runtime.add_argument("--device", default="cuda:0")
+    runtime.add_argument(
+        "--min-free-gpu-gb",
+        type=float,
+        default=8.0,
+        help="fail before model materialization when the selected CUDA device lacks headroom",
+    )
+    runtime.add_argument(
+        "--selector-affinity-chunk-size",
+        type=int,
+        default=256,
+        help="bound the [batch,prefilter,feature] selector-affinity temporary",
+    )
     runtime.add_argument("--no-amp", action="store_true")
     runtime.add_argument("--amp-dtype", choices=("float16", "bfloat16"), default="bfloat16")
+    runtime.add_argument(
+        "--limit-proteins",
+        type=int,
+        default=0,
+        help="Prepare only the first N ordered inputs for a smoke test (0: all).",
+    )
 
     pp = parser.add_argument_group("isolated test-to-core retrieval")
     pp.add_argument(
@@ -881,10 +1028,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         value = getattr(args, name)
         if value is not None:
             setattr(args, name, value.expanduser().resolve())
-    if args.batch_size <= 0 or args.pp_topk <= 0:
-        raise ValueError("batch-size and pp-topk must be positive")
+    if (
+        args.batch_size <= 0
+        or args.pp_topk <= 0
+        or args.limit_proteins < 0
+        or args.min_free_gpu_gb < 0
+        or args.selector_affinity_chunk_size < 0
+    ):
+        raise ValueError(
+            "batch-size/pp-topk must be positive; limit/min-free/chunk-size "
+            "must be non-negative"
+        )
 
     records, source = resolve_records(args)
+    resolve_and_audit_msa_index(args, records)
+    if not args.data_root.is_dir():
+        raise NotADirectoryError(
+            "--data-root must be the NBS data directory containing features/ "
+            f"and weak_graph_predictions/, got: {args.data_root}"
+        )
     artifacts = resolve_stage1_artifacts(args)
     signature = build_cache_signature(args, records, source, artifacts)
     cached = validate_cached(args.output_dir, signature)
@@ -910,7 +1072,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         publish_stage(stage_dir, args.output_dir)
         manifest = {
             "schema_version": 2,
-            "builder": "prepare_nbs_ind_test_inputs_v0.5.6.1-inductive-r1",
+            "builder": "prepare_nbs_ind_test_inputs_v0.6.0-full-task-candidates",
             "task": args.task,
             "mode": args.mode,
             "cache_signature": signature,
@@ -954,6 +1116,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     "reciprocal_rank",
                 ],
                 "fixed_k": artifacts.candidate_topk,
+                "selector_scope": artifacts.candidate_selector_scope,
                 "expert_probability_used": False,
                 "label_hint_used": False,
             },
