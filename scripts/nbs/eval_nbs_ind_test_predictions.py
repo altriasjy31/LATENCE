@@ -1962,8 +1962,7 @@ def main() -> None:
             "selector_scope": (
                 None
                 if input_manifest is None
-                else input_manifest.get("artifacts", {})
-                .get("candidate_evidence", {})
+                else input_manifest.get("candidate_evidence", input_manifest.get("artifacts", {}).get("candidate_evidence", {}))
                 .get("selector_scope")
             ),
             "num_candidate_positions": candidate_positions,

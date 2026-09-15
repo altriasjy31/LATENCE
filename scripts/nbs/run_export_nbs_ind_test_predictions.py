@@ -54,6 +54,10 @@ def main() -> None:
         if not candidate_go or not candidate_attr:
             raise SystemExit("Set both NBS_IND_TEST_CANDIDATE_GO and NBS_IND_TEST_CANDIDATE_ATTR")
         cmd += ["--candidate-go-index", candidate_go, "--candidate-edge-attr", candidate_attr]
+    if os.environ.get("NBS_EVAL_PRESERVE_BASE_OUTSIDE_CANDIDATES", "0") == "1":
+        if not (candidate_go and candidate_attr):
+            raise SystemExit("candidate-only ablation requires candidate GO and attribute files")
+        cmd += ["--preserve-base-outside-candidates"]
     pp_core = os.environ.get("NBS_IND_TEST_CORE_REPR")
     pp_neighbors = os.environ.get("NBS_IND_TEST_PP_NEIGHBORS")
     pp_attr = os.environ.get("NBS_IND_TEST_PP_ATTR")

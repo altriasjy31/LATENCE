@@ -1,3 +1,5 @@
+> v0.7.1 (2026-09-10): see `../../NBS_V071_EXPERIMENT_GUIDE.md` at the release root for installation, fixes and ordered experiments. Historical version notes below remain for reference.
+
 # LATENCE NBS protein–GO v0.4
 
 **NBS (Neighborhood–BoxSquare)** models the LATENCE weak-to-strong transition as

@@ -102,6 +102,7 @@ def main() -> None:
         "stage1_checkpoint": str(resolve(root, env("STAGE1_CHECKPOINT"))),
         "external_pp": enabled("NBS_EVAL_USE_EXTERNAL_PP", True),
         "candidate_evidence": enabled("NBS_EVAL_USE_CANDIDATE_EVIDENCE", True),
+        "preserve_base_outside_candidates": enabled("NBS_EVAL_PRESERVE_BASE_OUTSIDE_CANDIDATES", False),
         "metric_backend": env("NBS_METRIC_BACKEND", "stage1"),
         "note": "epochs are reported as a predeclared series; ind_test does not select a best checkpoint",
     }

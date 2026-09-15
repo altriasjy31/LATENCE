@@ -51,6 +51,18 @@ class NBSProteinGOQueryEncoder(nn.Module):
         self.hierarchy_gate = nn.Sequential(
             nn.Linear(3 * d, d), nn.SiLU(), nn.Linear(d, d)
         )
+        self.go_residual_query = nn.Linear(d, d, bias=False)
+        self.go_residual_key = nn.Linear(d, d, bias=False)
+        self.go_residual_fusion = NBSMLP(
+            3 * d,
+            2 * d,
+            d,
+            activation=config.activation,
+            dropout=config.residual_dropout,
+        )
+        self.go_residual_gate = nn.Sequential(
+            nn.Linear(3 * d, d), nn.SiLU(), nn.Linear(d, d)
+        )
         nn.init.zeros_(self.semantic_gate[-1].weight)
         nn.init.constant_(
             self.semantic_gate[-1].bias,
@@ -60,6 +72,11 @@ class NBSProteinGOQueryEncoder(nn.Module):
         nn.init.constant_(
             self.hierarchy_gate[-1].bias,
             float(config.query_hierarchy_gate_bias_init),
+        )
+        nn.init.zeros_(self.go_residual_gate[-1].weight)
+        nn.init.constant_(
+            self.go_residual_gate[-1].bias,
+            float(config.query_go_residual_gate_bias_init),
         )
         self.external_gate = nn.Parameter(torch.tensor(-2.0))
         self.frequency_proj = NBSMLP(1, d, d, config.activation, config.residual_dropout)
@@ -72,7 +89,7 @@ class NBSProteinGOQueryEncoder(nn.Module):
         local_box: BoxGOEncoding,
         query: ProteinGOQueryBatch,
         global_cache: Optional[NBSGOBoxCache],
-    ) -> Optional[Tuple[Tensor, Tensor, Tensor, Tensor]]:
+    ) -> Optional[Tuple[Tensor, Tensor, Tensor, Tensor, Optional[Tensor]]]:
         if query.query_go_index is not None:
             idx = query.query_go_index
             validate_local_index(idx, go_context.size(0), "query_go_index")
@@ -81,6 +98,11 @@ class NBSProteinGOQueryEncoder(nn.Module):
                 local_box.semantic[idx],
                 local_box.hierarchy[idx],
                 go_context[idx],
+                (
+                    None
+                    if local_box.tower_deltas is None
+                    else local_box.tower_deltas[:, idx]
+                ),
             )
         if query.query_go_global_index is not None:
             if global_cache is None:
@@ -94,6 +116,11 @@ class NBSProteinGOQueryEncoder(nn.Module):
                 global_cache.semantic[idx],
                 global_cache.hierarchy[idx],
                 global_cache.context[idx],
+                (
+                    None
+                    if global_cache.layer_deltas is None
+                    else global_cache.layer_deltas[:, idx]
+                ),
             )
         return None
 
@@ -142,6 +169,37 @@ class NBSProteinGOQueryEncoder(nn.Module):
             context_pool = context_pool * scale
         return static_pool, semantic_pool, hierarchy_pool, context_pool, weights
 
+    def _pool_go_tower_residuals(
+        self,
+        seed_pool: Tensor,
+        tower_deltas: Optional[Tensor],
+        go_query_index: Tensor,
+        num_queries: int,
+    ) -> Tuple[Tensor, Tensor]:
+        """Pool GO occurrences per layer, then attend over ontology layers."""
+        if tower_deltas is None or tower_deltas.numel() == 0:
+            return torch.zeros_like(seed_pool), seed_pool.new_zeros(
+                num_queries, 0
+            )
+        if tower_deltas.dim() != 3:
+            raise ValueError("tower_deltas must be [L,GO_occurrence,D]")
+        if tower_deltas.size(1) != go_query_index.numel():
+            raise ValueError("tower_deltas must align with GO query occurrences")
+        per_layer = torch.stack(
+            [
+                segment_mean(value, go_query_index, num_queries)
+                for value in tower_deltas
+            ],
+            dim=1,
+        )
+        score = (
+            self.go_residual_query(seed_pool).unsqueeze(1)
+            * self.go_residual_key(per_layer)
+        ).sum(dim=-1) / max(seed_pool.size(-1) ** 0.5, 1.0)
+        weights = torch.softmax(score, dim=1)
+        pooled = (per_layer * weights.unsqueeze(-1)).sum(dim=1)
+        return pooled, weights
+
     def forward(
         self,
         protein_context: Tensor,
@@ -167,12 +225,15 @@ class NBSProteinGOQueryEncoder(nn.Module):
         )
         go_present = seed_pool.new_zeros(query.num_queries, 1)
         go_attention = seed_pool.new_zeros(0)
+        go_tower_residual_pool = torch.zeros_like(seed_pool)
+        go_tower_layer_attention = seed_pool.new_zeros(query.num_queries, 0)
+        go_residual_present = seed_pool.new_zeros(query.num_queries, 1)
         if resolved is None:
             static_pool = semantic_pool = hierarchy_pool = context_pool = torch.zeros_like(seed_pool)
         else:
             if query.go_query_index is None:
                 raise ValueError("go_query_index is required when query GO terms are supplied")
-            static, semantic, hierarchy, context = resolved
+            static, semantic, hierarchy, context, tower_deltas = resolved
             static_pool, semantic_pool, hierarchy_pool, context_pool, go_attention = self._pool_go(
                 seed_pool,
                 static,
@@ -182,6 +243,18 @@ class NBSProteinGOQueryEncoder(nn.Module):
                 query.go_query_index,
                 query.num_queries,
             )
+            if self.config.use_go_residual_query:
+                (
+                    go_tower_residual_pool,
+                    go_tower_layer_attention,
+                ) = self._pool_go_tower_residuals(
+                    seed_pool,
+                    tower_deltas,
+                    query.go_query_index,
+                    query.num_queries,
+                )
+                if go_tower_layer_attention.size(1) > 0:
+                    go_residual_present = torch.ones_like(go_present)
             counts = seed_pool.new_zeros(query.num_queries)
             counts.index_add_(
                 0,
@@ -214,7 +287,28 @@ class NBSProteinGOQueryEncoder(nn.Module):
             )
         ) * go_present
 
-        base_query = seed_pool + semantic_gate * semantic_delta + hierarchy_gate * hierarchy_delta
+        go_residual_delta = self.go_residual_fusion(
+            torch.cat(
+                [seed_pool, context_pool, go_tower_residual_pool], dim=-1
+            )
+        ) * go_present * go_residual_present
+        go_residual_gate = torch.sigmoid(
+            self.go_residual_gate(
+                torch.cat(
+                    [seed_pool, context_pool, go_tower_residual_pool], dim=-1
+                )
+            )
+        ) * go_present * go_residual_present
+        if not self.config.use_go_residual_query:
+            go_residual_delta = torch.zeros_like(go_residual_delta)
+            go_residual_gate = torch.zeros_like(go_residual_gate)
+
+        base_query = (
+            seed_pool
+            + semantic_gate * semantic_delta
+            + hierarchy_gate * hierarchy_delta
+            + go_residual_gate * go_residual_delta
+        )
         frequency_encoded: Optional[Tensor] = None
         if query.query_go_frequency is not None:
             freq = query.query_go_frequency.to(seed_pool.device, seed_pool.dtype).reshape(query.num_queries, -1)
@@ -252,6 +346,11 @@ class NBSProteinGOQueryEncoder(nn.Module):
             "hierarchy_gate": hierarchy_gate,
             "semantic_delta": semantic_delta,
             "hierarchy_delta": hierarchy_delta,
+            "go_tower_residual_pool": go_tower_residual_pool,
+            "go_tower_layer_attention": go_tower_layer_attention,
+            "go_residual_present": go_residual_present,
+            "go_residual_delta": go_residual_delta,
+            "go_residual_gate": go_residual_gate,
         }
         if frequency_encoded is not None:
             auxiliary["frequency_encoded"] = frequency_encoded
@@ -272,6 +371,7 @@ class NBSProteinGOQueryEncoder(nn.Module):
             mask=query.mask,
             confidence=query.confidence,
             pseudo_mask=query.pseudo_mask,
+            weak_primary_mask=query.weak_primary_mask,
             supervision_weight=query.supervision_weight,
             auxiliary=auxiliary,
         )

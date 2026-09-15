@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 
-EXPECTED_INDUCTIVE_API_VERSION = 5
+EXPECTED_INDUCTIVE_API_VERSION = 6
 EXPECTED_INDUCTIVE_ROUTING_API_VERSION = 1
 
 
@@ -109,6 +109,7 @@ def main() -> None:
     parser.add_argument("--protein-repr", type=Path, required=True)
     parser.add_argument("--base-values", type=Path, required=True)
     parser.add_argument("--base-values-are-logits", action="store_true")
+    parser.add_argument("--preserve-base-outside-candidates", action="store_true")
     parser.add_argument("--protein-ids", type=Path, default=None)
     parser.add_argument("--candidate-go-index", type=Path, default=None)
     parser.add_argument("--candidate-edge-attr", type=Path, default=None)
@@ -205,7 +206,8 @@ def main() -> None:
         protein_input_dim=int(config["model_inputs"]["protein_input_dim"]),
         go_box_dim=int(config["model_inputs"]["go_box_dim"]),
     )
-    model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+    from nbs_pg.checkpoint_compat import load_inference_state
+    checkpoint_compatibility = load_inference_state(model, checkpoint["model_state_dict"])
     model.to(device).eval()
 
     global_go_graph = materializer.build_global_go_graph().to(device)
@@ -284,6 +286,7 @@ def main() -> None:
         support_per_query=int(args.support_per_query),
         support_seed=int(args.support_seed),
         probability_clip=float(args.probability_clip),
+        preserve_base_outside_candidates=bool(args.preserve_base_outside_candidates),
     )
     output = export_full_task_probabilities(
         model=model,
@@ -340,11 +343,13 @@ def main() -> None:
 
     manifest = {
         "schema_version": 3,
-        "exporter": "NBS full-task isolated inductive inference v0.6.0-inductive-r5",
+        "exporter": "NBS full-task isolated inductive inference v0.7.1",
+        "preserve_base_outside_candidates": bool(args.preserve_base_outside_candidates),
         "inductive_inference_api_version": api_version,
         "task": config.get("task"),
         "checkpoint": str(args.checkpoint),
         "checkpoint_sha256": _sha256(args.checkpoint),
+        "checkpoint_compatibility": checkpoint_compatibility,
         "inference_mode": "_".join(
             [
                 "inductive",

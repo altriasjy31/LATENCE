@@ -111,6 +111,7 @@ def remap_query_to_sampled_graph(
         mask=query.mask,
         confidence=query.confidence,
         pseudo_mask=query.pseudo_mask,
+        weak_primary_mask=query.weak_primary_mask,
         supervision_weight=query.supervision_weight,
     )
 
@@ -124,4 +125,7 @@ def cache_to_device(cache: NBSGOBoxCache, device: torch.device | str) -> NBSGOBo
         center=cache.center.to(device),
         offset=cache.offset.to(device),
         stats=None if cache.stats is None else cache.stats.to(device),
+        layer_deltas=(
+            None if cache.layer_deltas is None else cache.layer_deltas.to(device)
+        ),
     )

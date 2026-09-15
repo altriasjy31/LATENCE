@@ -8,6 +8,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 import numpy as np
 
+from .candidate_evidence import align_candidate_evidence
+
 
 def resolve_data_path(base: str | Path, value: str | Path) -> Path:
     base_path = Path(base).resolve()
@@ -181,6 +183,23 @@ class FixedDegreeProteinGOStore:
     @property
     def num_edges(self) -> int:
         return int(self.edge_index.shape[1])
+
+    def gather_matrix(
+        self, protein_idx: np.ndarray, query_go_idx: np.ndarray, *, chunk_size: int = 256
+    ) -> np.ndarray:
+        """First-stage evidence for all decoded pairs, independent of labels."""
+        proteins = np.asarray(protein_idx, dtype=np.int64)
+        queries = np.asarray(query_go_idx, dtype=np.int64)
+        if chunk_size <= 0:
+            raise ValueError("candidate evidence chunk_size must be positive")
+        out = np.zeros((queries.size, proteins.size, 3), dtype=np.float32)
+        for start in range(0, proteins.size, chunk_size):
+            block = proteins[start:start + chunk_size]
+            edges, attrs = self.gather(block)
+            out[:, start:start + block.size] = align_candidate_evidence(
+                block, queries, edges, attrs
+            )
+        return out
 
     def gather(
         self,

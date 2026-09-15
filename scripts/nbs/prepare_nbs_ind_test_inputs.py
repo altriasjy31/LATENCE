@@ -1052,7 +1052,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     cached = validate_cached(args.output_dir, signature)
     if args.cache_policy == "require" and not cached:
         raise RuntimeError("compatible independent-test artifacts were not found")
-    if args.cache_policy == "reuse" and cached:
+    if args.cache_policy in {"reuse", "require"} and cached:
         print(f"[Reuse] validated independent-test artifacts: {args.output_dir}")
         print(args.output_dir / OUTPUT_FILES["manifest"])
         return

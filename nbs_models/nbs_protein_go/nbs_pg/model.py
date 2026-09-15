@@ -83,7 +83,7 @@ class ProteinGONBSModel(nn.Module):
     # Bump this only when the public isolated-inductive scoring contract
     # changes.  The exporter checks it before reading data or a checkpoint so
     # that a new exporter cannot silently run against an older model module.
-    INDUCTIVE_INFERENCE_API_VERSION = 5
+    INDUCTIVE_INFERENCE_API_VERSION = 6
 
     def __init__(
         self,
@@ -176,11 +176,24 @@ class ProteinGONBSModel(nn.Module):
         stats = getattr(graph[GO], "stats", None)
         return self.go_box_encoder(graph[GO].center, graph[GO].offset, stats)
 
+    @staticmethod
+    def _go_tower_deltas(static: Tensor, states: list[Tensor]) -> Optional[Tensor]:
+        if not states:
+            return None
+        previous = static
+        deltas: list[Tensor] = []
+        for state in states:
+            deltas.append(state - previous)
+            previous = state
+        return torch.stack(deltas, dim=0)
+
     def encode_go_tower(self, graph: HeteroData) -> NBSGOBoxCache:
         """Encode the complete GO ontology for caching before protein sampling."""
         box = self._encode_local_box(graph)
         edge_index_dict, edge_attr_dict = self._edge_dicts(graph)
-        context, _ = self.go_tower(box.static, edge_index_dict, edge_attr_dict)
+        context, states = self.go_tower(
+            box.static, edge_index_dict, edge_attr_dict
+        )
         return NBSGOBoxCache(
             semantic=box.semantic,
             hierarchy=box.hierarchy,
@@ -189,6 +202,7 @@ class ProteinGONBSModel(nn.Module):
             center=box.center,
             offset=box.offset,
             stats=box.stats,
+            layer_deltas=self._go_tower_deltas(box.static, states),
         )
 
     @torch.no_grad()
@@ -204,6 +218,11 @@ class ProteinGONBSModel(nn.Module):
             center=cache.center.detach(),
             offset=cache.offset.detach(),
             stats=None if cache.stats is None else cache.stats.detach(),
+            layer_deltas=(
+                None
+                if cache.layer_deltas is None
+                else cache.layer_deltas.detach()
+            ),
         )
         if was_training:
             self.train()
@@ -225,9 +244,14 @@ class ProteinGONBSModel(nn.Module):
             if global_ids is None:
                 raise ValueError("sampled GO nodes need n_id/node_id to index the global cache")
             cached_context = global_go_cache.context[global_ids]
+            if global_go_cache.layer_deltas is not None:
+                local_box.tower_deltas = global_go_cache.layer_deltas[:, global_ids]
         else:
-            cached_context, _ = self.go_tower(
+            cached_context, states = self.go_tower(
                 local_box.static, edge_index_dict, edge_attr_dict
+            )
+            local_box.tower_deltas = self._go_tower_deltas(
+                local_box.static, states
             )
 
         if self.config.use_static_go_anchor:
@@ -260,6 +284,7 @@ class ProteinGONBSModel(nn.Module):
         *,
         neighbor_x: Optional[Tensor] = None,
         neighbor_edge_attr: Optional[Tensor] = None,
+        neighbor_mask: Optional[Tensor] = None,
         neighbor_relation: EdgeType = SIMILAR_TO,
         neighbor_fanouts: Optional[Sequence[int]] = None,
         source_names: Optional[tuple[str, ...]] = None,
@@ -288,8 +313,10 @@ class ProteinGONBSModel(nn.Module):
         source_count = int(self.backbone.num_target_sources)
 
         if neighbor_x is None:
-            if neighbor_edge_attr is not None:
-                raise ValueError("neighbor_edge_attr requires neighbor_x")
+            if neighbor_edge_attr is not None or neighbor_mask is not None:
+                raise ValueError(
+                    "neighbor_edge_attr/neighbor_mask require neighbor_x"
+                )
             if source_names is None:
                 source_names = tuple(f"external_source:{i}" for i in range(source_count))
             if len(source_names) != source_count:
@@ -309,6 +336,16 @@ class ProteinGONBSModel(nn.Module):
             raise ValueError("neighbor_x must be [N,K,D_in] and align with protein_x")
         if neighbor_x.size(2) != protein_x.size(1):
             raise ValueError("neighbor and external protein input dimensions disagree")
+        if neighbor_mask is None:
+            neighbor_mask = torch.ones(
+                neighbor_x.shape[:2], dtype=torch.bool, device=neighbor_x.device
+            )
+        elif neighbor_mask.shape != neighbor_x.shape[:2]:
+            raise ValueError("neighbor_mask must be [N,K] and align with neighbor_x")
+        else:
+            neighbor_mask = neighbor_mask.to(
+                device=neighbor_x.device, dtype=torch.bool
+            )
         if neighbor_x.size(1) <= 0:
             raise ValueError("inductive P-P inference needs at least one neighbour")
         if neighbor_fanouts is None:
@@ -356,37 +393,43 @@ class ProteinGONBSModel(nn.Module):
         layer_sources: list[Tensor] = []
         for layer_idx in range(self.config.num_layers):
             layer_fanout = resolved_fanouts[layer_idx]
-            layer_neighbor_h = neighbor_h[:, :layer_fanout].reshape(
-                n_external * layer_fanout, -1
-            )
+            valid = neighbor_mask[:, :layer_fanout]
+            layer_neighbor_h = neighbor_h[:, :layer_fanout][valid]
             src = torch.arange(
-                n_external * layer_fanout, device=h.device, dtype=torch.long
+                layer_neighbor_h.size(0), device=h.device, dtype=torch.long
             )
-            dst = torch.arange(
-                n_external, device=h.device, dtype=torch.long
-            ).repeat_interleave(layer_fanout)
+            dst = (
+                torch.arange(n_external, device=h.device, dtype=torch.long)
+                .unsqueeze(1)
+                .expand(n_external, layer_fanout)[valid]
+            )
             edge_index = torch.stack([src, dst], dim=0)
             flat_edge_attr = (
                 None
                 if neighbor_edge_attr is None
-                else neighbor_edge_attr[:, :layer_fanout].reshape(
-                    n_external * layer_fanout, -1
-                )
+                else neighbor_edge_attr[:, :layer_fanout][valid]
             )
             pre_norm = self.backbone.pre_norms[layer_idx][PROTEIN]
             normalized_neighbor = pre_norm(layer_neighbor_h)
             normalized_target = pre_norm(h)
-            raw = self.backbone.relation_layers[layer_idx][relation_key](
-                (normalized_neighbor, normalized_target),
-                edge_index,
-                flat_edge_attr,
-            )
-            raw = self.backbone.relation_dropout(
-                self.backbone.activation(
-                    self.backbone.relation_norms[layer_idx][relation_key](raw)
+            if layer_neighbor_h.size(0) == 0:
+                raw = torch.zeros_like(normalized_target)
+            else:
+                raw = self.backbone.relation_layers[layer_idx][relation_key](
+                    (normalized_neighbor, normalized_target),
+                    edge_index,
+                    flat_edge_attr,
                 )
-            )
-            raw = self.backbone.relation_scales[relation_key][layer_idx] * raw
+                raw = self.backbone.relation_dropout(
+                    self.backbone.activation(
+                        self.backbone.relation_norms[layer_idx][relation_key](raw)
+                    )
+                )
+                has_neighbor = torch.bincount(
+                    dst, minlength=n_external
+                ).gt(0).to(raw.dtype).unsqueeze(-1)
+                raw = raw * has_neighbor
+                raw = self.backbone.relation_scales[relation_key][layer_idx] * raw
             if self.config.relation_aggr == "gated_sum":
                 gate = self.backbone.relation_gates[layer_idx][relation_key](
                     normalized_target, raw
@@ -441,6 +484,7 @@ class ProteinGONBSModel(nn.Module):
         *,
         neighbor_x: Optional[Tensor] = None,
         neighbor_edge_attr: Optional[Tensor] = None,
+        neighbor_mask: Optional[Tensor] = None,
         neighbor_relation: EdgeType = SIMILAR_TO,
         neighbor_fanouts: Optional[Sequence[int]] = None,
         return_aux: bool = False,
@@ -466,6 +510,7 @@ class ProteinGONBSModel(nn.Module):
             candidate_x,
             neighbor_x=neighbor_x,
             neighbor_edge_attr=neighbor_edge_attr,
+            neighbor_mask=neighbor_mask,
             neighbor_relation=neighbor_relation,
             neighbor_fanouts=neighbor_fanouts,
             source_names=encoded_support.hierarchy.source_names,

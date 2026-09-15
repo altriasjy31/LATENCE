@@ -217,6 +217,27 @@ def test_weak_primary_queue_exhausts_only_on_forced_anchors(tmp_path: Path):
     assert progress == {"owned": 20, "selected": 20, "remaining": 0}
 
 
+def test_weak_primary_query_bank_assigns_multiple_positive_go(tmp_path: Path):
+    sampler = _sampler(tmp_path)
+    sampler.config.weak_focus_queries_per_episode = 3
+    sampler.config.weak_primary_proteins_per_episode = 2
+    sampler.config.weak_primary_query_bank_mode = "greedy_multi"
+    sampler.config.weak_primary_positive_go_per_protein = 2
+    sampler.config.validate()
+    episode = sampler.sample(
+        seed=333, epoch=1, global_episode=0, rank=0, world_size=1
+    )
+    assert episode.metadata["weak_primary_anchor_count"] == 2
+    assert episode.metadata["weak_primary_anchor_retained"] == 2
+    assert episode.metadata["weak_primary_positive_pairs_requested"] == 4
+    assert episode.metadata["weak_primary_positive_pairs_retained"] == 4
+    assert episode.metadata["weak_primary_multi_positive_anchor_count"] == 2
+    assert np.asarray(
+        episode.metadata["weak_primary_anchor_loss_positive_count"]
+    ).tolist() == [2, 2]
+    assert np.all(episode.weak_primary_mask <= episode.mask)
+
+
 def test_weak_primary_epoch_plan_uses_largest_ddp_shard():
     plan = resolve_weak_primary_epoch_requirements(
         pseudo_eligible_active_weak=1001,

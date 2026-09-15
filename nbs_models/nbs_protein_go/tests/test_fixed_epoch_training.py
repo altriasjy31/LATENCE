@@ -86,6 +86,7 @@ def test_fixed_epoch_training_saves_named_snapshots_without_best(tmp_path: Path)
     assert (tmp_path / "nbs_epoch3.pt").exists()
     assert not list(tmp_path.glob("*best*"))
     checkpoint = torch.load(tmp_path / "nbs_epoch3.pt", map_location="cpu", weights_only=False)
+    assert checkpoint["nbs_version"] == "0.7.1"
     assert checkpoint["selection_policy"]["validation_used"] is False
     assert checkpoint["selection_policy"]["early_stopping"] is False
     assert checkpoint["selection_policy"]["mode"] == "fixed_epoch_snapshots"

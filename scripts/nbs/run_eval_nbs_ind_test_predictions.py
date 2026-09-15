@@ -375,6 +375,10 @@ def main() -> None:
             "--device", env("NBS_EVAL_DEVICE", "cuda:0"),
             "--min-free-gpu-gb", env("NBS_EVAL_MIN_FREE_GPU_GB", "8"),
         ]
+        if enabled("NBS_EVAL_PRESERVE_BASE_OUTSIDE_CANDIDATES", False):
+            if not use_candidate_evidence:
+                raise ValueError("base-preserving candidate ablation requires candidate evidence enabled")
+            export_cmd.append("--preserve-base-outside-candidates")
         if use_candidate_evidence:
             export_cmd.extend(
                 [

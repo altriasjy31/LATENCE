@@ -42,6 +42,7 @@ class NBSASLConfig:
 class NBSLossWeights:
     gold: float = 1.0
     pseudo: float = 0.2
+    protein_column: float = 0.0
     base_anchor: float = 0.1
     hierarchy: float = 5e-4
     delta_l2: float = 1e-4
@@ -115,6 +116,26 @@ def masked_asl_logits(
     the stored modelout probability itself remains the soft target.  Unknown
     positions never enter this objective because they are excluded by ``mask``.
     """
+    loss = _asl_elementwise(
+        logits,
+        labels,
+        gamma_neg=gamma_neg,
+        gamma_pos=gamma_pos,
+        clip=clip,
+        eps=eps,
+    )
+    return _masked_reduce(loss, mask, confidence, reduction=reduction)
+
+
+def _asl_elementwise(
+    logits: Tensor,
+    labels: Tensor,
+    *,
+    gamma_neg: float,
+    gamma_pos: float,
+    clip: float,
+    eps: float = 1e-8,
+) -> Tensor:
     labels = labels.to(logits.dtype)
     xs_pos = torch.sigmoid(logits)
     xs_neg = 1.0 - xs_pos
@@ -128,7 +149,47 @@ def masked_asl_logits(
             gamma = gamma_pos * labels + gamma_neg * (1.0 - labels)
             focal = (1.0 - pt).pow(gamma)
         loss = loss * focal
-    return _masked_reduce(loss, mask, confidence, reduction=reduction)
+    return loss
+
+
+def masked_asl_protein_column_mean(
+    logits: Tensor,
+    labels: Tensor,
+    mask: Tensor,
+    *,
+    confidence: Optional[Tensor] = None,
+    gamma_neg: float = 4.0,
+    gamma_pos: float = 0.0,
+    clip: float = 0.05,
+    eps: float = 1e-8,
+) -> Tensor:
+    """ASL normalized within each protein column, then across proteins.
+
+    NBS logits are [GO,protein].  This reduction prevents a weak protein with
+    many sampled GO pairs from dominating another protein with fewer eligible
+    labels and makes protein-primary sampling an actual optimization objective.
+    """
+    if logits.dim() != 2 or mask.shape != logits.shape:
+        raise ValueError("column ASL expects aligned [GO,protein] tensors")
+    raw = _asl_elementwise(
+        logits,
+        labels,
+        gamma_neg=gamma_neg,
+        gamma_pos=gamma_pos,
+        clip=clip,
+        eps=eps,
+    )
+    effective = mask.to(raw.dtype)
+    if confidence is not None:
+        if confidence.shape != raw.shape:
+            raise ValueError("column ASL confidence must align with logits")
+        effective = effective * confidence.to(raw.device, raw.dtype)
+    denominator = effective.sum(dim=0)
+    active = denominator > 0
+    if not bool(active.any()):
+        return raw.new_tensor(0.0)
+    per_protein = (raw * effective).sum(dim=0) / denominator.clamp_min(1e-8)
+    return per_protein[active].mean()
 
 
 def sigmoid_anchor_loss(
@@ -236,6 +297,7 @@ def nbs_training_loss(
     weights: Optional[NBSLossWeights] = None,
     gold_asl: Optional[NBSASLConfig] = None,
     pseudo_asl: Optional[NBSASLConfig] = None,
+    protein_column_asl: Optional[NBSASLConfig] = None,
     pos_weight: Optional[Tensor] = None,
     # Legacy v0.4.x compatibility.  When supplied, these become defaults for
     # both source-specific ASL configs unless explicit configs are provided.
@@ -243,6 +305,7 @@ def nbs_training_loss(
     asl_gamma_pos: Optional[float] = None,
     asl_clip: Optional[float] = None,
     anchor_temperature: float = 1.0,
+    base_anchor_scope: str = "supervised",
     hierarchy_probabilities: Optional[Tensor] = None,
     hierarchy_edges: Optional[Tensor] = None,
     hierarchy_edge_weight: Optional[Tensor] = None,
@@ -284,6 +347,8 @@ def nbs_training_loss(
     )
     gold_asl.validate()
     pseudo_asl.validate()
+    protein_column_asl = protein_column_asl or pseudo_asl
+    protein_column_asl.validate()
 
     zero = output.logits.new_tensor(0.0)
     gold_weight = _combine_supervision_weights(
@@ -348,12 +413,58 @@ def nbs_training_loss(
     else:
         raise ValueError("primary must be 'asl' or 'bce'")
 
+    weak_primary = (
+        torch.zeros_like(mask)
+        if output.weak_primary_mask is None
+        else output.weak_primary_mask.bool() & mask
+    )
+    column_weight = output.supervision_weight
+    if column_weight is None:
+        column_weight = torch.ones_like(output.logits)
+    else:
+        column_weight = column_weight.to(output.logits)
+    if output.confidence is not None:
+        pseudo_confidence = output.confidence.to(output.logits)
+        column_weight = column_weight * torch.where(
+            pseudo,
+            pseudo_confidence,
+            torch.ones_like(pseudo_confidence),
+        )
+    protein_column_loss = (
+        masked_asl_protein_column_mean(
+            output.logits,
+            output.labels,
+            weak_primary,
+            confidence=column_weight,
+            gamma_neg=protein_column_asl.gamma_neg,
+            gamma_pos=protein_column_asl.gamma_pos,
+            clip=protein_column_asl.clip,
+        )
+        if weak_primary.any()
+        else zero
+    )
+
     aux = output.auxiliary or {}
     base_anchor_loss = zero
     if "base_logits" in aux and weights.base_anchor != 0:
+        if base_anchor_scope == "supervised":
+            anchor_mask = mask
+        elif base_anchor_scope == "unknown_decoded":
+            anchor_mask = ~mask
+        elif base_anchor_scope == "all_decoded":
+            anchor_mask = torch.ones_like(mask)
+        else:
+            raise ValueError(
+                "base_anchor_scope must be supervised, unknown_decoded or all_decoded"
+            )
         base_anchor_loss = sigmoid_anchor_loss(
-            output.logits, aux["base_logits"], mask, temperature=anchor_temperature
+            output.logits,
+            aux["base_logits"],
+            anchor_mask,
+            temperature=anchor_temperature,
         )
+    else:
+        anchor_mask = torch.zeros_like(mask)
     delta = aux.get("applied_graph_delta", zero)
     delta_l2 = delta.square().mean() if isinstance(delta, Tensor) else zero
     balance = (
@@ -382,6 +493,9 @@ def nbs_training_loss(
     contributions = {
         "contrib_gold_asl": weights.gold * gold_loss,
         "contrib_pseudo_asl": weights.pseudo * pseudo_loss,
+        "contrib_protein_column_asl": (
+            weights.protein_column * protein_column_loss
+        ),
         "contrib_base_anchor": weights.base_anchor * base_anchor_loss,
         "contrib_hierarchy": weights.hierarchy * hierarchy_loss,
         "contrib_delta_l2": weights.delta_l2 * delta_l2,
@@ -393,6 +507,7 @@ def nbs_training_loss(
         "total": total.detach(),
         "gold_asl": gold_loss.detach(),
         "pseudo_asl": pseudo_loss.detach(),
+        "protein_column_asl": protein_column_loss.detach(),
         "base_anchor": base_anchor_loss.detach(),
         "hierarchy": hierarchy_loss.detach(),
         "delta_l2": delta_l2.detach(),
@@ -401,7 +516,38 @@ def nbs_training_loss(
         **{name: value.detach() for name, value in contributions.items()},
         "gold_supervised_pairs": gold.sum().to(output.logits.dtype).detach(),
         "pseudo_supervised_pairs": pseudo.sum().to(output.logits.dtype).detach(),
+        "weak_primary_column_pairs": weak_primary.sum().to(output.logits.dtype).detach(),
+        "weak_primary_column_positive_pairs": (
+            weak_primary & (output.labels > 0)
+        ).sum().to(output.logits.dtype).detach(),
+        "weak_primary_column_negative_pairs": (
+            weak_primary & (output.labels <= 0)
+        ).sum().to(output.logits.dtype).detach(),
+        "weak_primary_supervised_columns": (
+            weak_primary.any(dim=0).sum().to(output.logits.dtype).detach()
+        ),
+        "base_anchor_pairs": anchor_mask.sum().to(output.logits.dtype).detach(),
     }
+    # Detached diagnostics distinguish pair counts from useful correction.
+    with torch.no_grad():
+        probability = output.logits.float().sigmoid()
+        groups = {
+            "primary_positive": weak_primary & (output.labels > 0),
+            "primary_pu": weak_primary & (output.labels <= 0),
+            "decoded_unknown": ~mask,
+        }
+        base_logits = aux.get("base_logits")
+        for name, selected in groups.items():
+            count = selected.sum().clamp_min(1)
+            if isinstance(base_logits, Tensor):
+                change = probability - base_logits.detach().float().sigmoid()
+                parts[f"probability_delta_{name}_mean"] = (change * selected).sum() / count
+                parts[f"probability_delta_{name}_positive_fraction"] = ((change > 0) & selected).sum().float() / count
+        negative = groups["primary_pu"]
+        parts["primary_pu_above_asl_clip_fraction"] = (
+            ((probability > protein_column_asl.clip) & negative).sum().float()
+            / negative.sum().clamp_min(1)
+        )
     return total, parts
 
 

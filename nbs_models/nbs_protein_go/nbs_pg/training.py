@@ -182,6 +182,11 @@ class NBSLocalBatch:
     global_go_cache: Optional[NBSGOBoxCache] = None
     hierarchy_edges: Optional[Tensor] = None
     hierarchy_edge_weight: Optional[Tensor] = None
+    external_candidate_x: Optional[Tensor] = None
+    external_neighbor_x: Optional[Tensor] = None
+    external_neighbor_edge_attr: Optional[Tensor] = None
+    external_neighbor_mask: Optional[Tensor] = None
+    external_neighbor_fanouts: Optional[tuple[int, ...]] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to(self, device: torch.device | str) -> "NBSLocalBatch":
@@ -200,6 +205,11 @@ class NBSLocalBatch:
                     if self.global_go_cache.stats is None
                     else self.global_go_cache.stats.to(device)
                 ),
+                layer_deltas=(
+                    None
+                    if self.global_go_cache.layer_deltas is None
+                    else self.global_go_cache.layer_deltas.to(device)
+                ),
             )
         return NBSLocalBatch(
             graph=graph,
@@ -213,6 +223,27 @@ class NBSLocalBatch:
                 if self.hierarchy_edge_weight is None
                 else self.hierarchy_edge_weight.to(device)
             ),
+            external_candidate_x=(
+                None
+                if self.external_candidate_x is None
+                else self.external_candidate_x.to(device)
+            ),
+            external_neighbor_x=(
+                None
+                if self.external_neighbor_x is None
+                else self.external_neighbor_x.to(device)
+            ),
+            external_neighbor_edge_attr=(
+                None
+                if self.external_neighbor_edge_attr is None
+                else self.external_neighbor_edge_attr.to(device)
+            ),
+            external_neighbor_mask=(
+                None
+                if self.external_neighbor_mask is None
+                else self.external_neighbor_mask.to(device)
+            ),
+            external_neighbor_fanouts=self.external_neighbor_fanouts,
             metadata=dict(self.metadata),
         )
 
@@ -223,7 +254,9 @@ class NBSLossConfig:
     weights: NBSLossWeights = field(default_factory=NBSLossWeights)
     gold_asl: NBSASLConfig = field(default_factory=NBSASLConfig)
     pseudo_asl: NBSASLConfig = field(default_factory=NBSASLConfig)
+    protein_column_asl: NBSASLConfig = field(default_factory=NBSASLConfig)
     anchor_temperature: float = 1.0
+    base_anchor_scope: str = "supervised"
     hierarchy_go_axis: int = 0
     require_pseudo_signal_per_epoch: bool = False
 
@@ -240,6 +273,7 @@ class NBSLossConfig:
         legacy_clip = raw.pop("asl_clip", None)
         gold_raw = dict(raw.pop("gold_asl", {}))
         pseudo_raw = dict(raw.pop("pseudo_asl", {}))
+        protein_column_raw = dict(raw.pop("protein_column_asl", {}))
         legacy_defaults = {
             "gamma_neg": 4.0 if legacy_gamma_neg is None else float(legacy_gamma_neg),
             "gamma_pos": 0.0 if legacy_gamma_pos is None else float(legacy_gamma_pos),
@@ -249,14 +283,27 @@ class NBSLossConfig:
         for key, default in legacy_defaults.items():
             gold_raw.setdefault(key, default)
             pseudo_raw.setdefault(key, default)
+            protein_column_raw.setdefault(key, pseudo_raw[key])
         gold_asl = NBSASLConfig(**gold_raw)
         pseudo_asl = NBSASLConfig(**pseudo_raw)
         gold_asl.validate()
         pseudo_asl.validate()
+        protein_column_asl = NBSASLConfig(**protein_column_raw)
+        protein_column_asl.validate()
+        base_anchor_scope = str(raw.get("base_anchor_scope", "supervised"))
+        if base_anchor_scope not in {
+            "supervised",
+            "unknown_decoded",
+            "all_decoded",
+        }:
+            raise ValueError(
+                "loss.base_anchor_scope must be supervised, unknown_decoded or all_decoded"
+            )
         return cls(
             weights=NBSLossWeights(**weight_raw),
             gold_asl=gold_asl,
             pseudo_asl=pseudo_asl,
+            protein_column_asl=protein_column_asl,
             **raw,
         )
 
@@ -511,6 +558,7 @@ class NBSFixedEpochTrainingConfig:
     progress_mininterval: float = 0.5
     empty_cache_between_epochs: bool = True
     max_steps_per_epoch: Optional[int] = None
+    gradient_probe_steps: int = 0
     scheduler_step: str = "batch"
     seed: int = 3407
     validation_used: bool = False
@@ -553,6 +601,8 @@ class NBSFixedEpochTrainingConfig:
             raise ValueError("accumulation_steps must be positive")
         if self.log_interval <= 0:
             raise ValueError("log_interval must be positive")
+        if self.gradient_probe_steps < 0:
+            raise ValueError("gradient_probe_steps cannot be negative")
         if self.progress_mininterval <= 0:
             raise ValueError("progress_mininterval must be positive")
         if self.max_steps_per_epoch is not None and self.max_steps_per_epoch <= 0:
@@ -609,12 +659,27 @@ def default_nbs_forward_loss(
     batch: NBSLocalBatch,
     loss_config: NBSLossConfig,
 ) -> tuple[Tensor, Mapping[str, Tensor]]:
-    output = model(
-        batch.graph,
-        batch.query,
-        global_go_cache=batch.global_go_cache,
-        return_aux=True,
-    )
+    if batch.external_candidate_x is None:
+        output = model(
+            batch.graph,
+            batch.query,
+            global_go_cache=batch.global_go_cache,
+            return_aux=True,
+        )
+    else:
+        encoded_support = model.encode_graph(
+            batch.graph, global_go_cache=batch.global_go_cache
+        )
+        output = model.score_external_candidates(
+            encoded_support,
+            batch.query,
+            batch.external_candidate_x,
+            neighbor_x=batch.external_neighbor_x,
+            neighbor_edge_attr=batch.external_neighbor_edge_attr,
+            neighbor_mask=batch.external_neighbor_mask,
+            neighbor_fanouts=batch.external_neighbor_fanouts,
+            return_aux=True,
+        )
     hierarchy_probabilities = None
     if batch.hierarchy_edges is not None:
         hierarchy_probabilities = torch.sigmoid(output.logits)
@@ -624,7 +689,9 @@ def default_nbs_forward_loss(
         weights=loss_config.weights,
         gold_asl=loss_config.gold_asl,
         pseudo_asl=loss_config.pseudo_asl,
+        protein_column_asl=loss_config.protein_column_asl,
         anchor_temperature=loss_config.anchor_temperature,
+        base_anchor_scope=loss_config.base_anchor_scope,
         hierarchy_probabilities=hierarchy_probabilities,
         hierarchy_edges=batch.hierarchy_edges,
         hierarchy_edge_weight=batch.hierarchy_edge_weight,
@@ -745,6 +812,7 @@ class NBSFixedEpochTrainer:
         self.start_epoch = 1
         self.global_step = 0
         self.history: list[dict[str, Any]] = []
+        self._gradient_probe_records: list[dict[str, Any]] = []
         self._amp_enabled = bool(config.amp and self.device.type == "cuda")
         self._amp_dtype = (
             torch.bfloat16 if config.amp_dtype == "bfloat16" else torch.float16
@@ -858,8 +926,8 @@ class NBSFixedEpochTrainer:
     ) -> dict[str, Any]:
         model_config = getattr(self.base_model, "config", None)
         payload: dict[str, Any] = {
-            "checkpoint_type": "latence_nbs_fixed_epoch_v0.6.0",
-            "nbs_version": "0.6.0",
+            "checkpoint_type": "latence_nbs_fixed_epoch_v0.7.1",
+            "nbs_version": "0.7.1",
             "epoch": int(epoch),
             "global_step": int(self.global_step),
             "model_state_dict": self.base_model.state_dict(),
@@ -964,9 +1032,31 @@ class NBSFixedEpochTrainer:
 
     def _optimizer_step(self) -> float:
         grad_norm = 0.0
+        probe = 0 < self.global_step <= self.config.gradient_probe_steps
+        if self._scaler.is_enabled() and (self.config.grad_clip is not None or probe):
+            self._scaler.unscale_(self.optimizer)
+        if probe:
+            parameters = {}
+            for name, parameter in self.base_model.named_parameters():
+                if not name.startswith("matcher."):
+                    continue
+                if not any(token in name for token in ("graph_delta_scale", "candidate_evidence", "delta_gate")):
+                    continue
+                grad = parameter.grad
+                parameters[name] = {
+                    "grad_present": grad is not None,
+                    "grad_finite": grad is None or bool(torch.isfinite(grad).all()),
+                    "grad_l2": 0.0 if grad is None else float(grad.detach().float().norm().cpu()),
+                    "value_l2": float(parameter.detach().float().norm().cpu()),
+                }
+            self._gradient_probe_records.append({"global_step": self.global_step, "parameters": parameters})
+            (self.output_dir / f"gradient_probe_rank{self.distributed.rank}.json").write_text(
+                json.dumps({"schema_version": 1, "rank": self.distributed.rank,
+                            "gradient_stage": "unscaled_before_clipping",
+                            "records": self._gradient_probe_records}, indent=2) + "\n",
+                encoding="utf-8",
+            )
         if self.config.grad_clip is not None:
-            if self._scaler.is_enabled():
-                self._scaler.unscale_(self.optimizer)
             norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), float(self.config.grad_clip)
             )
@@ -1099,6 +1189,30 @@ class NBSFixedEpochTrainer:
                 "weak_focus_anchor_new_count",
                 "weak_primary_anchor_count",
                 "weak_primary_anchor_retained",
+                "weak_primary_positive_pairs_requested",
+                "weak_primary_positive_pairs_retained",
+                "weak_primary_negative_pairs_retained",
+                "weak_primary_hard_pairs_retained",
+                "weak_primary_background_pairs_retained",
+                "decoded_cross_pseudo_pairs",
+                "decoded_pairs",
+                "supervised_pair_fraction",
+                "candidate_evidence_pairs",
+                "candidate_evidence_positive_pairs",
+                "candidate_evidence_negative_pairs",
+                "candidate_evidence_unknown_pairs",
+                "weak_primary_hard_query_requested",
+                "weak_primary_hard_query_realized",
+                "weak_primary_hard_go_per_anchor_mean",
+                "weak_primary_hard_go_per_anchor_min",
+                "weak_primary_hard_quota_met_rate",
+                "weak_primary_total_hard_pairs",
+                "weak_primary_total_background_pairs",
+                "weak_primary_multi_positive_anchor_count",
+                "weak_primary_positive_go_per_anchor_mean",
+                "weak_primary_positive_go_per_anchor_min",
+                "weak_primary_query_recall_mean",
+                "weak_primary_loss_recall_mean",
                 "weak_primary_candidate_query_anchor_count",
                 "weak_primary_candidate_query_hit_rate",
                 "weak_primary_remaining",
@@ -1106,6 +1220,15 @@ class NBSFixedEpochTrainer:
                 "weak_focus_target_capacity_requested",
                 "weak_focus_targets_requested",
                 "weak_focus_targets_retained",
+                "isolated_candidate_core_neighbors_mean",
+                "isolated_candidate_core_neighbors_min",
+                "isolated_weak_candidate_count",
+                "isolated_core_candidate_count",
+                "isolated_weak_with_core_neighbor_fraction",
+                "isolated_core_with_core_neighbor_fraction",
+                "isolated_candidate_count",
+                "isolated_candidate_core_neighbor_pairs",
+                "isolated_candidate_with_core_neighbor",
                 # CPU materialization diagnostics.  These are wall-clock
                 # timings from the loader worker and do not synchronize CUDA.
                 "episode_sample_seconds",
@@ -1240,6 +1363,7 @@ class NBSFixedEpochTrainer:
                     "loss": f"{float(loss.detach().cpu()):.4f}",
                     "gold": f"{_part('gold_asl'):.3g}",
                     "pseudo": f"{_part('pseudo_asl'):.3g}",
+                    "column": f"{_part('protein_column_asl'):.3g}",
                     "gpos": int(meta.get("gold_pairs_retained", 0)),
                     "hard": int(meta.get("hard_pairs_retained", 0)),
                     "ppos": int(meta.get("pseudo_pairs_retained", 0)),
@@ -1249,6 +1373,8 @@ class NBSFixedEpochTrainer:
                     "wfq": int(meta.get("weak_focus_queries_realized", 0)),
                     "wfa": int(meta.get("weak_focus_anchor_new_count", 0)),
                     "wpa": int(meta.get("weak_primary_anchor_retained", 0)),
+                    "wpp": int(meta.get("weak_primary_positive_pairs_retained", 0)),
+                    "wpn": int(meta.get("weak_primary_negative_pairs_retained", 0)),
                     "wpq": int(
                         meta.get("weak_primary_candidate_query_anchor_count", 0)
                     ),
@@ -1530,6 +1656,45 @@ class NBSFixedEpochTrainer:
                 / weak_primary_anchor_occurrences
             )
         )
+        weak_primary_positive_pairs = int(round(float(
+            reduced.get("batch/weak_primary_positive_pairs_retained", 0.0)
+        )))
+        weak_primary_negative_pairs = int(round(float(
+            reduced.get("batch/weak_primary_negative_pairs_retained", 0.0)
+        )))
+        weak_primary_multi_positive = int(round(float(
+            reduced.get("batch/weak_primary_multi_positive_anchor_count", 0.0)
+        )))
+        metrics["weak_primary_positive_pair_occurrences"] = (
+            weak_primary_positive_pairs
+        )
+        metrics["weak_primary_negative_pair_occurrences"] = (
+            weak_primary_negative_pairs
+        )
+        metrics["weak_primary_multi_positive_anchor_occurrences"] = (
+            weak_primary_multi_positive
+        )
+        metrics["weak_primary_multi_positive_anchor_rate"] = (
+            0.0
+            if weak_primary_anchor_occurrences <= 0
+            else float(
+                weak_primary_multi_positive / weak_primary_anchor_occurrences
+            )
+        )
+        metrics["weak_primary_positive_pairs_per_anchor"] = (
+            0.0
+            if weak_primary_anchor_occurrences <= 0
+            else float(
+                weak_primary_positive_pairs / weak_primary_anchor_occurrences
+            )
+        )
+        metrics["weak_primary_negative_pairs_per_anchor"] = (
+            0.0
+            if weak_primary_anchor_occurrences <= 0
+            else float(
+                weak_primary_negative_pairs / weak_primary_anchor_occurrences
+            )
+        )
         total_pseudo_target_occurrences = int(round(float(
             reduced.get("batch/pseudo_pairs_retained", 0.0)
         )))
@@ -1773,8 +1938,10 @@ class NBSFixedEpochTrainer:
                 f"loss={metrics.get('total', float('nan')):.6f} "
                 f"gold_asl={metrics.get('gold_asl', float('nan')):.6f} "
                 f"pseudo_asl={metrics.get('pseudo_asl', float('nan')):.6f} "
+                f"column_asl={metrics.get('protein_column_asl', float('nan')):.6f} "
                 f"c_gold={metrics.get('contrib_gold_asl', float('nan')):.6f} "
                 f"c_pseudo={metrics.get('contrib_pseudo_asl', float('nan')):.6f} "
+                f"c_column={metrics.get('contrib_protein_column_asl', float('nan')):.6f} "
                 f"c_anchor={metrics.get('contrib_base_anchor', float('nan')):.6f} "
                 f"hier={metrics.get('hierarchy', float('nan')):.6f} "
                 f"c_hier={metrics.get('contrib_hierarchy', float('nan')):.6f} "

@@ -1,3 +1,5 @@
+> v0.7.1 validation is recorded in `VALIDATION_V071.json` at the release root. Run `python scripts/nbs/run_nbs_v071_contract_tests.py --require-pyg` on the training server.
+
 # Validation status for NBS v0.4
 
 Validated in the artifact build environment:

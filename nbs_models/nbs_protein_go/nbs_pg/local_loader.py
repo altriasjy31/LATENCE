@@ -74,6 +74,11 @@ class NBSLocalGraphSamplingConfig:
     go_part_of_fanout: int = 8
     go_has_part_fanout: int = 8
     include_pseudo_messages: bool = False
+    # ``isolated_similar_to_core`` keeps every supervised target protein out of
+    # the support graph and scores it through the same external encoder used by
+    # independent-test inference.  ``joint_local`` preserves v0.6 behaviour.
+    candidate_context_mode: str = "joint_local"
+    isolated_candidate_require_core_neighbor: bool = False
     # One worker is enough for one-batch-ahead materialization.  Zero keeps the
     # original synchronous iterator for regression/debug runs.
     prefetch_batches: int = 0
@@ -167,6 +172,17 @@ class NBSLocalGraphSamplingConfig:
             raise ValueError("pseudo_message_topk must be positive")
         if self.prefetch_batches not in {0, 1}:
             raise ValueError("prefetch_batches must be 0 or 1")
+        if self.candidate_context_mode not in {
+            "joint_local",
+            "isolated_similar_to_core",
+        }:
+            raise ValueError(
+                "candidate_context_mode must be joint_local or isolated_similar_to_core"
+            )
+        if not isinstance(self.isolated_candidate_require_core_neighbor, bool):
+            raise ValueError(
+                "isolated_candidate_require_core_neighbor must be boolean"
+            )
         for name in ("ppi_fanouts", "similar_to_fanouts", "weak_to_core_fanouts"):
             values = getattr(self, name)
             if len(values) < self.pp_hops:
@@ -600,14 +616,118 @@ class LatenceNBSLocalGraphMaterializer:
         part = np.unique(np.concatenate(part_edges, axis=0), axis=0) if part_edges else np.empty((0, 2), np.int64)
         return known, is_a, part
 
+    def _gather_isolated_similar_to_core(
+        self,
+        proteins: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Gather deterministic core->target neighbours for training targets."""
+        store = self.stores.pp.get("similar_to")
+        if store is None:
+            raise ValueError(
+                "isolated candidate context requires the similar_to sampling index"
+            )
+        if int(store.key_axis) != 1:
+            raise ValueError(
+                "isolated candidate context requires similar_to keyed by destination"
+            )
+        fanouts = tuple(int(value) for value in self.config.similar_to_fanouts)
+        k = max(fanouts, default=0)
+        if k <= 0:
+            raise ValueError(
+                "isolated candidate context requires a positive similar_to fanout"
+            )
+        proteins = np.asarray(proteins, dtype=np.int64)
+        neighbor_id = np.full((proteins.size, k), -1, dtype=np.int64)
+        edge_attr = np.zeros(
+            (proteins.size, k, int(store.edge_attr.shape[1])), dtype=np.float32
+        )
+        neighbor_mask = np.zeros((proteins.size, k), dtype=np.bool_)
+        role_to_code = getattr(self.stores.registry, "role_to_code", {})
+        role_code = getattr(self.stores.registry, "role_code", None)
+        core_code = (
+            role_to_code.get("core")
+            if isinstance(role_to_code, Mapping)
+            else None
+        )
+        if role_code is None or core_code is None:
+            raise ValueError(
+                "isolated candidate context requires core role codes in the registry"
+            )
+
+        for row, protein in enumerate(proteins.tolist()):
+            if protein < 0 or protein >= store.num_nodes:
+                continue
+            start, end = int(store.indptr[protein]), int(store.indptr[protein + 1])
+            offsets = np.asarray(store.edge_offset[start:end], dtype=np.int64)
+            if not offsets.size:
+                continue
+            edge = np.asarray(store.edge_index[:, offsets], dtype=np.int64)
+            attr = np.asarray(store.edge_attr[offsets], dtype=np.float32)
+            keep = edge[1] == int(protein)
+            keep &= edge[0] != int(protein)
+            keep &= np.asarray(role_code)[edge[0]] == int(core_code)
+            edge = edge[:, keep]
+            attr = attr[keep]
+            if not edge.shape[1]:
+                continue
+            reciprocal_rank = (
+                attr[:, 2] if attr.shape[1] >= 3 else np.zeros(attr.shape[0])
+            )
+            confidence = attr[:, 0] if attr.shape[1] else np.zeros(attr.shape[0])
+            order = np.lexsort((edge[0], -confidence, -reciprocal_rank))
+            take = order[:k]
+            count = int(take.size)
+            neighbor_id[row, :count] = edge[0, take]
+            edge_attr[row, :count] = attr[take]
+            neighbor_mask[row, :count] = True
+
+        if (
+            self.config.isolated_candidate_require_core_neighbor
+            and np.any(~np.any(neighbor_mask, axis=1))
+        ):
+            missing = proteins[~np.any(neighbor_mask, axis=1)]
+            raise RuntimeError(
+                "isolated candidate context found targets without core similar_to "
+                f"neighbours; first missing protein IDs={missing[:8].tolist()}"
+            )
+        neighbor_x = np.zeros(
+            (proteins.size, k, int(self.stores.feature_dim)), dtype=np.float32
+        )
+        if np.any(neighbor_mask):
+            neighbor_x[neighbor_mask] = self.stores.features.gather(
+                neighbor_id[neighbor_mask]
+            )
+        return neighbor_x, edge_attr, neighbor_mask
+
     def materialize(self, episode: NBSGlobalEpisode, *, seed: int) -> NBSLocalBatch:
         if not PYG_AVAILABLE or build_nbs_protein_go_heterodata is None or mask_candidate_evidence_edges is None:
             raise ModuleNotFoundError("torch_geometric is required for local graph materialization")
         materialize_started = time.perf_counter()
         rng = np.random.default_rng(int(seed))
-        roots = np.unique(np.concatenate([episode.seed_protein_idx, episode.candidate_protein_idx]))
+        isolated_candidates = (
+            self.config.candidate_context_mode == "isolated_similar_to_core"
+        )
+        roots = np.unique(
+            episode.seed_protein_idx
+            if isolated_candidates
+            else np.concatenate(
+                [episode.seed_protein_idx, episode.candidate_protein_idx]
+            )
+        )
         phase_started = time.perf_counter()
         protein_nodes, pp = self._sample_pp(roots, rng)
+        if isolated_candidates and episode.candidate_protein_idx.size:
+            blocked = np.asarray(episode.candidate_protein_idx, dtype=np.int64)
+            retained_nodes: list[np.ndarray] = [roots]
+            for relation_name, (edge, attr) in pp.items():
+                keep = ~np.isin(edge[0], blocked, assume_unique=False)
+                keep &= ~np.isin(edge[1], blocked, assume_unique=False)
+                edge = edge[:, keep]
+                attr = attr[keep]
+                pp[relation_name] = (edge, attr)
+                if edge.size:
+                    retained_nodes.extend([edge[0], edge[1]])
+            protein_nodes = np.unique(np.concatenate(retained_nodes))
         pp_sample_seconds = time.perf_counter() - phase_started
 
         # Message evidence remains source-major on disk and is only sliced for
@@ -745,11 +865,22 @@ class LatenceNBSLocalGraphMaterializer:
         )
 
         seed_local = torch.as_tensor(np.searchsorted(protein_nodes, episode.seed_protein_idx), dtype=torch.long)
-        candidate_local_idx = torch.as_tensor(np.searchsorted(protein_nodes, episode.candidate_protein_idx), dtype=torch.long)
+        candidate_local_idx = (
+            None
+            if isolated_candidates
+            else torch.as_tensor(
+                np.searchsorted(protein_nodes, episode.candidate_protein_idx),
+                dtype=torch.long,
+            )
+        )
         query_go_local = torch.as_tensor(np.searchsorted(go_nodes, episode.query_ontology_go_idx), dtype=torch.long)
         graph = mask_candidate_evidence_edges(
             graph,
-            candidate_local_idx,
+            (
+                torch.empty(0, dtype=torch.long)
+                if candidate_local_idx is None
+                else candidate_local_idx
+            ),
             query_go_index=query_go_local,
             gold_mode="all",
             pseudo_mode="all",
@@ -763,6 +894,35 @@ class LatenceNBSLocalGraphMaterializer:
         )
         graph_build_seconds = time.perf_counter() - phase_started
 
+        external_candidate_x = None
+        external_neighbor_x = None
+        external_neighbor_edge_attr = None
+        external_neighbor_mask = None
+        external_neighbor_fanouts = None
+        if isolated_candidates:
+            external_candidate_x = torch.as_tensor(
+                self.stores.features.gather(episode.candidate_protein_idx),
+                dtype=torch.float32,
+            )
+            neighbor_array, neighbor_attr_array, neighbor_mask_array = (
+                self._gather_isolated_similar_to_core(
+                    episode.candidate_protein_idx
+                )
+            )
+            external_neighbor_x = torch.as_tensor(
+                neighbor_array, dtype=torch.float32
+            )
+            external_neighbor_edge_attr = torch.as_tensor(
+                neighbor_attr_array, dtype=torch.float32
+            )
+            external_neighbor_mask = torch.as_tensor(
+                neighbor_mask_array, dtype=torch.bool
+            )
+            external_neighbor_fanouts = tuple(
+                int(value)
+                for value in self.config.similar_to_fanouts[: self.config.pp_hops]
+            )
+
         query_position = {int(value): row for row, value in enumerate(episode.query_ontology_go_idx.tolist())}
         hierarchy: list[tuple[int, int]] = []
         for child, parent in is_a_global_rows.tolist():
@@ -772,7 +932,14 @@ class LatenceNBSLocalGraphMaterializer:
         if hierarchy:
             hierarchy_edges = torch.as_tensor(np.asarray(hierarchy, np.int64).T, dtype=torch.long)
 
-        root_ids = np.asarray(episode.metadata.get("root_protein_idx", np.empty(0, np.int64)), dtype=np.int64)
+        root_ids = np.asarray(
+            roots
+            if isolated_candidates
+            else episode.metadata.get(
+                "root_protein_idx", np.empty(0, np.int64)
+            ),
+            dtype=np.int64,
+        )
         role_to_code = getattr(self.stores.registry, "role_to_code", {})
         role_code = getattr(self.stores.registry, "role_code", None)
         core_code = role_to_code.get("core") if isinstance(role_to_code, Mapping) else None
@@ -781,6 +948,16 @@ class LatenceNBSLocalGraphMaterializer:
             if code is None or role_code is None or values.size == 0:
                 return np.empty(0, dtype=np.int64)
             return values[np.asarray(role_code)[values] == int(code)].astype(np.int64, copy=False)
+
+        neighbor_diagnostics = {}
+        if external_neighbor_mask is not None:
+            counts = external_neighbor_mask.sum(dim=1).cpu().numpy()
+            neighbor_diagnostics["isolated_candidate_core_neighbors_mean"] = float(counts.mean()) if counts.size else 0.0
+            neighbor_diagnostics["isolated_candidate_core_neighbors_min"] = int(counts.min()) if counts.size else 0
+            for role, code in (("weak", weak_code), ("core", core_code)):
+                selected = np.asarray(role_code)[episode.candidate_protein_idx] == code if code is not None else np.zeros(counts.size, dtype=bool)
+                neighbor_diagnostics[f"isolated_{role}_candidate_count"] = int(selected.sum())
+                neighbor_diagnostics[f"isolated_{role}_with_core_neighbor_fraction"] = float(np.mean(counts[selected] > 0)) if np.any(selected) else 0.0
 
         local_task_mask = self.stores.task_ontology_mask[go_nodes]
         local_context_only_mask = self.stores.context_only_task_ontology_mask[go_nodes]
@@ -791,14 +968,41 @@ class LatenceNBSLocalGraphMaterializer:
             graph=graph,
             query=query,
             hierarchy_edges=hierarchy_edges,
+            external_candidate_x=external_candidate_x,
+            external_neighbor_x=external_neighbor_x,
+            external_neighbor_edge_attr=external_neighbor_edge_attr,
+            external_neighbor_mask=external_neighbor_mask,
+            external_neighbor_fanouts=external_neighbor_fanouts,
             metadata={
                 **dict(episode.metadata),
+                **neighbor_diagnostics,
                 "global_seed": int(seed),
                 "protein_nodes": int(protein_nodes.size),
+                "candidate_context_mode": str(
+                    self.config.candidate_context_mode
+                ),
+                "isolated_candidate_count": int(
+                    episode.candidate_protein_idx.size
+                    if isolated_candidates
+                    else 0
+                ),
+                "isolated_candidate_core_neighbor_pairs": int(
+                    0
+                    if external_neighbor_mask is None
+                    else int(external_neighbor_mask.sum().item())
+                ),
+                "isolated_candidate_with_core_neighbor": int(
+                    0
+                    if external_neighbor_mask is None
+                    else int(
+                        external_neighbor_mask.any(dim=1).sum().item()
+                    )
+                ),
                 # Transient global node IDs support exact epoch-level node
                 # coverage diagnostics.  They remain on CPU and are not saved
                 # in checkpoints or graph artifacts.
                 "local_protein_idx": protein_nodes.astype(np.int64),
+                "root_protein_idx": root_ids.astype(np.int64),
                 "root_core_protein_idx": role_subset(root_ids, core_code),
                 "root_weak_protein_idx": role_subset(root_ids, weak_code),
                 "local_core_protein_idx": role_subset(protein_nodes, core_code),

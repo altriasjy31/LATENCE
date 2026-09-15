@@ -8,12 +8,14 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from .candidate_evidence import align_candidate_evidence
+
 from .episode import NBSGlobalEpisode
 from .local_loader import LatenceNBSLocalGraphMaterializer, LatenceNBSStores
 from .types import ProteinGOQueryBatch
 
 
-NBS_INDUCTIVE_INFERENCE_API_VERSION = 5
+NBS_INDUCTIVE_INFERENCE_API_VERSION = 6
 
 
 @dataclass
@@ -23,6 +25,7 @@ class FullTaskInferenceConfig:
     support_per_query: int = 2
     support_seed: int = 3407
     probability_clip: float = 1e-5
+    preserve_base_outside_candidates: bool = False
 
     def validate(self) -> None:
         if self.go_chunk_size <= 0 or self.protein_batch_size <= 0:
@@ -56,18 +59,12 @@ class ExternalCandidateEvidenceStore:
     def gather(self, rows: np.ndarray, go_idx: np.ndarray) -> np.ndarray:
         rows = np.asarray(rows, dtype=np.int64)
         go_idx = np.asarray(go_idx, dtype=np.int64)
-        out = np.zeros((go_idx.size, rows.size, self.feature_dim), dtype=np.float32)
-        for col, row in enumerate(rows.tolist()):
-            row_go = np.asarray(self.go_index[row], dtype=np.int64)
-            row_attr = np.asarray(self.edge_attr[row], dtype=np.float32)
-            # K is small (typically 512), so a Python dict is cheaper than a
-            # dense N x G evidence tensor and preserves the sparse contract.
-            pos = {int(go): i for i, go in enumerate(row_go.tolist())}
-            for q, go in enumerate(go_idx.tolist()):
-                idx = pos.get(int(go))
-                if idx is not None:
-                    out[q, col] = row_attr[idx]
-        return out
+        edges = np.stack([
+            np.repeat(rows, self.go_index.shape[1]),
+            np.asarray(self.go_index[rows], dtype=np.int64).reshape(-1),
+        ])
+        attrs = np.asarray(self.edge_attr[rows], dtype=np.float32).reshape(-1, self.feature_dim)
+        return align_candidate_evidence(rows, go_idx, edges, attrs)
 
 
 class ExternalPPNeighborhoodStore:
@@ -220,6 +217,10 @@ def export_full_task_probabilities(
     resolved inference contract.
     """
     config.validate()
+    if config.preserve_base_outside_candidates and (
+        candidate_evidence_store is None or candidate_evidence_store.feature_dim < 3
+    ):
+        raise ValueError("candidate-only ablation requires candidate membership with reciprocal-rank features")
     external_repr = np.asarray(external_repr)
     base_values = np.asarray(base_values)
     if external_repr.ndim != 2:
@@ -372,6 +373,13 @@ def export_full_task_probabilities(
                     ),
                 )
             probability = torch.sigmoid(result.logits).T.float().cpu().numpy()
+            candidate_mask = evidence[..., 2].T > 0 if config.preserve_base_outside_candidates else None
+            if config.preserve_base_outside_candidates:
+                base_probability = (
+                    torch.sigmoid(torch.as_tensor(raw_base)).numpy()
+                    if base_values_are_logits else raw_base
+                )
+                probability = np.where(candidate_mask, probability, base_probability)
             if not np.isfinite(probability).all():
                 raise FloatingPointError(
                     "NBS produced NaN/Inf probabilities for "
@@ -384,16 +392,18 @@ def export_full_task_probabilities(
                 applied = auxiliary.get("applied_graph_delta")
                 if applied is None:
                     raise RuntimeError("NBS auxiliary output lacks applied_graph_delta")
-                logit_delta_output[p_start:p_end, go_start:go_end] = (
-                    applied.T.float().cpu().numpy().astype(np.float16)
-                )
+                applied_array = applied.T.float().cpu().numpy()
+                if config.preserve_base_outside_candidates:
+                    applied_array = np.where(candidate_mask, applied_array, 0.0)
+                logit_delta_output[p_start:p_end, go_start:go_end] = applied_array.astype(np.float16)
             if delta_gate_output is not None:
                 gate = auxiliary.get("delta_gate")
                 if gate is None:
                     raise RuntimeError("NBS auxiliary output lacks delta_gate")
-                delta_gate_output[p_start:p_end, go_start:go_end] = (
-                    gate.T.float().cpu().numpy().astype(np.float16)
-                )
+                gate_array = gate.T.float().cpu().numpy()
+                if config.preserve_base_outside_candidates:
+                    gate_array = np.where(candidate_mask, gate_array, 0.0)
+                delta_gate_output[p_start:p_end, go_start:go_end] = gate_array.astype(np.float16)
             if not routing_written and (
                 routing_source_weight_output_path is not None
                 or routing_null_weight_output_path is not None

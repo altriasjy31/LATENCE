@@ -56,6 +56,9 @@ class BoxGOEncoding:
     offset: Tensor         # [G, box_dim]
     log_offset: Tensor     # [G, box_dim]
     stats: Optional[Tensor] = None
+    # Optional ontology-tower residual sources aligned as [L,G,D].  They are
+    # exposed to the query encoder without changing the heterogeneous GNN.
+    tower_deltas: Optional[Tensor] = None
 
 
 @dataclass
@@ -69,6 +72,7 @@ class NBSGOBoxCache:
     center: Tensor
     offset: Tensor
     stats: Optional[Tensor] = None
+    layer_deltas: Optional[Tensor] = None  # [L,G,D]
 
     def index(self, ids: Tensor) -> BoxGOEncoding:
         return BoxGOEncoding(
@@ -80,6 +84,9 @@ class NBSGOBoxCache:
             offset=self.offset[ids],
             log_offset=torch.log(self.offset[ids].clamp_min(1e-8)),
             stats=None if self.stats is None else self.stats[ids],
+            tower_deltas=(
+                None if self.layer_deltas is None else self.layer_deltas[:, ids]
+            ),
         )
 
 
@@ -111,6 +118,10 @@ class ProteinGOQueryBatch:
     mask: Optional[Tensor] = None
     confidence: Optional[Tensor] = None
     pseudo_mask: Optional[Tensor] = None
+    # Positions assigned to protein-primary column supervision.  This is a
+    # subset of ``mask`` and contains explicit positive and controlled PU
+    # negative pairs for the sampled weak anchors.
+    weak_primary_mask: Optional[Tensor] = None
     # General supervision weights apply to both gold and pseudo positions.
     # This supports low-weight sampled-unlabelled negatives without converting
     # every unknown protein--GO pair into a hard negative.
@@ -139,6 +150,7 @@ class NBSQueryCondition:
     mask: Optional[Tensor]
     confidence: Optional[Tensor]
     pseudo_mask: Optional[Tensor]
+    weak_primary_mask: Optional[Tensor] = None
     supervision_weight: Optional[Tensor] = None
     auxiliary: Optional[Dict[str, Tensor]] = None
 
@@ -150,6 +162,7 @@ class NBSMatchOutput:
     mask: Optional[Tensor]
     confidence: Optional[Tensor] = None
     pseudo_mask: Optional[Tensor] = None
+    weak_primary_mask: Optional[Tensor] = None
     supervision_weight: Optional[Tensor] = None
     auxiliary: Optional[Dict[str, Tensor]] = None
 

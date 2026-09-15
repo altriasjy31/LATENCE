@@ -1,6 +1,6 @@
 """Neighborhood--BoxSquare (NBS) with BoxSquaredEL protein--GO geometry."""
 
-__version__ = "0.6.1"
+__version__ = "0.7.1"
 
 from .boxsqel_manifest import (
     BoxSquaredELTrainingContract,
@@ -53,6 +53,7 @@ from .losses import (
     hierarchy_violation_loss,
     query_hierarchy_violation_loss,
     masked_asl_logits,
+    masked_asl_protein_column_mean,
     masked_bce_with_logits,
     nbs_training_loss,
 )
@@ -169,6 +170,7 @@ __all__ = [
     "build_go_box_edge_features",
     "nbs_training_loss",
     "masked_asl_logits",
+    "masked_asl_protein_column_mean",
     "masked_bce_with_logits",
     "hierarchy_violation_loss",
     "query_hierarchy_violation_loss",

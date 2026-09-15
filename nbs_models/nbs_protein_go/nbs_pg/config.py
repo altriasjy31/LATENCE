@@ -67,6 +67,11 @@ class NBSConfig:
     external_query_dim: int = 0
     query_semantic_gate_bias_init: float = -1.0
     query_hierarchy_gate_bias_init: float = -2.0
+    # Attend over the ontology tower's per-layer residuals when constructing
+    # each GO query.  This keeps the encoder query-independent and cheap while
+    # exposing the exact GO propagation path to the IACS-style decoder.
+    use_go_residual_query: bool = False
+    query_go_residual_gate_bias_init: float = -2.0
 
     # Base-logit residual refinement.  The default gate is student-only: it may
     # use first-stage backbone candidate evidence, but not expert probabilities.
@@ -81,7 +86,10 @@ class NBSConfig:
     # starts from reciprocal rank and learns a bounded residual from all three.
     candidate_evidence_dim: int = 3
     candidate_evidence_hidden_dim: int = 8
-    candidate_evidence_residual_scale_init: float = 0.0
+    # The residual output layer is zero-initialized. Keep its multiplicative
+    # scale nonzero so that its gradient can start (old checkpoint tensors
+    # still load verbatim, including a legacy zero scale).
+    candidate_evidence_residual_scale_init: float = 0.1
 
     # Candidate scoring. None scores all candidates in one operation.
     score_chunk_size: Optional[int] = 65536

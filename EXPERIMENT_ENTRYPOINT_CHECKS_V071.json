@@ -1,0 +1,37 @@
+{
+  "stage_dry_runs": [
+    {
+      "stage": "baseline-ablation",
+      "exit_code": 0,
+      "commands_printed": 4
+    },
+    {
+      "stage": "audit",
+      "exit_code": 0,
+      "commands_printed": 10
+    },
+    {
+      "stage": "smoke",
+      "exit_code": 0,
+      "commands_printed": 3
+    },
+    {
+      "stage": "probe",
+      "exit_code": 0,
+      "commands_printed": 3
+    },
+    {
+      "stage": "evaluate",
+      "exit_code": 0,
+      "commands_printed": 2
+    },
+    {
+      "stage": "analyze",
+      "exit_code": 0,
+      "commands_printed": 1
+    }
+  ],
+  "historical_reference_rows": 5,
+  "historical_epoch20_interpretation": "ranking_not_fully_recovered_vs_backbone",
+  "legacy_query_cpu_parity": "exact with disabled GO residual branch and matched legacy weights"
+}

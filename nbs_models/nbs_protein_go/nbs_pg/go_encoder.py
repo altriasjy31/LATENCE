@@ -196,7 +196,12 @@ class NBSGOOntologyTower(nn.Module):
     ) -> NBSGOBoxCache:
         was_training = self.training
         self.eval()
-        context, _ = self(box.static, edge_index_dict, edge_attr_dict)
+        context, states = self(box.static, edge_index_dict, edge_attr_dict)
+        previous = box.static
+        deltas: list[Tensor] = []
+        for state in states:
+            deltas.append(state - previous)
+            previous = state
         if was_training:
             self.train()
         return NBSGOBoxCache(
@@ -207,4 +212,9 @@ class NBSGOOntologyTower(nn.Module):
             center=box.center.detach(),
             offset=box.offset.detach(),
             stats=None if box.stats is None else box.stats.detach(),
+            layer_deltas=(
+                None
+                if not deltas
+                else torch.stack(deltas, dim=0).detach()
+            ),
         )

@@ -89,6 +89,20 @@ class NBSQueryEpisodeConfig:
     # pseudo fillers never consume this queue or count toward its exhaustion.
     weak_primary_proteins_per_episode: int = 0
     weak_primary_query_source: str = "pseudo"
+    weak_primary_query_bank_mode: str = "legacy_single"
+    # Protein-primary query bank.  Values above one assign several pseudo GO
+    # positives to each weak anchor, subject to the shared query/row capacity.
+    weak_primary_positive_go_per_protein: int = 1
+    weak_primary_rotate_go_across_epochs: bool = False
+    # Controlled column-wise PU contrast selected from the query bank without
+    # adding new protein nodes to the episode.
+    weak_primary_hard_negative_go_per_protein: int = 0
+    weak_primary_background_go_per_protein: int = 0
+    # v0.7.1: explicit hard-query budget and completion of in-bank positives.
+    weak_primary_hard_query_slots_per_episode: int = 0
+    weak_primary_complete_query_positives: bool = False
+    # Legacy default reproduces old training; v0.7.1 configs select decoded_all.
+    candidate_evidence_scope: str = "sampled_hard"
     weak_focus_scan_limit: int = 8192
     weak_focus_specificity_power: float = 0.5
     weak_focus_min_probability: float = 0.5
@@ -126,6 +140,17 @@ class NBSQueryEpisodeConfig:
     max_query_resample_attempts: int = 100
 
     def validate(self) -> None:
+        if self.candidate_evidence_scope not in {"sampled_hard", "decoded_all"}:
+            raise ValueError("candidate_evidence_scope must be sampled_hard or decoded_all")
+        if self.weak_primary_hard_query_slots_per_episode < 0:
+            raise ValueError("weak_primary_hard_query_slots_per_episode cannot be negative")
+        if not isinstance(self.weak_primary_complete_query_positives, bool):
+            raise ValueError("weak_primary_complete_query_positives must be boolean")
+        if self.weak_primary_hard_query_slots_per_episode or self.weak_primary_complete_query_positives:
+            if self.weak_primary_query_bank_mode != "greedy_multi" or self.weak_primary_proteins_per_episode <= 0:
+                raise ValueError("hard-query allocation/positive completion requires greedy_multi weak-primary sampling")
+        if self.weak_primary_hard_query_slots_per_episode and self.weak_primary_hard_negative_go_per_protein <= 0:
+            raise ValueError("hard-query slots require a positive per-protein hard PU budget")
         for name in (
             "num_queries",
             "support_per_query",
@@ -164,6 +189,18 @@ class NBSQueryEpisodeConfig:
             raise ValueError("weak_focus_targets_per_query cannot be negative")
         if self.weak_primary_proteins_per_episode < 0:
             raise ValueError("weak_primary_proteins_per_episode cannot be negative")
+        if self.weak_primary_positive_go_per_protein <= 0:
+            raise ValueError("weak_primary_positive_go_per_protein must be positive")
+        if not isinstance(self.weak_primary_rotate_go_across_epochs, bool):
+            raise ValueError("weak_primary_rotate_go_across_epochs must be boolean")
+        if self.weak_primary_hard_negative_go_per_protein < 0:
+            raise ValueError(
+                "weak_primary_hard_negative_go_per_protein cannot be negative"
+            )
+        if self.weak_primary_background_go_per_protein < 0:
+            raise ValueError(
+                "weak_primary_background_go_per_protein cannot be negative"
+            )
         if self.weak_primary_query_source not in {
             "pseudo",
             "pseudo_candidate_intersection",
@@ -171,6 +208,20 @@ class NBSQueryEpisodeConfig:
             raise ValueError(
                 "weak_primary_query_source must be pseudo or "
                 "pseudo_candidate_intersection"
+            )
+        if self.weak_primary_query_bank_mode not in {
+            "legacy_single",
+            "greedy_multi",
+        }:
+            raise ValueError(
+                "weak_primary_query_bank_mode must be legacy_single or greedy_multi"
+            )
+        if (
+            self.weak_primary_query_bank_mode == "legacy_single"
+            and self.weak_primary_positive_go_per_protein != 1
+        ):
+            raise ValueError(
+                "legacy_single query-bank mode requires exactly one positive GO per protein"
             )
         if self.weak_focus_scan_limit <= 0:
             raise ValueError("weak_focus_scan_limit must be positive")
@@ -200,11 +251,22 @@ class NBSQueryEpisodeConfig:
                 raise ValueError(
                     "weak_primary_proteins_per_episode exceeds focus query capacity"
                 )
+            positive_capacity = capacity
+            positive_requested = (
+                int(self.weak_primary_proteins_per_episode)
+                * int(self.weak_primary_positive_go_per_protein)
+            )
+            if positive_requested > positive_capacity:
+                raise ValueError(
+                    "weak-primary positive assignments exceed focus query capacity: "
+                    f"requested={positive_requested}, capacity={positive_capacity}"
+                )
         if self.hierarchy_pairs_per_episode < 0:
             raise ValueError("hierarchy_pairs_per_episode cannot be negative")
         reserved_queries = (
             2 * self.hierarchy_pairs_per_episode
             + self.weak_focus_queries_per_episode
+            + self.weak_primary_hard_query_slots_per_episode
         )
         if reserved_queries >= self.num_queries:
             raise ValueError(
@@ -261,6 +323,7 @@ class NBSGlobalEpisode:
     confidence: np.ndarray
     pseudo_mask: np.ndarray
     supervision_weight: np.ndarray
+    weak_primary_mask: Optional[np.ndarray] = None
     # Full BoxSquaredEL ontology rows used by the GO tower.  ``None`` keeps
     # backward compatibility for task-only toy tests.
     query_ontology_go_idx: Optional[np.ndarray] = None
@@ -288,6 +351,10 @@ class NBSGlobalEpisode:
             value = getattr(self, name)
             if value.shape != (q, c):
                 raise ValueError(f"{name} shape {value.shape} != {(q, c)}")
+        if self.weak_primary_mask is not None and self.weak_primary_mask.shape != (q, c):
+            raise ValueError(
+                f"weak_primary_mask shape {self.weak_primary_mask.shape} != {(q, c)}"
+            )
         if self.candidate_evidence.shape[:2] != (q, c):
             raise ValueError("candidate_evidence must start with [Q,C]")
         if self.query_go_frequency.shape != (q,):
@@ -299,7 +366,7 @@ class NBSGlobalEpisode:
         self,
         *,
         seed_protein_local: Tensor,
-        candidate_protein_local: Tensor,
+        candidate_protein_local: Optional[Tensor],
         query_go_local: Optional[Tensor] = None,
         use_global_go_fallback: bool = False,
         device: torch.device | str = "cpu",
@@ -325,7 +392,11 @@ class NBSGlobalEpisode:
             go_query_index=torch.arange(
                 self.query_go_idx.size, dtype=torch.long, device=device
             ),
-            candidate_protein_index=candidate_protein_local.to(device),
+            candidate_protein_index=(
+                None
+                if candidate_protein_local is None
+                else candidate_protein_local.to(device)
+            ),
             base_logits=torch.as_tensor(self.base_logits, dtype=torch.float32, device=device),
             candidate_evidence=torch.as_tensor(
                 self.candidate_evidence, dtype=torch.float32, device=device
@@ -340,6 +411,15 @@ class NBSGlobalEpisode:
             ),
             pseudo_mask=torch.as_tensor(
                 self.pseudo_mask, dtype=torch.bool, device=device
+            ),
+            weak_primary_mask=torch.as_tensor(
+                (
+                    np.zeros_like(self.mask, dtype=np.bool_)
+                    if self.weak_primary_mask is None
+                    else self.weak_primary_mask
+                ),
+                dtype=torch.bool,
+                device=device,
             ),
             supervision_weight=torch.as_tensor(
                 self.supervision_weight, dtype=torch.float32, device=device
@@ -526,6 +606,16 @@ class GOQueryEpisodeSampler:
         self._weak_primary_candidate_query_selected_current: int = 0
         self._weak_primary_requested_current: int = 0
         self._weak_primary_partial_block_current: int = 0
+        self._weak_primary_positive_pairs_requested_current: int = 0
+        self._weak_primary_anchor_eligible_go_count_current: dict[int, int] = {}
+        self._weak_primary_anchor_intersection_go_count_current: dict[int, int] = {}
+        self._weak_primary_anchor_assignments_current: dict[int, list[int]] = {}
+        self._weak_primary_anchor_pseudo_go_current: dict[int, set[int]] = {}
+        self._weak_primary_anchor_candidate_attr_current: dict[
+            int, dict[int, np.ndarray]
+        ] = {}
+        self._weak_primary_anchor_pseudo_probability_current: dict[int, dict[int, float]] = {}
+        self._weak_primary_hard_query_current: list[int] = []
 
     @property
     def coverage_slots_per_episode(self) -> int:
@@ -534,7 +624,8 @@ class GOQueryEpisodeSampler:
             1,
             int(self.config.num_queries)
             - 2 * int(self.config.hierarchy_pairs_per_episode)
-            - int(self.config.weak_focus_queries_per_episode),
+            - int(self.config.weak_focus_queries_per_episode)
+            - int(self.config.weak_primary_hard_query_slots_per_episode),
         )
 
     @staticmethod
@@ -763,15 +854,23 @@ class GOQueryEpisodeSampler:
         excluded_task: set[int],
         excluded_ontology: set[int],
     ) -> tuple[dict[int, tuple[np.ndarray, np.ndarray]], int]:
-        """Induce GO queries from a no-replacement queue of weak proteins.
+        """Build a shared multi-positive GO query bank from weak proteins.
 
-        Existing GO groups are preferred so one GO query can supervise several
-        weak anchors.  A row that cannot fit the current query/ontology budget
-        is deferred, never discarded.  This makes queue exhaustion independent
-        of ordinary GO-major pseudo-positive filling.
+        The queue remains protein-primary and no-replacement.  Eligible pseudo
+        labels are collected for each anchor first; a greedy b-matching then
+        compresses them into the finite GO query bank while giving every
+        selected protein one positive before allocating additional positives.
         """
         if self.pseudo_by_protein is None:
             raise RuntimeError("weak-primary scheduling requires pseudo_by_protein")
+        if self.config.weak_primary_query_bank_mode == "legacy_single":
+            return self._sample_weak_primary_anchors_legacy(
+                epoch=epoch,
+                rank=rank,
+                world_size=world_size,
+                excluded_task=excluded_task,
+                excluded_ontology=excluded_ontology,
+            )
         self._ensure_weak_primary_epoch(
             epoch=int(epoch), rank=int(rank), world_size=int(world_size)
         )
@@ -781,21 +880,32 @@ class GOQueryEpisodeSampler:
         )
         self._weak_primary_requested_current = int(target)
         self._weak_primary_partial_block_current = 0
+        self._weak_primary_positive_pairs_requested_current = 0
+        self._weak_primary_anchor_eligible_go_count_current = {}
+        self._weak_primary_anchor_intersection_go_count_current = {}
+        self._weak_primary_anchor_assignments_current = {}
+        self._weak_primary_anchor_pseudo_go_current = {}
+        self._weak_primary_anchor_candidate_attr_current = {}
+        self._weak_primary_anchor_pseudo_probability_current = {}
         if target <= 0:
             return {}, 0
 
         query_limit = int(self.config.weak_focus_queries_per_episode)
         group_limit = int(self.config.weak_focus_targets_per_query)
-        grouped_rows: dict[int, list[int]] = {}
-        grouped_prob: dict[int, list[float]] = {}
+        positives_per_protein = int(
+            self.config.weak_primary_positive_go_per_protein
+        )
         deferred: list[int] = []
-        selected = 0
-        candidate_query_selected = 0
+        option_rows: list[dict[str, Any]] = []
         scanned = 0
         initial_pending = len(self._weak_primary_pending)
         scan_limit = min(int(self.config.weak_focus_scan_limit), initial_pending)
 
-        while selected < target and scanned < scan_limit and self._weak_primary_pending:
+        while (
+            len(option_rows) < target
+            and scanned < scan_limit
+            and self._weak_primary_pending
+        ):
             role_row = int(self._weak_primary_pending.popleft())
             scanned += 1
             values = self.pseudo_by_protein.get_role_row(role_row)
@@ -818,12 +928,341 @@ class GOQueryEpisodeSampler:
             )
 
             candidate_membership = np.zeros(go.size, dtype=bool)
+            candidate_attr_by_go: dict[int, np.ndarray] = {}
+            needs_candidate_lookup = (
+                self.config.weak_primary_query_source
+                == "pseudo_candidate_intersection"
+                or self.config.weak_primary_hard_negative_go_per_protein > 0
+            )
+            if needs_candidate_lookup:
+                if self.candidate_by_protein is None:
+                    raise RuntimeError(
+                        "weak-primary candidate intersection/hard PU sampling "
+                        "requires candidate_by_protein"
+                    )
+                candidate_edge, candidate_attr = self.candidate_by_protein.gather(
+                    [protein]
+                )
+                candidate_go = (
+                    np.asarray(candidate_edge[1], dtype=np.int64)
+                    if candidate_edge.size
+                    else np.empty(0, dtype=np.int64)
+                )
+                if (
+                    self.config.weak_primary_query_source
+                    == "pseudo_candidate_intersection"
+                ):
+                    candidate_membership = np.isin(
+                        go, candidate_go, assume_unique=False
+                    )
+                if candidate_edge.size:
+                    for candidate_index, candidate_go_idx in enumerate(
+                        np.asarray(candidate_edge[1], dtype=np.int64).tolist()
+                    ):
+                        candidate_attr_by_go.setdefault(
+                            int(candidate_go_idx),
+                            np.asarray(candidate_attr[candidate_index], dtype=np.float32),
+                        )
+
+            all_pseudo_probability = dict(zip(go.tolist(), probability.tolist()))
+            ontology = self.task_to_ontology_go[go]
+            feasible = np.asarray(
+                [
+                    int(go_idx) not in excluded_task
+                    and int(ontology_idx) not in excluded_ontology
+                    for go_idx, ontology_idx in zip(go.tolist(), ontology.tolist())
+                ],
+                dtype=bool,
+            )
+            if not np.any(feasible):
+                deferred.append(role_row)
+                continue
+            go = go[feasible]
+            probability = probability[feasible]
+            candidate_membership = candidate_membership[feasible]
+            score = self._focus_go_score(go, probability)
+            order = np.lexsort(
+                (go, -score, -candidate_membership.astype(np.int8))
+            )
+            if (
+                self.config.weak_primary_rotate_go_across_epochs
+                and order.size > 2
+            ):
+                # Keep the strongest label as a stable anchor and rotate the
+                # remaining ranked labels so repeated epochs expose new GO
+                # positives instead of replaying the identical top-k set.
+                tail = order[1:]
+                shift = int((int(epoch) - 1 + role_row) % tail.size)
+                order = np.concatenate([order[:1], np.roll(tail, -shift)])
+            option_rows.append(
+                {
+                    "role_row": role_row,
+                    "protein": protein,
+                    "go": go[order].astype(np.int64, copy=False),
+                    "probability": probability[order].astype(
+                        np.float32, copy=False
+                    ),
+                    "candidate": candidate_membership[order].astype(
+                        np.bool_, copy=False
+                    ),
+                    "score": score[order].astype(np.float64, copy=False),
+                    "all_pseudo_go": set(all_pseudo_probability),
+                    "all_pseudo_probability": all_pseudo_probability,
+                    "candidate_attr": candidate_attr_by_go,
+                }
+            )
+
+        assignments: list[list[int]] = [[] for _ in option_rows]
+        assignment_probability: list[list[float]] = [[] for _ in option_rows]
+        bank_rows: dict[int, list[int]] = {}
+        bank_probability: dict[int, list[float]] = {}
+        bank_ontology: set[int] = set(excluded_ontology)
+
+        for round_index in range(positives_per_protein):
+            while True:
+                needy = {
+                    index
+                    for index, assigned in enumerate(assignments)
+                    if len(assigned) == round_index
+                }
+                if not needy:
+                    break
+                candidates: dict[int, list[tuple[int, int]]] = {}
+                for index in needy:
+                    row = option_rows[index]
+                    for rank_position, go_idx_value in enumerate(row["go"].tolist()):
+                        go_idx = int(go_idx_value)
+                        if go_idx in assignments[index]:
+                            continue
+                        if go_idx in bank_rows:
+                            if len(bank_rows[go_idx]) >= group_limit:
+                                continue
+                        else:
+                            ontology_idx = int(self.task_to_ontology_go[go_idx])
+                            if len(bank_rows) >= query_limit:
+                                continue
+                            if ontology_idx in bank_ontology:
+                                continue
+                        candidates.setdefault(go_idx, []).append(
+                            (index, rank_position)
+                        )
+                if not candidates:
+                    break
+
+                def bank_key(item: tuple[int, list[tuple[int, int]]]) -> tuple:
+                    go_idx, members = item
+                    candidate_hits = sum(
+                        int(option_rows[index]["candidate"][rank_position])
+                        for index, rank_position in members
+                    )
+                    score_sum = sum(
+                        float(option_rows[index]["score"][rank_position])
+                        for index, rank_position in members
+                    )
+                    if self.config.weak_primary_rotate_go_across_epochs and round_index > 0:
+                        # Rotated preference must participate in choosing the GO,
+                        # not just in ordering proteins after the GO is chosen.
+                        preference = sum(1.0 / (1.0 + position) for _, position in members)
+                        return (len(members), preference, candidate_hits,
+                                int(go_idx in bank_rows), score_sum, -int(go_idx))
+                    return (candidate_hits, len(members), int(go_idx in bank_rows),
+                            score_sum, -int(go_idx))
+
+                selected_go, members = max(candidates.items(), key=bank_key)
+                remaining_capacity = group_limit - len(
+                    bank_rows.get(int(selected_go), [])
+                )
+                members = sorted(
+                    members,
+                    key=lambda item: (
+                        -int(option_rows[item[0]]["candidate"][item[1]]),
+                        -float(option_rows[item[0]]["score"][item[1]]),
+                        int(item[1]),
+                        int(option_rows[item[0]]["protein"]),
+                    ),
+                )[:remaining_capacity]
+                if not members:
+                    break
+                if int(selected_go) not in bank_rows:
+                    bank_rows[int(selected_go)] = []
+                    bank_probability[int(selected_go)] = []
+                    bank_ontology.add(
+                        int(self.task_to_ontology_go[int(selected_go)])
+                    )
+                for index, rank_position in members:
+                    probability_value = float(
+                        option_rows[index]["probability"][rank_position]
+                    )
+                    assignments[index].append(int(selected_go))
+                    assignment_probability[index].append(probability_value)
+                    bank_rows[int(selected_go)].append(index)
+                    bank_probability[int(selected_go)].append(probability_value)
+
+        selected_indices = [
+            index for index, assigned in enumerate(assignments) if assigned
+        ]
+        selected = len(selected_indices)
+        selected_index_set = set(selected_indices)
+        for index, row in enumerate(option_rows):
+            if index not in selected_index_set:
+                deferred.append(int(row["role_row"]))
+
+        grouped_rows: dict[int, list[int]] = {}
+        grouped_prob: dict[int, list[float]] = {}
+        candidate_query_selected = 0
+        for index in selected_indices:
+            row = option_rows[index]
+            protein = int(row["protein"])
+            assigned_go = assignments[index]
+            assigned_probability = assignment_probability[index]
+            self._weak_primary_anchor_eligible_go_count_current[protein] = int(
+                len(row["go"])
+            )
+            self._weak_primary_anchor_intersection_go_count_current[protein] = int(
+                np.count_nonzero(row["candidate"])
+            )
+            self._weak_primary_anchor_assignments_current[protein] = list(
+                assigned_go
+            )
+            self._weak_primary_anchor_pseudo_go_current[protein] = set(
+                row["all_pseudo_go"]
+            )
+            self._weak_primary_anchor_candidate_attr_current[protein] = dict(
+                row["candidate_attr"]
+            )
+            self._weak_primary_anchor_pseudo_probability_current[protein] = dict(
+                row["all_pseudo_probability"]
+            )
+            if assigned_go:
+                first_position = int(
+                    np.flatnonzero(row["go"] == int(assigned_go[0]))[0]
+                )
+                candidate_query_selected += int(
+                    bool(row["candidate"][first_position])
+                )
+            for go_idx, probability_value in zip(
+                assigned_go, assigned_probability
+            ):
+                grouped_rows.setdefault(int(go_idx), []).append(protein)
+                grouped_prob.setdefault(int(go_idx), []).append(
+                    float(probability_value)
+                )
+                excluded_task.add(int(go_idx))
+                excluded_ontology.add(
+                    int(self.task_to_ontology_go[int(go_idx)])
+                )
+
+        self._weak_primary_pending.extend(deferred)
+        self._weak_primary_selected += int(selected)
+        self._weak_primary_positive_pairs_requested_current = int(
+            sum(len(value) for value in assignments)
+        )
+        self._weak_primary_candidate_query_selected_current = int(
+            candidate_query_selected
+        )
+        if selected < target:
+            # Near queue exhaustion, the remaining weak proteins are a biased
+            # residue of rows that could not share the current episode's
+            # finite GO/ontology query groups.  If we scanned the *entire*
+            # pending queue and still made forward progress, emit that maximal
+            # partial block and let the next synchronized loader step drain the
+            # deferred rows.  This is not a relaxed steady-state path: a scan
+            # limited by weak_focus_scan_limit still fails, and zero progress
+            # always fails, so malformed/ineligible rows cannot be hidden.
+            scanned_all_pending = scanned >= initial_pending
+            if selected > 0 and scanned_all_pending:
+                self._weak_primary_partial_block_current = 1
+            else:
+                reason = (
+                    "the sampler made no forward progress"
+                    if selected <= 0
+                    else "weak_focus_scan_limit was exhausted before the queue"
+                )
+                raise RuntimeError(
+                    "weak-primary sampler could not fill the requested anchor block: "
+                    f"selected={selected}/{target}, scanned={scanned}/"
+                    f"{initial_pending}, remaining={len(self._weak_primary_pending)}; "
+                    f"{reason}. Audit pseudo eligibility or increase "
+                    "weak_focus_scan_limit."
+                )
+        return {
+            int(go_idx): (
+                np.asarray(grouped_rows[go_idx], dtype=np.int64),
+                np.asarray(grouped_prob[go_idx], dtype=np.float32),
+            )
+            for go_idx in grouped_rows
+        }, int(scanned)
+
+    def _sample_weak_primary_anchors_legacy(
+        self,
+        *,
+        epoch: int,
+        rank: int,
+        world_size: int,
+        excluded_task: set[int],
+        excluded_ontology: set[int],
+    ) -> tuple[dict[int, tuple[np.ndarray, np.ndarray]], int]:
+        """Exact v0.6 one-protein/one-GO selection path for audits."""
+        if self.pseudo_by_protein is None:
+            raise RuntimeError("weak-primary scheduling requires pseudo_by_protein")
+        self._ensure_weak_primary_epoch(
+            epoch=int(epoch), rank=int(rank), world_size=int(world_size)
+        )
+        target = min(
+            int(self.config.weak_primary_proteins_per_episode),
+            len(self._weak_primary_pending),
+        )
+        self._weak_primary_requested_current = int(target)
+        self._weak_primary_partial_block_current = 0
+        self._weak_primary_positive_pairs_requested_current = 0
+        self._weak_primary_anchor_eligible_go_count_current = {}
+        self._weak_primary_anchor_intersection_go_count_current = {}
+        self._weak_primary_anchor_assignments_current = {}
+        self._weak_primary_anchor_pseudo_go_current = {}
+        self._weak_primary_anchor_candidate_attr_current = {}
+        self._weak_primary_anchor_pseudo_probability_current = {}
+        if target <= 0:
+            return {}, 0
+
+        query_limit = int(self.config.weak_focus_queries_per_episode)
+        group_limit = int(self.config.weak_focus_targets_per_query)
+        grouped_rows: dict[int, list[int]] = {}
+        grouped_prob: dict[int, list[float]] = {}
+        deferred: list[int] = []
+        selected = 0
+        candidate_query_selected = 0
+        scanned = 0
+        initial_pending = len(self._weak_primary_pending)
+        scan_limit = min(int(self.config.weak_focus_scan_limit), initial_pending)
+
+        while selected < target and scanned < scan_limit and self._weak_primary_pending:
+            role_row = int(self._weak_primary_pending.popleft())
+            scanned += 1
+            values = self.pseudo_by_protein.get_role_row(role_row)
+            go = np.asarray(values["go_idx"], dtype=np.int64)
+            probability = np.asarray(values["probability"], dtype=np.float32)
+            if go.size == 0:
+                deferred.append(role_row)
+                continue
+            keep = self.eligible_go_mask[go]
+            keep &= probability >= float(self.config.weak_focus_min_probability)
+            if not np.any(keep):
+                deferred.append(role_row)
+                continue
+            go = go[keep]
+            probability = probability[keep]
+            protein = int(
+                self.pseudo_by_protein.global_protein_for_role_row(role_row)
+            )
+
+            candidate_membership = np.zeros(go.size, dtype=bool)
+            candidate_attr_by_go: dict[int, np.ndarray] = {}
             if (
                 self.config.weak_primary_query_source
                 == "pseudo_candidate_intersection"
             ):
                 assert self.candidate_by_protein is not None
-                candidate_edge, _candidate_attr = self.candidate_by_protein.gather(
+                candidate_edge, candidate_attr = self.candidate_by_protein.gather(
                     [protein]
                 )
                 candidate_go = (
@@ -834,6 +1273,12 @@ class GOQueryEpisodeSampler:
                 candidate_membership = np.isin(
                     go, candidate_go, assume_unique=False
                 )
+                if candidate_edge.size:
+                    for index, candidate_go_idx in enumerate(candidate_go.tolist()):
+                        candidate_attr_by_go.setdefault(
+                            int(candidate_go_idx),
+                            np.asarray(candidate_attr[index], dtype=np.float32),
+                        )
 
             existing_keep = np.asarray(
                 [
@@ -850,7 +1295,9 @@ class GOQueryEpisodeSampler:
                     [
                         int(go_idx) not in excluded_task
                         and int(ontology_idx) not in excluded_ontology
-                        for go_idx, ontology_idx in zip(go.tolist(), ontology.tolist())
+                        for go_idx, ontology_idx in zip(
+                            go.tolist(), ontology.tolist()
+                        )
                     ],
                     dtype=bool,
                 )
@@ -868,10 +1315,12 @@ class GOQueryEpisodeSampler:
                 deferred.append(role_row)
                 continue
             score = self._focus_go_score(candidate_go, candidate_probability)
-            # Candidate intersection is the primary ordering key.  Confidence
-            # and specificity break ties inside candidate/non-candidate pools.
             order = np.lexsort(
-                (candidate_go, -score, -candidate_membership_selected.astype(np.int8))
+                (
+                    candidate_go,
+                    -score,
+                    -candidate_membership_selected.astype(np.int8),
+                )
             )
             choice = int(order[0])
             selected_go = int(candidate_go[choice])
@@ -885,24 +1334,30 @@ class GOQueryEpisodeSampler:
             excluded_ontology.add(
                 int(self.task_to_ontology_go[selected_go])
             )
+            self._weak_primary_anchor_eligible_go_count_current[protein] = int(
+                go.size
+            )
+            self._weak_primary_anchor_intersection_go_count_current[protein] = int(
+                np.count_nonzero(candidate_membership)
+            )
+            self._weak_primary_anchor_assignments_current[protein] = [selected_go]
+            self._weak_primary_anchor_pseudo_go_current[protein] = set(
+                int(value) for value in go.tolist()
+            )
+            self._weak_primary_anchor_candidate_attr_current[protein] = (
+                candidate_attr_by_go
+            )
             selected += 1
             if selected_from_candidate_intersection:
                 candidate_query_selected += 1
 
         self._weak_primary_pending.extend(deferred)
         self._weak_primary_selected += int(selected)
+        self._weak_primary_positive_pairs_requested_current = int(selected)
         self._weak_primary_candidate_query_selected_current = int(
             candidate_query_selected
         )
         if selected < target:
-            # Near queue exhaustion, the remaining weak proteins are a biased
-            # residue of rows that could not share the current episode's
-            # finite GO/ontology query groups.  If we scanned the *entire*
-            # pending queue and still made forward progress, emit that maximal
-            # partial block and let the next synchronized loader step drain the
-            # deferred rows.  This is not a relaxed steady-state path: a scan
-            # limited by weak_focus_scan_limit still fails, and zero progress
-            # always fails, so malformed/ineligible rows cannot be hidden.
             scanned_all_pending = scanned >= initial_pending
             if selected > 0 and scanned_all_pending:
                 self._weak_primary_partial_block_current = 1
@@ -1135,6 +1590,53 @@ class GOQueryEpisodeSampler:
             raise RuntimeError("could not complete shuffled-cycle GO query selection")
         return selected
 
+    def _select_weak_primary_hard_queries(
+        self, chosen: list[int], chosen_ontology: set[int]
+    ) -> list[int]:
+        """Cover under-served primary columns with candidate-disagreement GO.
+
+        These GO are queries, not asserted biological negatives. Pseudo labels
+        are excluded separately for each protein; a GO may be positive for one
+        protein and hard PU for another. Unused reserved slots return to filler.
+        """
+        limit = int(self.config.weak_primary_hard_query_slots_per_episode)
+        quota = int(self.config.weak_primary_hard_negative_go_per_protein)
+        if limit <= 0:
+            return []
+        options: dict[int, dict[int, float]] = {}
+        for protein, attrs in self._weak_primary_anchor_candidate_attr_current.items():
+            pseudo = self._weak_primary_anchor_pseudo_go_current.get(protein, set())
+            options[protein] = {
+                int(go): float(attr[2]) for go, attr in attrs.items()
+                if 0 <= int(go) < self.eligible_go_mask.size
+                and self.eligible_go_mask[int(go)] and int(go) not in pseudo
+            }
+        counts = {p: sum(g in candidates for g in chosen) for p, candidates in options.items()}
+        selected: list[int] = []
+        occupied = set(chosen)
+        ontology = set(chosen_ontology)
+        while len(selected) < limit:
+            gains: dict[int, list[tuple[int, float]]] = {}
+            for protein, candidates in options.items():
+                if counts[protein] >= quota:
+                    continue
+                for go, rank_score in candidates.items():
+                    if go not in occupied and int(self.task_to_ontology_go[go]) not in ontology:
+                        gains.setdefault(go, []).append((protein, rank_score))
+            if not gains:
+                break
+            def key(item):
+                go, members = item
+                return (sum(1.0 / (1 + counts[p]) for p, _ in members),
+                        len(members), sum(score for _, score in members), -go)
+            go, members = max(gains.items(), key=key)
+            selected.append(go)
+            occupied.add(go)
+            ontology.add(int(self.task_to_ontology_go[go]))
+            for protein, _ in members:
+                counts[protein] += 1
+        return selected
+
     def _sample_query_plan(
         self,
         *,
@@ -1150,6 +1652,7 @@ class GOQueryEpisodeSampler:
         chosen_ontology: set[int] = set()
         focus_anchors: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         focus_scanned = 0
+        self._weak_primary_hard_query_current = []
 
         # Weak-primary mode gives the weak queue first claim on query slots.
         # Hierarchy and shuffled GO queries are then sampled around those
@@ -1216,6 +1719,14 @@ class GOQueryEpisodeSampler:
             chosen_ontology.update(
                 int(self.task_to_ontology_go[int(go_idx)]) for go_idx in focus_anchors
             )
+
+        self._weak_primary_hard_query_current = self._select_weak_primary_hard_queries(
+            chosen, chosen_ontology
+        )
+        chosen.extend(self._weak_primary_hard_query_current)
+        chosen_ontology.update(
+            int(self.task_to_ontology_go[g]) for g in self._weak_primary_hard_query_current
+        )
 
         coverage_count = int(self.coverage_slots_per_episode)
         if coverage_count > 0:
@@ -1389,9 +1900,6 @@ class GOQueryEpisodeSampler:
         # be consumed as an ordinary pseudo positive by an earlier GO, reducing
         # unique weak-protein coverage inside the same episode.
         weak_focus_anchor_new = 0
-        weak_primary_anchor_count = int(sum(
-            np.asarray(values[0]).size for values in weak_focus_anchors.values()
-        ))
         weak_primary_anchor_proteins = (
             np.unique(np.concatenate([
                 np.asarray(values[0], dtype=np.int64)
@@ -1401,6 +1909,7 @@ class GOQueryEpisodeSampler:
             if weak_focus_anchors
             else np.empty(0, dtype=np.int64)
         )
+        weak_primary_anchor_count = int(weak_primary_anchor_proteins.size)
         if weak_focus_anchors:
             if epoch is None:
                 raise ValueError("weak-focus pseudo targets require an epoch context")
@@ -1618,14 +2127,23 @@ class GOQueryEpisodeSampler:
         mask = np.zeros((q, c), dtype=bool)
         confidence = np.ones((q, c), dtype=np.float32)
         pseudo_mask = np.zeros((q, c), dtype=bool)
+        weak_primary_mask = np.zeros((q, c), dtype=bool)
         supervision_weight = np.zeros((q, c), dtype=np.float32)
-        candidate_evidence = np.zeros((q, c, 3), dtype=np.float32)
+        if cfg.candidate_evidence_scope == "decoded_all":
+            if self.candidate_by_protein is None:
+                raise RuntimeError("decoded_all evidence requires candidate_by_protein")
+            candidate_evidence = self.candidate_by_protein.gather_matrix(candidate_union, query_go)
+        else:
+            candidate_evidence = np.zeros((q, c, 3), dtype=np.float32)
+        decoded_cross_pseudo_pairs = 0
         retained_gold_pairs = 0
         retained_hard_pairs = 0
         retained_pseudo_pairs = 0
         retained_background_pairs = 0
         retained_weak_focus_pairs = 0
-        retained_weak_primary_anchors = 0
+        retained_weak_primary_proteins: set[int] = set()
+        retained_weak_primary_hard_pairs = 0
+        retained_weak_primary_background_pairs = 0
         retained_gold_proteins: list[int] = []
         retained_hard_proteins: list[int] = []
         retained_pseudo_proteins: list[int] = []
@@ -1663,11 +2181,12 @@ class GOQueryEpisodeSampler:
                 supervision_weight[row, column] = cfg.sampled_unlabelled_weight
                 retained_hard_pairs += 1
                 retained_hard_proteins.append(int(protein))
-                if hard_attr is not None:
-                    candidate_evidence[row, column] = hard_attr[index]
-                else:
-                    rank = float(hard_rank[index])
-                    candidate_evidence[row, column, 2] = 1.0 / (1.0 + rank)
+                if cfg.candidate_evidence_scope == "sampled_hard":
+                    if hard_attr is not None:
+                        candidate_evidence[row, column] = hard_attr[index]
+                    else:
+                        rank = float(hard_rank[index])
+                        candidate_evidence[row, column, 2] = 1.0 / (1.0 + rank)
             for protein, probability in zip(
                 per_query_pseudo[row].tolist(), per_query_pseudo_prob[row].tolist()
             ):
@@ -1684,8 +2203,123 @@ class GOQueryEpisodeSampler:
                 if int(go_idx) in weak_focus_anchors:
                     retained_weak_focus_pairs += 1
                 if int(protein) in forced_for_query:
-                    retained_weak_primary_anchors += 1
+                    weak_primary_mask[row, column] = True
+                    retained_weak_primary_proteins.add(int(protein))
                 retained_pseudo_proteins.append(int(protein))
+
+        # Supervise all known primary pseudo labels that already occur in Q.
+        # No extra protein nodes, no new labels inferred from missing annotation.
+        if cfg.weak_primary_complete_query_positives:
+            query_position = {int(g): r for r, g in enumerate(query_go)}
+            for protein in weak_primary_anchor_proteins.tolist():
+                column = candidate_position.get(int(protein))
+                if column is None:
+                    continue
+                for go, probability in self._weak_primary_anchor_pseudo_probability_current.get(int(protein), {}).items():
+                    row = query_position.get(int(go))
+                    if row is None or pseudo_mask[row, column]:
+                        continue
+                    if mask[row, column]:
+                        raise RuntimeError("known primary pseudo positive conflicts with sampled PU/gold mask")
+                    labels[row, column] = float(probability)
+                    mask[row, column] = pseudo_mask[row, column] = weak_primary_mask[row, column] = True
+                    normalized = max(0.0, min(1.0, (float(probability) - 0.5) / 0.5))
+                    confidence[row, column] = normalized ** cfg.pseudo_confidence_power
+                    supervision_weight[row, column] = 1.0
+                    retained_pseudo_pairs += 1
+                    decoded_cross_pseudo_pairs += 1
+                    retained_pseudo_proteins.append(int(protein))
+
+        # Add protein-column PU contrast for the primary weak anchors.  Hard
+        # positions are first-stage top-512 candidates that are not pseudo
+        # positives for the protein.  Background positions are neither pseudo
+        # nor candidates and must also satisfy the conservative low-base rule.
+        query_position = {
+            int(go_idx): row for row, go_idx in enumerate(query_go.tolist())
+        }
+        for protein in weak_primary_anchor_proteins.tolist():
+            column = candidate_position.get(int(protein))
+            if column is None:
+                continue
+            pseudo_go = self._weak_primary_anchor_pseudo_go_current.get(
+                int(protein), set()
+            )
+            candidate_attr_by_go = (
+                self._weak_primary_anchor_candidate_attr_current.get(
+                    int(protein), {}
+                )
+            )
+            hard_options: list[tuple[float, int, np.ndarray]] = []
+            for go_idx, attr in candidate_attr_by_go.items():
+                row = query_position.get(int(go_idx))
+                if row is None or int(go_idx) in pseudo_go:
+                    continue
+                if mask[row, column]:
+                    continue
+                attr_array = np.asarray(attr, dtype=np.float32)
+                reciprocal_rank = (
+                    float(attr_array[2]) if attr_array.size >= 3 else 0.0
+                )
+                hard_options.append((reciprocal_rank, int(row), attr_array))
+            hard_options.sort(key=lambda value: (-value[0], value[1]))
+            existing_hard = sum(
+                bool(mask[r, column] and not pseudo_mask[r, column] and labels[r, column] <= 0)
+                for g, r in query_position.items() if g in candidate_attr_by_go and g not in pseudo_go
+            )
+            remaining_hard = max(0, int(cfg.weak_primary_hard_negative_go_per_protein) - existing_hard)
+            for _, row, attr_array in hard_options[:remaining_hard]:
+                mask[row, column] = True
+                weak_primary_mask[row, column] = True
+                supervision_weight[row, column] = float(
+                    cfg.sampled_unlabelled_weight
+                )
+                if cfg.candidate_evidence_scope == "sampled_hard" and attr_array.shape == (candidate_evidence.shape[2],):
+                    candidate_evidence[row, column] = attr_array
+                retained_weak_primary_hard_pairs += 1
+                retained_hard_proteins.append(int(protein))
+
+            background_count = int(
+                cfg.weak_primary_background_go_per_protein
+            )
+            if background_count > 0:
+                base_probability = 1.0 / (
+                    1.0 + np.exp(-np.clip(base_logits[:, column], -40.0, 40.0))
+                )
+                background_rows_for_protein = np.asarray(
+                    [
+                        row
+                        for row, go_idx in enumerate(query_go.tolist())
+                        if not mask[row, column]
+                        and int(go_idx) not in pseudo_go
+                        and int(go_idx) not in candidate_attr_by_go
+                        and float(base_probability[row])
+                        <= float(cfg.background_base_probability_max)
+                    ],
+                    dtype=np.int64,
+                )
+                if background_rows_for_protein.size > background_count:
+                    background_rows_for_protein = np.asarray(
+                        self.rng.choice(
+                            background_rows_for_protein,
+                            size=background_count,
+                            replace=False,
+                        ),
+                        dtype=np.int64,
+                    )
+                if background_rows_for_protein.size:
+                    mask[background_rows_for_protein, column] = True
+                    weak_primary_mask[
+                        background_rows_for_protein, column
+                    ] = True
+                    supervision_weight[
+                        background_rows_for_protein, column
+                    ] = float(cfg.background_unlabelled_weight)
+                    retained_weak_primary_background_pairs += int(
+                        background_rows_for_protein.size
+                    )
+                    retained_background_proteins.extend(
+                        [int(protein)] * int(background_rows_for_protein.size)
+                    )
 
         # Add a small amount of conservative PU background contrast for every
         # GO query.  These pairs are sampled only from proteins already present
@@ -1727,6 +2361,13 @@ class GOQueryEpisodeSampler:
                         candidate_union[columns].astype(np.int64).tolist()
                     )
 
+        # Include every already-supervised query position for a primary anchor
+        # in the column objective, while keeping unknown cross positions masked.
+        for protein in weak_primary_anchor_proteins.tolist():
+            column = candidate_position.get(int(protein))
+            if column is not None:
+                weak_primary_mask[:, column] |= mask[:, column]
+
         positive_mask = mask & (labels > 0.0)
         negative_mask = mask & (~pseudo_mask) & (labels <= 0.0)
         positive_rows_mask = np.any(positive_mask, axis=1)
@@ -1741,6 +2382,62 @@ class GOQueryEpisodeSampler:
         neg_pos_pair_ratio = (
             0.0 if positive_pairs <= 0 else float(negative_pairs / positive_pairs)
         )
+
+        weak_primary_positive_mask = (
+            weak_primary_mask & pseudo_mask & (labels > 0.0)
+        )
+        weak_primary_negative_mask = (
+            weak_primary_mask & (~pseudo_mask) & (labels <= 0.0)
+        )
+        weak_primary_positive_counts: list[int] = []
+        weak_primary_query_hit_counts: list[int] = []
+        weak_primary_eligible_counts: list[int] = []
+        weak_primary_intersection_counts: list[int] = []
+        assignment_indptr = [0]
+        assignment_go: list[int] = []
+        for protein in weak_primary_anchor_proteins.tolist():
+            column = candidate_position.get(int(protein))
+            assigned = self._weak_primary_anchor_assignments_current.get(
+                int(protein), []
+            )
+            assignment_go.extend(int(value) for value in assigned)
+            assignment_indptr.append(len(assignment_go))
+            all_pseudo = self._weak_primary_anchor_pseudo_go_current.get(int(protein), set())
+            weak_primary_query_hit_counts.append(sum(int(g) in all_pseudo for g in query_go))
+            weak_primary_eligible_counts.append(
+                int(
+                    self._weak_primary_anchor_eligible_go_count_current.get(
+                        int(protein), 0
+                    )
+                )
+            )
+            weak_primary_intersection_counts.append(
+                int(
+                    self._weak_primary_anchor_intersection_go_count_current.get(
+                        int(protein), 0
+                    )
+                )
+            )
+            weak_primary_positive_counts.append(
+                0
+                if column is None
+                else int(np.count_nonzero(weak_primary_positive_mask[:, column]))
+            )
+        weak_primary_multi_positive = int(
+            np.count_nonzero(
+                np.asarray(weak_primary_positive_counts, dtype=np.int64) >= 2
+            )
+        )
+
+        evidence_present = candidate_evidence[..., 2] > 0
+        weak_hard_counts, weak_background_counts = [], []
+        for protein in weak_primary_anchor_proteins.tolist():
+            column = candidate_position.get(int(protein))
+            attrs = self._weak_primary_anchor_candidate_attr_current.get(int(protein), {})
+            membership = np.asarray([int(g) in attrs for g in query_go], dtype=bool)
+            negative = np.zeros(q, dtype=bool) if column is None else weak_primary_negative_mask[:, column]
+            weak_hard_counts.append(int(np.count_nonzero(negative & membership)))
+            weak_background_counts.append(int(np.count_nonzero(negative & ~membership)))
 
         seed_protein = np.concatenate(support_by_query).astype(np.int64)
         seed_query = np.concatenate(
@@ -1759,9 +2456,26 @@ class GOQueryEpisodeSampler:
             mask=mask,
             confidence=confidence,
             pseudo_mask=pseudo_mask,
+            weak_primary_mask=weak_primary_mask,
             supervision_weight=supervision_weight,
             metadata={
                 "query_go_idx": query_go.astype(np.int64).tolist(),
+                "candidate_evidence_scope": cfg.candidate_evidence_scope,
+                "decoded_cross_pseudo_pairs": decoded_cross_pseudo_pairs,
+                "decoded_pairs": int(q * c),
+                "supervised_pair_fraction": float(np.mean(mask)),
+                "candidate_evidence_pairs": int(np.count_nonzero(evidence_present)),
+                "candidate_evidence_positive_pairs": int(np.count_nonzero(evidence_present & positive_mask)),
+                "candidate_evidence_negative_pairs": int(np.count_nonzero(evidence_present & negative_mask)),
+                "candidate_evidence_unknown_pairs": int(np.count_nonzero(evidence_present & ~mask)),
+                "weak_primary_hard_query_requested": int(cfg.weak_primary_hard_query_slots_per_episode),
+                "weak_primary_hard_query_realized": len(self._weak_primary_hard_query_current),
+                "weak_primary_hard_query_go_idx": np.asarray(self._weak_primary_hard_query_current, dtype=np.int64),
+                "weak_primary_hard_go_per_anchor_mean": float(np.mean(weak_hard_counts)) if weak_hard_counts else 0.0,
+                "weak_primary_hard_go_per_anchor_min": min(weak_hard_counts, default=0),
+                "weak_primary_hard_quota_met_rate": float(np.mean(np.asarray(weak_hard_counts) >= cfg.weak_primary_hard_negative_go_per_protein)) if weak_hard_counts else 0.0,
+                "weak_primary_total_hard_pairs": sum(weak_hard_counts),
+                "weak_primary_total_background_pairs": sum(weak_background_counts),
                 # Keep exact per-query train-gold frequencies so epoch-level
                 # diagnostics can report unique bucket coverage instead of an
                 # average that rounds singleton exposure to zero.
@@ -1776,7 +2490,61 @@ class GOQueryEpisodeSampler:
                 "weak_focus_anchor_new_count": int(weak_focus_anchor_new),
                 "weak_primary_anchor_count": int(weak_primary_anchor_count),
                 "weak_primary_anchor_retained": int(
-                    retained_weak_primary_anchors
+                    len(retained_weak_primary_proteins)
+                ),
+                "weak_primary_positive_pairs_requested": int(
+                    self._weak_primary_positive_pairs_requested_current
+                ),
+                "weak_primary_positive_pairs_retained": int(
+                    np.count_nonzero(weak_primary_positive_mask)
+                ),
+                "weak_primary_negative_pairs_retained": int(
+                    np.count_nonzero(weak_primary_negative_mask)
+                ),
+                "weak_primary_hard_pairs_retained": int(
+                    retained_weak_primary_hard_pairs
+                ),
+                "weak_primary_background_pairs_retained": int(
+                    retained_weak_primary_background_pairs
+                ),
+                "weak_primary_multi_positive_anchor_count": int(
+                    weak_primary_multi_positive
+                ),
+                "weak_primary_positive_go_per_anchor_mean": float(
+                    0.0
+                    if not weak_primary_positive_counts
+                    else np.mean(weak_primary_positive_counts)
+                ),
+                "weak_primary_positive_go_per_anchor_min": int(
+                    0
+                    if not weak_primary_positive_counts
+                    else np.min(weak_primary_positive_counts)
+                ),
+                "weak_primary_query_recall_mean": float(
+                    0.0
+                    if not weak_primary_eligible_counts
+                    else np.mean(
+                        np.divide(
+                            np.asarray(weak_primary_query_hit_counts, np.float64),
+                            np.maximum(
+                                1,
+                                np.asarray(weak_primary_eligible_counts, np.float64),
+                            ),
+                        )
+                    )
+                ),
+                "weak_primary_loss_recall_mean": float(
+                    0.0
+                    if not weak_primary_eligible_counts
+                    else np.mean(
+                        np.divide(
+                            np.asarray(weak_primary_positive_counts, np.float64),
+                            np.maximum(
+                                1,
+                                np.asarray(weak_primary_eligible_counts, np.float64),
+                            ),
+                        )
+                    )
                 ),
                 "weak_primary_requested_count": int(
                     self._weak_primary_requested_current
@@ -1850,6 +2618,24 @@ class GOQueryEpisodeSampler:
                 "weak_primary_anchor_protein_idx": (
                     weak_primary_anchor_proteins
                 ),
+                "weak_primary_anchor_assignment_indptr": np.asarray(
+                    assignment_indptr, dtype=np.int64
+                ),
+                "weak_primary_anchor_assignment_go_idx": np.asarray(
+                    assignment_go, dtype=np.int64
+                ),
+                "weak_primary_anchor_eligible_go_count": np.asarray(
+                    weak_primary_eligible_counts, dtype=np.int64
+                ),
+                "weak_primary_anchor_intersection_go_count": np.asarray(
+                    weak_primary_intersection_counts, dtype=np.int64
+                ),
+                "weak_primary_anchor_query_hit_count": np.asarray(
+                    weak_primary_query_hit_counts, dtype=np.int64
+                ),
+                "weak_primary_anchor_loss_positive_count": np.asarray(
+                    weak_primary_positive_counts, dtype=np.int64
+                ),
                 "candidate_union_before_cap": int(candidate_union_before_cap),
                 "candidate_union_after_cap": int(candidate_union.size),
                 "candidate_capacity_required_upper_bound": int(
@@ -1874,7 +2660,7 @@ class GOQueryEpisodeSampler:
                 "gold_pairs_retained": int(retained_gold_pairs),
                 "hard_pairs_requested": int(sum(values.size for values in per_query_hard)),
                 "hard_pairs_retained": int(retained_hard_pairs),
-                "pseudo_pairs_requested": int(sum(values.size for values in per_query_pseudo)),
+                "pseudo_pairs_requested": int(sum(values.size for values in per_query_pseudo) + decoded_cross_pseudo_pairs),
                 "pseudo_pairs_retained": int(retained_pseudo_pairs),
                 "background_pairs_requested": int(
                     query_go.size * int(cfg.background_unlabelled_per_query)

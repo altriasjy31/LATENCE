@@ -299,6 +299,7 @@ class NBSGatedDeltaAttnRes(nn.Module):
             ("mask", condition.mask),
             ("confidence", condition.confidence),
             ("pseudo_mask", condition.pseudo_mask),
+            ("weak_primary_mask", condition.weak_primary_mask),
             ("supervision_weight", condition.supervision_weight),
         ):
             if value is not None and value.shape != logits.shape:
@@ -338,6 +339,7 @@ class NBSGatedDeltaAttnRes(nn.Module):
             mask=condition.mask,
             confidence=condition.confidence,
             pseudo_mask=condition.pseudo_mask,
+            weak_primary_mask=condition.weak_primary_mask,
             supervision_weight=condition.supervision_weight,
             auxiliary=auxiliary,
         )
