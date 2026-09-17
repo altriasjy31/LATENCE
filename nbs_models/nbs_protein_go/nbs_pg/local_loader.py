@@ -276,7 +276,15 @@ def _validate_supervision_provenance(
     if list(pseudo_targets.get("edge_attr_columns", [])) != ["modelout_probability"]:
         raise ValueError("weak pseudo edge payload must be modelout_probability")
     if not bool(weak.get("use_probability_as_soft_target", True)):
-        raise ValueError("NBS weak supervision requires modelout probability as a soft target")
+        # v083 retains the same audited >0.5 CSR membership/provenance, but its
+        # dedicated FullTaskDataV083 consumer converts selected targets to one.
+        # Older loaders still require probability-valued weak targets.
+        binary_v083 = (
+            str(config.get("stage", {}).get("name", "")).startswith("nbs_v083_")
+            and config.get("full_task", {}).get("weak_target_mode") == "binary_membership"
+        )
+        if not binary_v083:
+            raise ValueError("NBS weak supervision requires modelout probability as a soft target outside explicit v083 binary_membership mode")
     if str(weak.get("negative_policy", "none")) != "none":
         raise ValueError("NBS weak supervision contract requires negative_policy='none'")
     if not bool(weak.get("forbid_exp_train_prop_annotations", True)):
