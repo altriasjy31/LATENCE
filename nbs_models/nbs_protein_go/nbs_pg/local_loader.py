@@ -280,11 +280,11 @@ def _validate_supervision_provenance(
         # dedicated FullTaskDataV083 consumer converts selected targets to one.
         # Older loaders still require probability-valued weak targets.
         binary_v083 = (
-            str(config.get("stage", {}).get("name", "")).startswith("nbs_v083_")
+            str(config.get("stage", {}).get("name", "")).startswith(("nbs_v083_", "nbs_v084_"))
             and config.get("full_task", {}).get("weak_target_mode") == "binary_membership"
         )
         if not binary_v083:
-            raise ValueError("NBS weak supervision requires modelout probability as a soft target outside explicit v083 binary_membership mode")
+            raise ValueError("NBS weak supervision requires modelout probability as a soft target outside explicit v083/v084 binary_membership mode")
     if str(weak.get("negative_policy", "none")) != "none":
         raise ValueError("NBS weak supervision contract requires negative_policy='none'")
     if not bool(weak.get("forbid_exp_train_prop_annotations", True)):
