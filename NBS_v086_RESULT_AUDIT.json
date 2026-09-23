@@ -1,0 +1,1291 @@
+{
+  "scope": "uploaded 12 v085 artifacts; read-only research analysis",
+  "metrics": {
+    "schedule": {
+      "600": {
+        "G": {
+          "standard_protein_fmax": 58.129510307819146,
+          "standard_micro_pr_auc": 51.95335380717411,
+          "standard_micro_ap": 51.9465462036933,
+          "standard_protein_fmax_threshold": 0.957,
+          "standard_protein_precision_at_fmax": 66.77068904094342,
+          "standard_protein_recall_at_fmax": 51.46865568287129,
+          "standard_micro_fmax_exact": 56.858947368421056
+        },
+        "G_top_k": {
+          "10": {
+            "precision_at_k": {
+              "mean": 69.88333333333334,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 30.729364183287128,
+              "num_proteins": 1800
+            }
+          },
+          "50": {
+            "precision_at_k": {
+              "mean": 36.50666666666667,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 61.572794624004445,
+              "num_proteins": 1800
+            }
+          },
+          "100": {
+            "precision_at_k": {
+              "mean": 22.66277777777778,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 70.43492355883366,
+              "num_proteins": 1800
+            }
+          }
+        },
+        "G_minus_B": {
+          "standard_protein_fmax": 0.40636094334671924,
+          "standard_protein_precision_at_fmax": -4.409827336852132,
+          "standard_protein_recall_at_fmax": 2.923448571194939,
+          "standard_protein_fmax_grid_0p01": 0.4000845604802663,
+          "standard_micro_ap": 2.4957583838045707,
+          "standard_micro_pr_auc": 1.3314719412529428,
+          "standard_micro_fmax_exact": 1.2188219178757294
+        },
+        "G_minus_E": {
+          "standard_protein_fmax": -13.560709436883357,
+          "standard_protein_precision_at_fmax": -12.03117177172858,
+          "standard_protein_recall_at_fmax": -14.287280162933797,
+          "standard_protein_fmax_grid_0p01": -13.581694097941366,
+          "standard_micro_ap": -15.608143756785054,
+          "standard_micro_pr_auc": -15.854663082782906,
+          "standard_micro_fmax_exact": -12.947253503412426
+        },
+        "G_minus_M": {
+          "standard_protein_fmax": -13.515311936516753,
+          "standard_protein_precision_at_fmax": -11.961395360537878,
+          "standard_protein_recall_at_fmax": -14.259486257906062,
+          "standard_protein_fmax_grid_0p01": -13.53660660482214,
+          "standard_micro_ap": -16.844190047333285,
+          "standard_micro_pr_auc": -16.85824123061539,
+          "standard_micro_fmax_exact": -12.92246194787198
+        },
+        "source_filename": "v085_schedule_eval_step600_nbs_w2s_comparison.json"
+      },
+      "2000": {
+        "G": {
+          "standard_protein_fmax": 57.724437042069354,
+          "standard_micro_pr_auc": 51.60583384949133,
+          "standard_micro_ap": 51.59966501071995,
+          "standard_protein_fmax_threshold": 0.957,
+          "standard_protein_precision_at_fmax": 67.25836861885915,
+          "standard_protein_recall_at_fmax": 50.55782226863946,
+          "standard_micro_fmax_exact": 56.516046981372035
+        },
+        "G_top_k": {
+          "10": {
+            "precision_at_k": {
+              "mean": 69.64999999999999,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 30.66117468475521,
+              "num_proteins": 1800
+            }
+          },
+          "50": {
+            "precision_at_k": {
+              "mean": 36.370000000000005,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 61.4340876287573,
+              "num_proteins": 1800
+            }
+          },
+          "100": {
+            "precision_at_k": {
+              "mean": 22.607777777777777,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 70.33082686124287,
+              "num_proteins": 1800
+            }
+          }
+        },
+        "G_minus_B": {
+          "standard_protein_fmax": 0.0012876775969274945,
+          "standard_protein_precision_at_fmax": -3.922147758936404,
+          "standard_protein_recall_at_fmax": 2.0126151569631148,
+          "standard_protein_fmax_grid_0p01": 0.011440408737549035,
+          "standard_micro_ap": 2.1488771908312216,
+          "standard_micro_pr_auc": 0.9839519835701651,
+          "standard_micro_fmax_exact": 0.8759215308267088
+        },
+        "G_minus_E": {
+          "standard_protein_fmax": -13.965782702633149,
+          "standard_protein_precision_at_fmax": -11.543492193812853,
+          "standard_protein_recall_at_fmax": -15.198113577165621,
+          "standard_protein_fmax_grid_0p01": -13.970338249684083,
+          "standard_micro_ap": -15.955024949758403,
+          "standard_micro_pr_auc": -16.202183040465684,
+          "standard_micro_fmax_exact": -13.290153890461447
+        },
+        "G_minus_M": {
+          "standard_protein_fmax": -13.920385202266544,
+          "standard_protein_precision_at_fmax": -11.47371578262215,
+          "standard_protein_recall_at_fmax": -15.170319672137886,
+          "standard_protein_fmax_grid_0p01": -13.925250756564857,
+          "standard_micro_ap": -17.191071240306634,
+          "standard_micro_pr_auc": -17.20576118829817,
+          "standard_micro_fmax_exact": -13.265362334921
+        },
+        "source_filename": "v085_schedule_eval_step2000_nbs_w2s_comparison.json"
+      },
+      "delta_2000_minus_600": {
+        "standard_protein_fmax": -0.40507326574979174,
+        "standard_micro_pr_auc": -0.34751995768277766,
+        "standard_micro_ap": -0.3468811929733491,
+        "standard_protein_fmax_threshold": 0.0,
+        "standard_protein_precision_at_fmax": 0.4876795779157277,
+        "standard_protein_recall_at_fmax": -0.9108334142318242,
+        "standard_micro_fmax_exact": -0.3429003870490206
+      }
+    },
+    "lowlr": {
+      "600": {
+        "G": {
+          "standard_protein_fmax": 57.795986112057676,
+          "standard_micro_pr_auc": 51.68823813610721,
+          "standard_micro_ap": 51.68536401750661,
+          "standard_protein_fmax_threshold": 0.934,
+          "standard_protein_precision_at_fmax": 67.02818404533643,
+          "standard_protein_recall_at_fmax": 50.79911605067804,
+          "standard_micro_fmax_exact": 56.273736013742514
+        },
+        "G_top_k": {
+          "10": {
+            "precision_at_k": {
+              "mean": 69.16111111111111,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 30.427369151474466,
+              "num_proteins": 1800
+            }
+          },
+          "50": {
+            "precision_at_k": {
+              "mean": 36.388888888888886,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 61.17556211022518,
+              "num_proteins": 1800
+            }
+          },
+          "100": {
+            "precision_at_k": {
+              "mean": 22.689444444444444,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 70.29843922354738,
+              "num_proteins": 1800
+            }
+          }
+        },
+        "G_minus_B": {
+          "standard_protein_fmax": 0.07283674758524938,
+          "standard_protein_precision_at_fmax": -4.152332332459125,
+          "standard_protein_recall_at_fmax": 2.2539089390016898,
+          "standard_protein_fmax_grid_0p01": 0.1035887470683079,
+          "standard_micro_ap": 2.2345761976178764,
+          "standard_micro_pr_auc": 1.0663562701860414,
+          "standard_micro_fmax_exact": 0.6336105631971876
+        },
+        "G_minus_E": {
+          "standard_protein_fmax": -13.894233632644827,
+          "standard_protein_precision_at_fmax": -11.773676767335573,
+          "standard_protein_recall_at_fmax": -14.956819795127046,
+          "standard_protein_fmax_grid_0p01": -13.878189911353324,
+          "standard_micro_ap": -15.869325942971749,
+          "standard_micro_pr_auc": -16.119778753849808,
+          "standard_micro_fmax_exact": -13.532464858090968
+        },
+        "G_minus_M": {
+          "standard_protein_fmax": -13.848836132278223,
+          "standard_protein_precision_at_fmax": -11.703900356144871,
+          "standard_protein_recall_at_fmax": -14.929025890099311,
+          "standard_protein_fmax_grid_0p01": -13.833102418234098,
+          "standard_micro_ap": -17.10537223351998,
+          "standard_micro_pr_auc": -17.123356901682293,
+          "standard_micro_fmax_exact": -13.507673302550522
+        },
+        "source_filename": "v085_lowlr_eval_step600_nbs_w2s_comparison.json"
+      },
+      "2000": {
+        "G": {
+          "standard_protein_fmax": 57.97576645376971,
+          "standard_micro_pr_auc": 52.08022732689223,
+          "standard_micro_ap": 52.07628916795212,
+          "standard_protein_fmax_threshold": 0.948,
+          "standard_protein_precision_at_fmax": 66.55194155482688,
+          "standard_protein_recall_at_fmax": 51.357600754196234,
+          "standard_micro_fmax_exact": 56.69719626168225
+        },
+        "G_top_k": {
+          "10": {
+            "precision_at_k": {
+              "mean": 69.7388888888889,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 30.68595567245508,
+              "num_proteins": 1800
+            }
+          },
+          "50": {
+            "precision_at_k": {
+              "mean": 36.507777777777775,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 61.492947730735345,
+              "num_proteins": 1800
+            }
+          },
+          "100": {
+            "precision_at_k": {
+              "mean": 22.690555555555555,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 70.48499914273702,
+              "num_proteins": 1800
+            }
+          }
+        },
+        "G_minus_B": {
+          "standard_protein_fmax": 0.25261708929728144,
+          "standard_protein_precision_at_fmax": -4.628574822968673,
+          "standard_protein_recall_at_fmax": 2.8123936425198863,
+          "standard_protein_fmax_grid_0p01": 0.26268785846232845,
+          "standard_micro_ap": 2.6255013480633878,
+          "standard_micro_pr_auc": 1.45834546097106,
+          "standard_micro_fmax_exact": 1.0570708111369242
+        },
+        "G_minus_E": {
+          "standard_protein_fmax": -13.714453290932795,
+          "standard_protein_precision_at_fmax": -12.249919257845121,
+          "standard_protein_recall_at_fmax": -14.39833509160885,
+          "standard_protein_fmax_grid_0p01": -13.719090799959304,
+          "standard_micro_ap": -15.478400792526237,
+          "standard_micro_pr_auc": -15.727789563064789,
+          "standard_micro_fmax_exact": -13.109004610151231
+        },
+        "G_minus_M": {
+          "standard_protein_fmax": -13.66905579056619,
+          "standard_protein_precision_at_fmax": -12.18014284665442,
+          "standard_protein_recall_at_fmax": -14.370541186581114,
+          "standard_protein_fmax_grid_0p01": -13.674003306840078,
+          "standard_micro_ap": -16.714447083074468,
+          "standard_micro_pr_auc": -16.731367710897274,
+          "standard_micro_fmax_exact": -13.084213054610785
+        },
+        "source_filename": "v085_lowlr_eval_step2000_nbs_w2s_comparison.json"
+      },
+      "delta_2000_minus_600": {
+        "standard_protein_fmax": 0.17978034171203205,
+        "standard_micro_pr_auc": 0.3919891907850186,
+        "standard_micro_ap": 0.39092515044551135,
+        "standard_protein_fmax_threshold": 0.013999999999999901,
+        "standard_protein_precision_at_fmax": -0.4762424905095486,
+        "standard_protein_recall_at_fmax": 0.5584847035181966,
+        "standard_micro_fmax_exact": 0.4234602479397367
+      }
+    },
+    "aligned": {
+      "600": {
+        "G": {
+          "standard_protein_fmax": 57.81740033186943,
+          "standard_micro_pr_auc": 51.65389442043218,
+          "standard_micro_ap": 51.65048906191119,
+          "standard_protein_fmax_threshold": 0.937,
+          "standard_protein_precision_at_fmax": 67.64992830405161,
+          "standard_protein_recall_at_fmax": 50.48036904293834,
+          "standard_micro_fmax_exact": 56.24588201449531
+        },
+        "G_top_k": {
+          "10": {
+            "precision_at_k": {
+              "mean": 69.22777777777777,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 30.449167495404193,
+              "num_proteins": 1800
+            }
+          },
+          "50": {
+            "precision_at_k": {
+              "mean": 36.40888888888889,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 61.22285787159315,
+              "num_proteins": 1800
+            }
+          },
+          "100": {
+            "precision_at_k": {
+              "mean": 22.72777777777778,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 70.40883614233083,
+              "num_proteins": 1800
+            }
+          }
+        },
+        "G_minus_B": {
+          "standard_protein_fmax": 0.09425096739700223,
+          "standard_protein_precision_at_fmax": -3.5305880737439423,
+          "standard_protein_recall_at_fmax": 1.9351619312619945,
+          "standard_protein_fmax_grid_0p01": 0.10170432611093361,
+          "standard_micro_ap": 2.1997012420224564,
+          "standard_micro_pr_auc": 1.032012554511013,
+          "standard_micro_fmax_exact": 0.6057565639499813
+        },
+        "G_minus_E": {
+          "standard_protein_fmax": -13.872819412833074,
+          "standard_protein_precision_at_fmax": -11.15193250862039,
+          "standard_protein_recall_at_fmax": -15.275566802866742,
+          "standard_protein_fmax_grid_0p01": -13.880074332310699,
+          "standard_micro_ap": -15.904200898567169,
+          "standard_micro_pr_auc": -16.154122469524836,
+          "standard_micro_fmax_exact": -13.560318857338174
+        },
+        "G_minus_M": {
+          "standard_protein_fmax": -13.82742191246647,
+          "standard_protein_precision_at_fmax": -11.082156097429689,
+          "standard_protein_recall_at_fmax": -15.247772897839006,
+          "standard_protein_fmax_grid_0p01": -13.834986839191473,
+          "standard_micro_ap": -17.1402471891154,
+          "standard_micro_pr_auc": -17.15770061735732,
+          "standard_micro_fmax_exact": -13.535527301797728
+        },
+        "source_filename": "v085_aligned_eval_step600_nbs_w2s_comparison.json"
+      },
+      "2000": {
+        "G": {
+          "standard_protein_fmax": 57.88113196486876,
+          "standard_micro_pr_auc": 51.88828814391867,
+          "standard_micro_ap": 51.88463131324363,
+          "standard_protein_fmax_threshold": 0.945,
+          "standard_protein_precision_at_fmax": 66.12001392717987,
+          "standard_protein_recall_at_fmax": 51.46796769717684,
+          "standard_micro_fmax_exact": 56.64287231390076
+        },
+        "G_top_k": {
+          "10": {
+            "precision_at_k": {
+              "mean": 69.53888888888889,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 30.601465775463684,
+              "num_proteins": 1800
+            }
+          },
+          "50": {
+            "precision_at_k": {
+              "mean": 36.50666666666667,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 61.53126381256647,
+              "num_proteins": 1800
+            }
+          },
+          "100": {
+            "precision_at_k": {
+              "mean": 22.68111111111111,
+              "num_proteins": 1800
+            },
+            "recall_at_k": {
+              "mean": 70.50953203682216,
+              "num_proteins": 1800
+            }
+          }
+        },
+        "G_minus_B": {
+          "standard_protein_fmax": 0.1579826003963305,
+          "standard_protein_precision_at_fmax": -5.060502450615687,
+          "standard_protein_recall_at_fmax": 2.922760585500491,
+          "standard_protein_fmax_grid_0p01": 0.16366290484616286,
+          "standard_micro_ap": 2.4338434933548996,
+          "standard_micro_pr_auc": 1.266406277997504,
+          "standard_micro_fmax_exact": 1.0027468633554335
+        },
+        "G_minus_E": {
+          "standard_protein_fmax": -13.809087779833746,
+          "standard_protein_precision_at_fmax": -12.681846885492135,
+          "standard_protein_recall_at_fmax": -14.287968148628245,
+          "standard_protein_fmax_grid_0p01": -13.81811575357547,
+          "standard_micro_ap": -15.670058647234725,
+          "standard_micro_pr_auc": -15.919728746038345,
+          "standard_micro_fmax_exact": -13.163328557932722
+        },
+        "G_minus_M": {
+          "standard_protein_fmax": -13.763690279467141,
+          "standard_protein_precision_at_fmax": -12.612070474301433,
+          "standard_protein_recall_at_fmax": -14.26017424360051,
+          "standard_protein_fmax_grid_0p01": -13.773028260456243,
+          "standard_micro_ap": -16.906104937782956,
+          "standard_micro_pr_auc": -16.92330689387083,
+          "standard_micro_fmax_exact": -13.138537002392276
+        },
+        "source_filename": "v085_aligned_eval_step2000_nbs_w2s_comparison.json"
+      },
+      "delta_2000_minus_600": {
+        "standard_protein_fmax": 0.06373163299932827,
+        "standard_micro_pr_auc": 0.234393723486491,
+        "standard_micro_ap": 0.23414225133244315,
+        "standard_protein_fmax_threshold": 0.007999999999999896,
+        "standard_protein_precision_at_fmax": -1.5299143768717443,
+        "standard_protein_recall_at_fmax": 0.9875986542384965,
+        "standard_micro_fmax_exact": 0.39699029940545216
+      }
+    }
+  },
+  "references": {
+    "E": {
+      "standard_protein_fmax": 71.6902197447025,
+      "standard_micro_pr_auc": 67.80801688995702,
+      "standard_micro_ap": 67.55468996047836,
+      "standard_protein_fmax_threshold": 0.398,
+      "standard_protein_precision_at_fmax": 78.801860812672,
+      "standard_protein_recall_at_fmax": 65.75593584580508,
+      "standard_micro_fmax_exact": 69.80620087183348
+    },
+    "M": {
+      "standard_protein_fmax": 71.6448222443359,
+      "standard_micro_pr_auc": 68.8115950377895,
+      "standard_micro_ap": 68.79073625102659,
+      "standard_protein_fmax_threshold": 0.413,
+      "standard_protein_precision_at_fmax": 78.7320844014813,
+      "standard_protein_recall_at_fmax": 65.72814194077735,
+      "standard_micro_fmax_exact": 69.78140931629304
+    },
+    "B": {
+      "standard_protein_fmax": 57.72314936447243,
+      "standard_micro_pr_auc": 50.62188186592117,
+      "standard_micro_ap": 49.45078781988873,
+      "standard_protein_fmax_threshold": 0.901,
+      "standard_protein_precision_at_fmax": 71.18051637779556,
+      "standard_protein_recall_at_fmax": 48.54520711167635,
+      "standard_micro_fmax_exact": 55.64012545054533
+    }
+  },
+  "config_differences": {
+    "schedule_vs_lowlr": {
+      "full_task.experiment_preset": [
+        "schedule",
+        "lowlr"
+      ],
+      "full_task.learning_rate": [
+        0.0003,
+        0.0001
+      ],
+      "full_task.scheduler.min_lr": [
+        3e-05,
+        1e-05
+      ],
+      "runtime.scheduler_contract.max_lr": [
+        0.0003,
+        0.0001
+      ],
+      "runtime.scheduler_contract.min_lr": [
+        3e-05,
+        1e-05
+      ]
+    },
+    "lowlr_vs_aligned": {
+      "full_task.experiment_preset": [
+        "lowlr",
+        "aligned"
+      ],
+      "full_task.sampler.native_dropout": [
+        0.25,
+        1.0
+      ]
+    }
+  },
+  "paired_metric_differences": {
+    "lowlr_minus_schedule": {
+      "600": {
+        "standard_protein_fmax": -0.33352419576146985,
+        "standard_micro_pr_auc": -0.26511567106690137,
+        "standard_micro_ap": -0.2611821861866943,
+        "standard_protein_fmax_threshold": -0.02299999999999991,
+        "standard_protein_precision_at_fmax": 0.2574950043930073,
+        "standard_protein_recall_at_fmax": -0.6695396321932492,
+        "standard_micro_fmax_exact": -0.5852113546785418
+      },
+      "2000": {
+        "standard_protein_fmax": 0.25132941170035394,
+        "standard_micro_pr_auc": 0.4743934774008949,
+        "standard_micro_ap": 0.4766241572321661,
+        "standard_protein_fmax_threshold": -0.009000000000000008,
+        "standard_protein_precision_at_fmax": -0.706427064032269,
+        "standard_protein_recall_at_fmax": 0.7997784855567716,
+        "standard_micro_fmax_exact": 0.1811492803102155
+      }
+    },
+    "aligned_minus_lowlr": {
+      "600": {
+        "standard_protein_fmax": 0.021414219811752844,
+        "standard_micro_pr_auc": -0.03434371567502836,
+        "standard_micro_ap": -0.034874955595419976,
+        "standard_protein_fmax_threshold": 0.0030000000000000027,
+        "standard_protein_precision_at_fmax": 0.6217442587151822,
+        "standard_protein_recall_at_fmax": -0.3187470077396952,
+        "standard_micro_fmax_exact": -0.027853999247206218
+      },
+      "2000": {
+        "standard_protein_fmax": -0.09463448890095094,
+        "standard_micro_pr_auc": -0.19193918297355594,
+        "standard_micro_ap": -0.19165785470848817,
+        "standard_protein_fmax_threshold": -0.0030000000000000027,
+        "standard_protein_precision_at_fmax": -0.4319276276470134,
+        "standard_protein_recall_at_fmax": 0.11036694298060468,
+        "standard_micro_fmax_exact": -0.054323947781490745
+      }
+    }
+  },
+  "provenance": {
+    "reference_provenance_all_identical": true,
+    "metadata_provenance_all_identical": true,
+    "standardized_metric_contract_all_identical": true,
+    "stage1_reference_generation_all_identical": true,
+    "prediction_implementation_all_identical": true,
+    "all_full_and_checkpoint_verified": true
+  },
+  "historical_v084_fixed_comparison": {
+    "schedule": {
+      "600": {
+        "standard_protein_fmax": 0.01947612844303137,
+        "standard_micro_pr_auc": 0.022594144635093016,
+        "standard_micro_ap": 0.022509768796943774,
+        "standard_protein_fmax_threshold": 0.0020000000000000018,
+        "standard_protein_precision_at_fmax": 0.2799366991551864,
+        "standard_protein_recall_at_fmax": -0.13684725668944253,
+        "standard_micro_fmax_exact": 0.018221184629176435
+      },
+      "2000": {
+        "standard_protein_fmax": -0.05317814883033378,
+        "standard_micro_pr_auc": -0.013276033196838455,
+        "standard_micro_ap": -0.011302833211509267,
+        "standard_protein_fmax_threshold": -0.0030000000000000027,
+        "standard_protein_precision_at_fmax": 0.10653073488384734,
+        "standard_protein_recall_at_fmax": -0.14220095698473045,
+        "standard_micro_fmax_exact": -0.042847496627850035
+      }
+    },
+    "lowlr": {
+      "600": {
+        "standard_protein_fmax": -0.3140480673184385,
+        "standard_micro_pr_auc": -0.24252152643180835,
+        "standard_micro_ap": -0.23867241738975054,
+        "standard_protein_fmax_threshold": -0.020999999999999908,
+        "standard_protein_precision_at_fmax": 0.5374317035481937,
+        "standard_protein_recall_at_fmax": -0.8063868888826917,
+        "standard_micro_fmax_exact": -0.5669901700493654
+      },
+      "2000": {
+        "standard_protein_fmax": 0.19815126287002016,
+        "standard_micro_pr_auc": 0.4611174442040564,
+        "standard_micro_ap": 0.46532132402065685,
+        "standard_protein_fmax_threshold": -0.01200000000000001,
+        "standard_protein_precision_at_fmax": -0.5998963291484216,
+        "standard_protein_recall_at_fmax": 0.6575775285720411,
+        "standard_micro_fmax_exact": 0.13830178368236545
+      }
+    },
+    "aligned": {
+      "600": {
+        "standard_protein_fmax": -0.29263384750668564,
+        "standard_micro_pr_auc": -0.2768652421068367,
+        "standard_micro_ap": -0.2735473729851705,
+        "standard_protein_fmax_threshold": -0.017999999999999905,
+        "standard_protein_precision_at_fmax": 1.159175962263376,
+        "standard_protein_recall_at_fmax": -1.125133896622387,
+        "standard_micro_fmax_exact": -0.5948441692965716
+      },
+      "2000": {
+        "standard_protein_fmax": 0.10351677396906922,
+        "standard_micro_pr_auc": 0.2691782612305005,
+        "standard_micro_ap": 0.2736634693121687,
+        "standard_protein_fmax_threshold": -0.015000000000000013,
+        "standard_protein_precision_at_fmax": -1.031823956795435,
+        "standard_protein_recall_at_fmax": 0.7679444715526458,
+        "standard_micro_fmax_exact": 0.08397783590087471
+      }
+    }
+  },
+  "interpretation": {
+    "confirmed": [
+      "Same prescribed lowlr/aligned runs improved both standard metrics from step600 to2000, while schedule regressed.",
+      "All final G exceed B in PR-AUC; schedule Fmax is effectively equal B, lowlr/aligned gains small.",
+      "Aligned at step2000 is below lowlr; 100% first-hop alignment has not demonstrated improved performance.",
+      "Very few core known positives qualify as difficult under frozen B<0.5; new GNN cannot create missing corrective gold supervision."
+    ],
+    "not_established": [
+      "No significance or paired standard-metric bootstrap available.",
+      "No v085 graph ablations or retrained graph-off baseline provided.",
+      "No evidence G exceeds E/M; gaps remain about14 Fmax and16 PR-AUC points.",
+      "No causal claim that whole-graph coverage explains earlier regressions.",
+      "No independent development contract; selecting preset or checkpoint from ind_test is not permitted."
+    ],
+    "recommended_constraints": [
+      "Let running dynamic complete precommitted budget; compare to aligned because configs share native_dropout=1 and lowlr.",
+      "Encoder-only controlled comparison first: preserve decoder, losses, sampler, evidence masking, binary pseudo labels, fixed scheduler horizon, and no E/M probability path.",
+      "Do not change architecture, loss, fanout, label injection and native dropout in one experiment.",
+      "Use honest withheld development data for model selection; core holdout already seen by Stage1 is monitor only.",
+      "Do not automatically extend all old runs; if a completion experiment is justified, prospectively pair fixed budgets and avoid test-driven winner continuation.",
+      "Record per-role difficult-gold losses, non-candidate positives, support/PU conflicts, and stream-specific evidence effects before assuming width/depth is the main bottleneck."
+    ]
+  },
+  "status": "observed_uploaded_results; no new server performance claim",
+  "inputs_sha256": {
+    "v085_aligned_eval_step2000_nbs_w2s_comparison.json": "e5b707554fde6c8f451baf983420d7859c98367833c0d10596d59d104994003d",
+    "v085_aligned_eval_step2000_resolved_config.json": "61a9a6009f0a4153d2c680fb71f14bae44a672e728da6a615ec6d4676f45ea7b",
+    "v085_aligned_eval_step2000_training_history.json": "532fc97dc1e947c2837cb274124ed3661f42c9ef7d0ce3a2d69c01c1af3b0916",
+    "v085_aligned_eval_step600_nbs_w2s_comparison.json": "4697116643e0ace12d30336227ed0c99e62d6c57060f40b5a78ef2b52b400161",
+    "v085_lowlr_eval_step2000_nbs_w2s_comparison.json": "d5a293be10542a804ff2ed273d775aad771931782e54ac84ca3d1820a23cabc0",
+    "v085_lowlr_eval_step2000_resolved_config.json": "41a6f9d8320b41f02298ed12cdb7826590c1925cc983fd093973c1e75fb843ad",
+    "v085_lowlr_eval_step2000_training_history.json": "a6845dbe1645aa654c53a479dfb899b4afd4b9fcefd52cb62ae83a619f724327",
+    "v085_lowlr_eval_step600_nbs_w2s_comparison.json": "f074bfbeef429c0a1d880c6d244f115330f290584f41ff9b3b0622439e2415f9",
+    "v085_schedule_eval_step2000_nbs_w2s_comparison.json": "3bb1525f2a7353260e19580db2607c049157e77282e63f732e566dd86c22ff64",
+    "v085_schedule_eval_step2000_resolved_config.json": "95d2a34a4a25d7c3d21d82cde1e794eb487c62caeed91767d646a9e273f17223",
+    "v085_schedule_eval_step2000_training_history.json": "02758de40da0b6356f586d2d9b2ae98ce717c166d738484cf6e414906cd13cf9",
+    "v085_schedule_eval_step600_nbs_w2s_comparison.json": "c6900e1ace8afa763f781ef5e6aedff9f5b365ef45c690b12d7e7222d636593a"
+  },
+  "training": {
+    "schedule": {
+      "log_entries": 80,
+      "step600": {
+        "absolute_logit_delta": 0.596267819404602,
+        "anchor": 0.0068270135670900345,
+        "anchor_background": 0.0015400033444166183,
+        "anchor_high_base": 0.012462255544960499,
+        "anchor_positive_drift": 0.0056656342931091785,
+        "background_pu": 7.752559031359851e-05,
+        "background_pu_pairs_per_protein": 64.0,
+        "base_objective": 0.14703813195228577,
+        "binary_positive_targets": 1.0,
+        "comparable_objective": 0.09179488569498062,
+        "contrib_anchor": 0.0003413506201468408,
+        "contrib_background_pu": 3.876279606629396e-06,
+        "contrib_graph_aux": 0.0,
+        "contrib_hard_pu": 0.03737854212522507,
+        "contrib_medium_pu": 4.87710494780913e-05,
+        "contrib_positive": 0.04177403077483177,
+        "contrib_ranking": 0.012248309329152107,
+        "core_core_prior_positive_coverage": 0.8977711200714111,
+        "core_gold_positive_pairs": 831.4400024414062,
+        "core_prior_positive_coverage": 0.9463034868240356,
+        "core_proteins": 16.0,
+        "core_query_supported_fraction": 0.011267866007983685,
+        "core_supported_unknown_probability_delta": 0.024866461753845215,
+        "difficult_gold_core_supported_pairs": 0.2199999988079071,
+        "difficult_gold_pairs": 0.3199999928474426,
+        "grad_norm": 0.05735088512301445,
+        "graph_aux": 0.0,
+        "hard_pu": 0.18689270317554474,
+        "hard_pu_active_fraction": 0.9255547523498535,
+        "hard_pu_delta_probability": 0.05513520538806915,
+        "hard_pu_mean_attenuation": 0.9702426195144653,
+        "hard_pu_pairs_per_protein": 64.0,
+        "loss": 0.09179488569498062,
+        "medium_pu": 0.000975420989561826,
+        "medium_pu_pairs_per_protein": 1691.233642578125,
+        "objective_gain": 0.05524323880672455,
+        "objective_gain_excludes_graph_aux": 1.0,
+        "positive": 0.04177403077483177,
+        "positive_coverage": 1.0,
+        "positive_delta_probability": 0.041490599513053894,
+        "positive_pairs_per_protein": 27.738000869750977,
+        "positive_target_entropy": 0.0,
+        "positive_target_kl": 0.04177403077483177,
+        "pp_edge_count": 10565.759765625,
+        "pp_message_norm": 7.026459693908691,
+        "pu_excluded_pairs_per_protein": 0.017750000581145287,
+        "ranking": 0.12248308956623077,
+        "ranking_pu_pairs_per_protein": 32.0,
+        "sampled_cap_dropped": 0.0,
+        "sampled_edges": 10565.759765625,
+        "sampled_fallback_fraction": 0.3052109181880951,
+        "sampled_first_neighbors": 32.0,
+        "sampled_native_dropout_fraction": 0.2459999918937683,
+        "sampled_native_missing_fraction": 0.2459999918937683,
+        "sampled_new_neighbor_fraction": 0.0,
+        "sampled_nodes": 6801.9599609375,
+        "sampled_relation_core_to_weak_edges": 2011.820068359375,
+        "sampled_relation_cosine_edges": 815.3599853515625,
+        "sampled_relation_ppi_edges": 3306.43994140625,
+        "sampled_relation_similar_to_edges": 2262.31982421875,
+        "sampled_relation_weak_to_core_edges": 2169.81982421875,
+        "supervised_gain": 0.05524323880672455,
+        "supervised_pair_fraction": 0.08735068887472153,
+        "supported_unknown_pairs_per_protein": 3.8414998054504395,
+        "weak_core_prior_positive_coverage": 0.9761419296264648,
+        "difficult_gold_pairs_total": 16,
+        "difficult_gold_core_supported_pairs_total": 11,
+        "core_gold_positive_pairs_total": 41572,
+        "core_proteins_total": 800,
+        "difficult_gold_core_coverage": 0.6875,
+        "difficult_gold_per_core_protein": 0.02,
+        "difficult_gold_fraction_of_core_positive": 0.000384874434715674,
+        "count_scope": "window_total_over_all_ranks; *_pairs without _total are per-rank batch means",
+        "step": 600,
+        "seconds_per_step": 2.4798583614826204,
+        "elapsed_seconds": 1499.055085901171,
+        "learning_rate": 0.00028629819304316575,
+        "weak_equivalent_passes": 0.1569839459386536,
+        "core_equivalent_passes": 0.32281928845248503,
+        "weak_completed_passes": 0,
+        "core_completed_passes": 0,
+        "scheduler_horizon_steps": 4000,
+        "optimizer_updates": 600,
+        "full_go_per_protein": 21312,
+        "peak_allocated_gb": 1.5617024
+      },
+      "step2000": {
+        "absolute_logit_delta": 0.8019064664840698,
+        "anchor": 0.01304282434284687,
+        "anchor_background": 0.0021739513613283634,
+        "anchor_high_base": 0.028921961784362793,
+        "anchor_positive_drift": 0.006402113474905491,
+        "background_pu": 7.247655594255775e-05,
+        "background_pu_pairs_per_protein": 64.0,
+        "base_objective": 0.14512421190738678,
+        "binary_positive_targets": 1.0,
+        "comparable_objective": 0.0791071280837059,
+        "contrib_anchor": 0.0006521412287838757,
+        "contrib_background_pu": 3.623827069532126e-06,
+        "contrib_graph_aux": 0.0,
+        "contrib_hard_pu": 0.03270919993519783,
+        "contrib_medium_pu": 4.464048470254056e-05,
+        "contrib_positive": 0.03586369380354881,
+        "contrib_ranking": 0.009833835065364838,
+        "core_core_prior_positive_coverage": 0.8876742124557495,
+        "core_gold_positive_pairs": 882.3199462890625,
+        "core_prior_positive_coverage": 0.9393771886825562,
+        "core_proteins": 16.0,
+        "core_query_supported_fraction": 0.011385779827833176,
+        "core_supported_unknown_probability_delta": 0.014115367084741592,
+        "difficult_gold_core_supported_pairs": 0.5399999618530273,
+        "difficult_gold_pairs": 0.7599999904632568,
+        "grad_norm": 0.11247028410434723,
+        "graph_aux": 0.0,
+        "hard_pu": 0.16354601085186005,
+        "hard_pu_active_fraction": 0.8798593878746033,
+        "hard_pu_delta_probability": 0.012475400231778622,
+        "hard_pu_mean_attenuation": 0.9726728796958923,
+        "hard_pu_pairs_per_protein": 64.0,
+        "loss": 0.0791071280837059,
+        "medium_pu": 0.0008928098250180483,
+        "medium_pu_pairs_per_protein": 1847.185302734375,
+        "objective_gain": 0.06601707637310028,
+        "objective_gain_excludes_graph_aux": 1.0,
+        "positive": 0.03586369380354881,
+        "positive_coverage": 1.0,
+        "positive_delta_probability": 0.04187491536140442,
+        "positive_pairs_per_protein": 28.061248779296875,
+        "positive_target_entropy": 0.0,
+        "positive_target_kl": 0.03586369380354881,
+        "pp_edge_count": 10577.51953125,
+        "pp_message_norm": 7.572327613830566,
+        "pu_excluded_pairs_per_protein": 0.01875000074505806,
+        "ranking": 0.09833836555480957,
+        "ranking_pu_pairs_per_protein": 32.0,
+        "sampled_cap_dropped": 0.0,
+        "sampled_edges": 10577.51953125,
+        "sampled_fallback_fraction": 0.30178123712539673,
+        "sampled_first_neighbors": 32.0,
+        "sampled_native_dropout_fraction": 0.24125000834465027,
+        "sampled_native_missing_fraction": 0.24125000834465027,
+        "sampled_new_neighbor_fraction": 0.0,
+        "sampled_nodes": 6807.8798828125,
+        "sampled_relation_core_to_weak_edges": 2037.419921875,
+        "sampled_relation_cosine_edges": 807.760009765625,
+        "sampled_relation_ppi_edges": 3273.4599609375,
+        "sampled_relation_similar_to_edges": 2272.89990234375,
+        "sampled_relation_weak_to_core_edges": 2185.97998046875,
+        "supervised_gain": 0.06601707637310028,
+        "supervised_pair_fraction": 0.09467846155166626,
+        "supported_unknown_pairs_per_protein": 3.7215003967285156,
+        "weak_core_prior_positive_coverage": 0.9749323129653931,
+        "difficult_gold_pairs_total": 38,
+        "difficult_gold_core_supported_pairs_total": 27,
+        "core_gold_positive_pairs_total": 44116,
+        "core_proteins_total": 800,
+        "difficult_gold_core_coverage": 0.7105263157894737,
+        "difficult_gold_per_core_protein": 0.0475,
+        "difficult_gold_fraction_of_core_positive": 0.0008613654909783298,
+        "count_scope": "window_total_over_all_ranks; *_pairs without _total are per-rank batch means",
+        "step": 2000,
+        "seconds_per_step": 2.458505931943655,
+        "elapsed_seconds": 5130.346643496305,
+        "learning_rate": 0.00016633367329999785,
+        "weak_equivalent_passes": 0.5232798197955121,
+        "core_equivalent_passes": 1.0760642948416168,
+        "weak_completed_passes": 0,
+        "core_completed_passes": 1,
+        "scheduler_horizon_steps": 4000,
+        "optimizer_updates": 2000,
+        "full_go_per_protein": 21312,
+        "peak_allocated_gb": 1.57186048
+      },
+      "exposure_totals": {
+        "difficult_gold_pairs_total": 5272,
+        "difficult_gold_core_supported_pairs_total": 3904,
+        "core_gold_positive_pairs_total": 3372561,
+        "core_proteins_total": 64000
+      },
+      "difficult_gold_exposure_fraction": 0.0015632037493169138,
+      "difficult_gold_per_core_exposure": 0.082375,
+      "difficult_gold_core_supported_fraction": 0.7405159332321699,
+      "runtime": {
+        "requested_steps": 2000,
+        "world_size": 2,
+        "global_weak_batch": 128,
+        "global_core_batch": 32,
+        "scheduler_contract": {
+          "name": "warmup_cosine",
+          "max_lr": 0.0003,
+          "min_lr": 3e-05,
+          "warmup_steps": 25,
+          "horizon_steps": 4000
+        },
+        "model_architecture_version": "0.8.4",
+        "weak_population": 489222,
+        "core_training_population": 59476,
+        "development_contract": null,
+        "development_selection_rule": "maximize standard_micro_pr_auc among G>B on this metric and G protein_Fmax>=B; monitor only if development absent"
+      }
+    },
+    "lowlr": {
+      "log_entries": 80,
+      "step600": {
+        "absolute_logit_delta": 0.15676988661289215,
+        "anchor": 0.0029167523607611656,
+        "anchor_background": 0.0001124325644923374,
+        "anchor_high_base": 0.003626772202551365,
+        "anchor_positive_drift": 0.004495271015912294,
+        "background_pu": 0.00011870710295625031,
+        "background_pu_pairs_per_protein": 64.0,
+        "base_objective": 0.14751294255256653,
+        "binary_positive_targets": 1.0,
+        "comparable_objective": 0.11453494429588318,
+        "contrib_anchor": 0.00014583763550035655,
+        "contrib_background_pu": 5.9353551478125155e-06,
+        "contrib_graph_aux": 0.0,
+        "contrib_hard_pu": 0.040317609906196594,
+        "contrib_medium_pu": 6.75925039104186e-05,
+        "contrib_positive": 0.05880562961101532,
+        "contrib_ranking": 0.015192342922091484,
+        "core_core_prior_positive_coverage": 0.8977711200714111,
+        "core_gold_positive_pairs": 831.4400024414062,
+        "core_prior_positive_coverage": 0.9463034868240356,
+        "core_proteins": 16.0,
+        "core_query_supported_fraction": 0.011267866007983685,
+        "core_supported_unknown_probability_delta": 0.04129663109779358,
+        "difficult_gold_core_supported_pairs": 0.2199999988079071,
+        "difficult_gold_pairs": 0.3199999928474426,
+        "grad_norm": 0.04351489618420601,
+        "graph_aux": 0.0,
+        "hard_pu": 0.20158806443214417,
+        "hard_pu_active_fraction": 0.9681757688522339,
+        "hard_pu_delta_probability": 0.10737717151641846,
+        "hard_pu_mean_attenuation": 0.9705608487129211,
+        "hard_pu_pairs_per_protein": 64.0,
+        "loss": 0.11453494429588318,
+        "medium_pu": 0.0013518501073122025,
+        "medium_pu_pairs_per_protein": 1708.2362060546875,
+        "objective_gain": 0.03297797590494156,
+        "objective_gain_excludes_graph_aux": 1.0,
+        "positive": 0.05880562961101532,
+        "positive_coverage": 1.0,
+        "positive_delta_probability": 0.031518761068582535,
+        "positive_pairs_per_protein": 27.738000869750977,
+        "positive_target_entropy": 0.0,
+        "positive_target_kl": 0.05880562961101532,
+        "pp_edge_count": 10565.759765625,
+        "pp_message_norm": 6.971357345581055,
+        "pu_excluded_pairs_per_protein": 0.017750000581145287,
+        "ranking": 0.15192343294620514,
+        "ranking_pu_pairs_per_protein": 32.0,
+        "sampled_cap_dropped": 0.0,
+        "sampled_edges": 10565.759765625,
+        "sampled_fallback_fraction": 0.3052109181880951,
+        "sampled_first_neighbors": 32.0,
+        "sampled_native_dropout_fraction": 0.2459999918937683,
+        "sampled_native_missing_fraction": 0.2459999918937683,
+        "sampled_new_neighbor_fraction": 0.0,
+        "sampled_nodes": 6801.9599609375,
+        "sampled_relation_core_to_weak_edges": 2011.820068359375,
+        "sampled_relation_cosine_edges": 815.3599853515625,
+        "sampled_relation_ppi_edges": 3306.43994140625,
+        "sampled_relation_similar_to_edges": 2262.31982421875,
+        "sampled_relation_weak_to_core_edges": 2169.81982421875,
+        "supervised_gain": 0.03297797590494156,
+        "supervised_pair_fraction": 0.08814770728349686,
+        "supported_unknown_pairs_per_protein": 3.8414998054504395,
+        "weak_core_prior_positive_coverage": 0.9761419296264648,
+        "difficult_gold_pairs_total": 16,
+        "difficult_gold_core_supported_pairs_total": 11,
+        "core_gold_positive_pairs_total": 41572,
+        "core_proteins_total": 800,
+        "difficult_gold_core_coverage": 0.6875,
+        "difficult_gold_per_core_protein": 0.02,
+        "difficult_gold_fraction_of_core_positive": 0.000384874434715674,
+        "count_scope": "window_total_over_all_ranks; *_pairs without _total are per-rank batch means",
+        "step": 600,
+        "seconds_per_step": 3.2939081874489786,
+        "elapsed_seconds": 1945.9886063672602,
+        "learning_rate": 9.543273101438859e-05,
+        "weak_equivalent_passes": 0.1569839459386536,
+        "core_equivalent_passes": 0.32281928845248503,
+        "weak_completed_passes": 0,
+        "core_completed_passes": 0,
+        "scheduler_horizon_steps": 4000,
+        "optimizer_updates": 600,
+        "full_go_per_protein": 21312,
+        "peak_allocated_gb": 1.563923968
+      },
+      "step2000": {
+        "absolute_logit_delta": 0.6121136546134949,
+        "anchor": 0.007308708503842354,
+        "anchor_background": 0.001557993469759822,
+        "anchor_high_base": 0.013883111998438835,
+        "anchor_positive_drift": 0.005459128879010677,
+        "background_pu": 5.594913454842754e-05,
+        "background_pu_pairs_per_protein": 64.0,
+        "base_objective": 0.14521020650863647,
+        "binary_positive_targets": 1.0,
+        "comparable_objective": 0.08901990205049515,
+        "contrib_anchor": 0.00036543537862598896,
+        "contrib_background_pu": 2.7974565455224365e-06,
+        "contrib_graph_aux": 0.0,
+        "contrib_hard_pu": 0.036403022706508636,
+        "contrib_medium_pu": 5.667780351359397e-05,
+        "contrib_positive": 0.040814273059368134,
+        "contrib_ranking": 0.01137770339846611,
+        "core_core_prior_positive_coverage": 0.8876742124557495,
+        "core_gold_positive_pairs": 882.3199462890625,
+        "core_prior_positive_coverage": 0.9393771886825562,
+        "core_proteins": 16.0,
+        "core_query_supported_fraction": 0.011385779827833176,
+        "core_supported_unknown_probability_delta": 0.02230406180024147,
+        "difficult_gold_core_supported_pairs": 0.5399999618530273,
+        "difficult_gold_pairs": 0.7599999904632568,
+        "grad_norm": 0.14335188269615173,
+        "graph_aux": 0.0,
+        "hard_pu": 0.18201510608196259,
+        "hard_pu_active_fraction": 0.9307460188865662,
+        "hard_pu_delta_probability": 0.05059906467795372,
+        "hard_pu_mean_attenuation": 0.9725334644317627,
+        "hard_pu_pairs_per_protein": 64.0,
+        "loss": 0.08901990205049515,
+        "medium_pu": 0.0011335562448948622,
+        "medium_pu_pairs_per_protein": 1653.989501953125,
+        "objective_gain": 0.05619029700756073,
+        "objective_gain_excludes_graph_aux": 1.0,
+        "positive": 0.040814273059368134,
+        "positive_coverage": 1.0,
+        "positive_delta_probability": 0.03939640522003174,
+        "positive_pairs_per_protein": 28.061248779296875,
+        "positive_target_entropy": 0.0,
+        "positive_target_kl": 0.040814273059368134,
+        "pp_edge_count": 10577.51953125,
+        "pp_message_norm": 5.087233066558838,
+        "pu_excluded_pairs_per_protein": 0.01875000074505806,
+        "ranking": 0.11377701163291931,
+        "ranking_pu_pairs_per_protein": 32.0,
+        "sampled_cap_dropped": 0.0,
+        "sampled_edges": 10577.51953125,
+        "sampled_fallback_fraction": 0.30178123712539673,
+        "sampled_first_neighbors": 32.0,
+        "sampled_native_dropout_fraction": 0.24125000834465027,
+        "sampled_native_missing_fraction": 0.24125000834465027,
+        "sampled_new_neighbor_fraction": 0.0,
+        "sampled_nodes": 6807.8798828125,
+        "sampled_relation_core_to_weak_edges": 2037.419921875,
+        "sampled_relation_cosine_edges": 807.760009765625,
+        "sampled_relation_ppi_edges": 3273.4599609375,
+        "sampled_relation_similar_to_edges": 2272.89990234375,
+        "sampled_relation_weak_to_core_edges": 2185.97998046875,
+        "supervised_gain": 0.05619029700756073,
+        "supervised_pair_fraction": 0.0856202095746994,
+        "supported_unknown_pairs_per_protein": 3.7215003967285156,
+        "weak_core_prior_positive_coverage": 0.9749323129653931,
+        "difficult_gold_pairs_total": 38,
+        "difficult_gold_core_supported_pairs_total": 27,
+        "core_gold_positive_pairs_total": 44116,
+        "core_proteins_total": 800,
+        "difficult_gold_core_coverage": 0.7105263157894737,
+        "difficult_gold_per_core_protein": 0.0475,
+        "difficult_gold_fraction_of_core_positive": 0.0008613654909783298,
+        "count_scope": "window_total_over_all_ranks; *_pairs without _total are per-rank batch means",
+        "step": 2000,
+        "seconds_per_step": 3.145924051851034,
+        "elapsed_seconds": 6551.323622107506,
+        "learning_rate": 5.5444557766665956e-05,
+        "weak_equivalent_passes": 0.5232798197955121,
+        "core_equivalent_passes": 1.0760642948416168,
+        "weak_completed_passes": 0,
+        "core_completed_passes": 1,
+        "scheduler_horizon_steps": 4000,
+        "optimizer_updates": 2000,
+        "full_go_per_protein": 21312,
+        "peak_allocated_gb": 1.574139904
+      },
+      "exposure_totals": {
+        "difficult_gold_pairs_total": 5272,
+        "difficult_gold_core_supported_pairs_total": 3904,
+        "core_gold_positive_pairs_total": 3372561,
+        "core_proteins_total": 64000
+      },
+      "difficult_gold_exposure_fraction": 0.0015632037493169138,
+      "difficult_gold_per_core_exposure": 0.082375,
+      "difficult_gold_core_supported_fraction": 0.7405159332321699,
+      "runtime": {
+        "requested_steps": 2000,
+        "world_size": 2,
+        "global_weak_batch": 128,
+        "global_core_batch": 32,
+        "scheduler_contract": {
+          "name": "warmup_cosine",
+          "max_lr": 0.0001,
+          "min_lr": 1e-05,
+          "warmup_steps": 25,
+          "horizon_steps": 4000
+        },
+        "model_architecture_version": "0.8.4",
+        "weak_population": 489222,
+        "core_training_population": 59476,
+        "development_contract": null,
+        "development_selection_rule": "maximize standard_micro_pr_auc among G>B on this metric and G protein_Fmax>=B; monitor only if development absent"
+      }
+    },
+    "aligned": {
+      "log_entries": 80,
+      "step600": {
+        "absolute_logit_delta": 0.14107416570186615,
+        "anchor": 0.0029837372712790966,
+        "anchor_background": 9.311728354077786e-05,
+        "anchor_high_base": 0.0030321930535137653,
+        "anchor_positive_drift": 0.005170084070414305,
+        "background_pu": 0.00010845456563401967,
+        "background_pu_pairs_per_protein": 64.0,
+        "base_objective": 0.14751186966896057,
+        "binary_positive_targets": 1.0,
+        "comparable_objective": 0.11624254286289215,
+        "contrib_anchor": 0.000149186875205487,
+        "contrib_background_pu": 5.422729373094626e-06,
+        "contrib_graph_aux": 0.0,
+        "contrib_hard_pu": 0.03992747142910957,
+        "contrib_medium_pu": 6.377458339557052e-05,
+        "contrib_positive": 0.060812585055828094,
+        "contrib_ranking": 0.015284104272723198,
+        "core_core_prior_positive_coverage": 0.8935396671295166,
+        "core_gold_positive_pairs": 831.4400024414062,
+        "core_prior_positive_coverage": 0.9456485509872437,
+        "core_proteins": 16.0,
+        "core_query_supported_fraction": 0.012000303715467453,
+        "core_supported_unknown_probability_delta": 0.036479346454143524,
+        "difficult_gold_core_supported_pairs": 0.25999999046325684,
+        "difficult_gold_pairs": 0.3199999928474426,
+        "grad_norm": 0.04863063618540764,
+        "graph_aux": 0.0,
+        "hard_pu": 0.19963735342025757,
+        "hard_pu_active_fraction": 0.9687109589576721,
+        "hard_pu_delta_probability": 0.10298658907413483,
+        "hard_pu_mean_attenuation": 0.9705196619033813,
+        "hard_pu_pairs_per_protein": 64.0,
+        "loss": 0.11624254286289215,
+        "medium_pu": 0.0012754916679114103,
+        "medium_pu_pairs_per_protein": 1676.551025390625,
+        "objective_gain": 0.03126933425664902,
+        "objective_gain_excludes_graph_aux": 1.0,
+        "positive": 0.060812585055828094,
+        "positive_coverage": 1.0,
+        "positive_delta_probability": 0.029544822871685028,
+        "positive_pairs_per_protein": 27.738000869750977,
+        "positive_target_entropy": 0.0,
+        "positive_target_kl": 0.060812585055828094,
+        "pp_edge_count": 10181.759765625,
+        "pp_message_norm": 1.4669806957244873,
+        "pu_excluded_pairs_per_protein": 0.017750000581145287,
+        "ranking": 0.15284103155136108,
+        "ranking_pu_pairs_per_protein": 32.0,
+        "sampled_cap_dropped": 0.0,
+        "sampled_edges": 10181.759765625,
+        "sampled_fallback_fraction": 1.0,
+        "sampled_first_neighbors": 32.0,
+        "sampled_native_dropout_fraction": 1.0,
+        "sampled_native_missing_fraction": 1.0,
+        "sampled_new_neighbor_fraction": 0.0,
+        "sampled_nodes": 6915.0595703125,
+        "sampled_relation_core_to_weak_edges": 0.0,
+        "sampled_relation_cosine_edges": 2588.97998046875,
+        "sampled_relation_ppi_edges": 2909.0400390625,
+        "sampled_relation_similar_to_edges": 2386.919921875,
+        "sampled_relation_weak_to_core_edges": 2296.81982421875,
+        "supervised_gain": 0.03126933425664902,
+        "supervised_pair_fraction": 0.08666189014911652,
+        "supported_unknown_pairs_per_protein": 3.8414998054504395,
+        "weak_core_prior_positive_coverage": 0.9775374531745911,
+        "difficult_gold_pairs_total": 16,
+        "difficult_gold_core_supported_pairs_total": 13,
+        "core_gold_positive_pairs_total": 41572,
+        "core_proteins_total": 800,
+        "difficult_gold_core_coverage": 0.8125,
+        "difficult_gold_per_core_protein": 0.02,
+        "difficult_gold_fraction_of_core_positive": 0.000384874434715674,
+        "count_scope": "window_total_over_all_ranks; *_pairs without _total are per-rank batch means",
+        "step": 600,
+        "seconds_per_step": 3.144411957859993,
+        "elapsed_seconds": 1892.3841721899807,
+        "learning_rate": 9.543273101438859e-05,
+        "weak_equivalent_passes": 0.1569839459386536,
+        "core_equivalent_passes": 0.32281928845248503,
+        "weak_completed_passes": 0,
+        "core_completed_passes": 0,
+        "scheduler_horizon_steps": 4000,
+        "optimizer_updates": 600,
+        "full_go_per_protein": 21312,
+        "peak_allocated_gb": 1.586108928
+      },
+      "step2000": {
+        "absolute_logit_delta": 0.5265705585479736,
+        "anchor": 0.006498211063444614,
+        "anchor_background": 0.0012112273834645748,
+        "anchor_high_base": 0.011077257804572582,
+        "anchor_positive_drift": 0.006105529610067606,
+        "background_pu": 5.609291110886261e-05,
+        "background_pu_pairs_per_protein": 64.0,
+        "base_objective": 0.1452680230140686,
+        "binary_positive_targets": 1.0,
+        "comparable_objective": 0.09088991582393646,
+        "contrib_anchor": 0.0003249105648137629,
+        "contrib_background_pu": 2.8046456463926006e-06,
+        "contrib_graph_aux": 0.0,
+        "contrib_hard_pu": 0.03614542633295059,
+        "contrib_medium_pu": 5.2229508582968265e-05,
+        "contrib_positive": 0.04280278831720352,
+        "contrib_ranking": 0.011561756022274494,
+        "core_core_prior_positive_coverage": 0.8821502327919006,
+        "core_gold_positive_pairs": 882.3199462890625,
+        "core_prior_positive_coverage": 0.9378231167793274,
+        "core_proteins": 16.0,
+        "core_query_supported_fraction": 0.01200985349714756,
+        "core_supported_unknown_probability_delta": 0.019653797149658203,
+        "difficult_gold_core_supported_pairs": 0.5199999809265137,
+        "difficult_gold_pairs": 0.7599999904632568,
+        "grad_norm": 0.15645214915275574,
+        "graph_aux": 0.0,
+        "hard_pu": 0.18072712421417236,
+        "hard_pu_active_fraction": 0.9386444091796875,
+        "hard_pu_delta_probability": 0.048098303377628326,
+        "hard_pu_mean_attenuation": 0.9725109338760376,
+        "hard_pu_pairs_per_protein": 64.0,
+        "loss": 0.09088991582393646,
+        "medium_pu": 0.0010445901425555348,
+        "medium_pu_pairs_per_protein": 1654.9775390625,
+        "objective_gain": 0.05437810346484184,
+        "objective_gain_excludes_graph_aux": 1.0,
+        "positive": 0.04280278831720352,
+        "positive_coverage": 1.0,
+        "positive_delta_probability": 0.03706285357475281,
+        "positive_pairs_per_protein": 28.061248779296875,
+        "positive_target_entropy": 0.0,
+        "positive_target_kl": 0.04280278831720352,
+        "pp_edge_count": 10185.919921875,
+        "pp_message_norm": 1.8712854385375977,
+        "pu_excluded_pairs_per_protein": 0.01875000074505806,
+        "ranking": 0.11561757326126099,
+        "ranking_pu_pairs_per_protein": 32.0,
+        "sampled_cap_dropped": 0.0,
+        "sampled_edges": 10185.919921875,
+        "sampled_fallback_fraction": 1.0,
+        "sampled_first_neighbors": 32.0,
+        "sampled_native_dropout_fraction": 1.0,
+        "sampled_native_missing_fraction": 1.0,
+        "sampled_new_neighbor_fraction": 0.0,
+        "sampled_nodes": 6926.4599609375,
+        "sampled_relation_core_to_weak_edges": 0.0,
+        "sampled_relation_cosine_edges": 2588.33984375,
+        "sampled_relation_ppi_edges": 2876.27978515625,
+        "sampled_relation_similar_to_edges": 2403.89990234375,
+        "sampled_relation_weak_to_core_edges": 2317.39990234375,
+        "supervised_gain": 0.05437810346484184,
+        "supervised_pair_fraction": 0.0856667309999466,
+        "supported_unknown_pairs_per_protein": 3.7215003967285156,
+        "weak_core_prior_positive_coverage": 0.976215124130249,
+        "difficult_gold_pairs_total": 38,
+        "difficult_gold_core_supported_pairs_total": 26,
+        "core_gold_positive_pairs_total": 44116,
+        "core_proteins_total": 800,
+        "difficult_gold_core_coverage": 0.6842105263157895,
+        "difficult_gold_per_core_protein": 0.0475,
+        "difficult_gold_fraction_of_core_positive": 0.0008613654909783298,
+        "count_scope": "window_total_over_all_ranks; *_pairs without _total are per-rank batch means",
+        "step": 2000,
+        "seconds_per_step": 2.7721684232354162,
+        "elapsed_seconds": 6079.427969373763,
+        "learning_rate": 5.5444557766665956e-05,
+        "weak_equivalent_passes": 0.5232798197955121,
+        "core_equivalent_passes": 1.0760642948416168,
+        "weak_completed_passes": 0,
+        "core_completed_passes": 1,
+        "scheduler_horizon_steps": 4000,
+        "optimizer_updates": 2000,
+        "full_go_per_protein": 21312,
+        "peak_allocated_gb": 1.594179072
+      },
+      "exposure_totals": {
+        "difficult_gold_pairs_total": 5272,
+        "difficult_gold_core_supported_pairs_total": 3871,
+        "core_gold_positive_pairs_total": 3372561,
+        "core_proteins_total": 64000
+      },
+      "difficult_gold_exposure_fraction": 0.0015632037493169138,
+      "difficult_gold_per_core_exposure": 0.082375,
+      "difficult_gold_core_supported_fraction": 0.7342564491654021,
+      "runtime": {
+        "requested_steps": 2000,
+        "world_size": 2,
+        "global_weak_batch": 128,
+        "global_core_batch": 32,
+        "scheduler_contract": {
+          "name": "warmup_cosine",
+          "max_lr": 0.0001,
+          "min_lr": 1e-05,
+          "warmup_steps": 25,
+          "horizon_steps": 4000
+        },
+        "model_architecture_version": "0.8.4",
+        "weak_population": 489222,
+        "core_training_population": 59476,
+        "development_contract": null,
+        "development_selection_rule": "maximize standard_micro_pr_auc among G>B on this metric and G protein_Fmax>=B; monitor only if development absent"
+      }
+    }
+  }
+}
