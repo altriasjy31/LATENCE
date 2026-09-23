@@ -6,7 +6,7 @@ experiments/exp_train.py
 
 LATENCE protein expansion training.
 
-CA-TCC-inspired semi-supervised training for MSA-based GO annotation:
+Semi-supervised training for MSA-based GO annotation:
 
     L = L_true + lambda_u * L_pseudo + lambda_c * L_GOCon + lambda_h * L_hier
 

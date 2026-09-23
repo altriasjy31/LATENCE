@@ -1,0 +1,105 @@
+{
+  "schema_version": 2,
+  "task": "bp",
+  "run_tag": "bp_weak_detr_v3_expert_prob_warmstart340_to400",
+  "data_epoch": 100,
+  "device": "cuda",
+  "component_factory": "experiments.nbs.latence_nbs_components:build_components",
+  "training": {
+    "epochs": 150,
+    "save_epochs": [
+      100,
+      150
+    ],
+    "save_interval_epochs": 10,
+    "output_dir": "outputs/latence_nbs_train/bp_nbs_v0.3",
+    "checkpoint_prefix": "nbs",
+    "save_final": true,
+    "include_optimizer_state": true,
+    "include_scheduler_state": true,
+    "accumulation_steps": 1,
+    "grad_clip": 1.0,
+    "amp": true,
+    "amp_dtype": "bfloat16",
+    "log_interval": 20,
+    "max_steps_per_epoch": null,
+    "scheduler_step": "batch",
+    "seed": 3407,
+    "validation_used": false,
+    "early_stopping": false
+  },
+  "model": {
+    "hidden_dim": 256,
+    "num_layers": 2,
+    "backbone_type": "sage",
+    "relation_aggr": "gated_sum",
+    "source_mode": "layer_relation",
+    "go_tower_layers": 2,
+    "graph_delta_scale_init": 0.0,
+    "delta_gate_feature_mode": "student_candidate",
+    "candidate_evidence_dim": 3,
+    "score_chunk_size": 65536
+  },
+  "loss": {
+    "primary": "asl",
+    "asl_gamma_neg": 4.0,
+    "asl_gamma_pos": 0.0,
+    "asl_clip": 0.05,
+    "anchor_temperature": 1.0,
+    "hierarchy_go_axis": 0,
+    "weights": {
+      "pseudo": 0.0,
+      "anchor": 0.1,
+      "hierarchy": 0.0,
+      "delta_l2": 0.0001,
+      "routing_balance": 0.001,
+      "null_collapse": 0.001
+    }
+  },
+  "optimizer": {
+    "name": "adamw",
+    "lr": 0.0001,
+    "graph_delta_scale_lr": 0.0005,
+    "weight_decay": 0.0001
+  },
+  "episode": {
+    "num_queries": 8,
+    "support_per_query": 2,
+    "gold_positive_per_query": 1,
+    "hard_candidate_per_query": 16,
+    "pseudo_positive_per_query": 0,
+    "max_candidates": 256,
+    "sampled_unlabelled_weight": 0.2
+  },
+  "stage": {
+    "name": "gold_only",
+    "freeze_first_stage_backbone": true,
+    "freeze_go_geometry": true,
+    "use_expert_probability_in_forward": false,
+    "use_validation_set": false
+  },
+  "train_loader_factory": null,
+  "model_inputs": {
+    "protein_input_dim": 2048,
+    "go_box_dim": 512
+  },
+  "data": {
+    "root": "outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp",
+    "go_protein_inverted_index_manifest": "nbs_indices/go_protein/go_protein_inverted_index_manifest.json",
+    "weak_graph_predictions_manifest": "weak_graph_predictions/weak_graph_predictions_manifest.json",
+    "representation_manifest": "features/representation_manifest.json",
+    "pp_edge_types_manifest": "pp_edge_types/pp_edge_types_manifest.json",
+    "gg_relations_manifest": "gg_relations/gg_relations_manifest.json",
+    "go_registry": "gg_relations/go_registry.tsv"
+  },
+  "go_boxsqel": {
+    "manifest": "outputs/go_emb/go_boxsqel_manifest_512.json",
+    "parser_report": "outputs/go_emb/go_boxsqel_parser_report_512.json",
+    "artifact_selection": "best",
+    "expected_embedding_size": 512,
+    "require_artifacts": true,
+    "alignment_manifest": "outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/nbs_indices/go_boxsqel_512/go_box_alignment_manifest.json",
+    "freeze_geometry_initially": true,
+    "require_alignment_manifest": true
+  }
+}

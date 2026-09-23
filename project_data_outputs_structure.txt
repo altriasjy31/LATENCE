@@ -1,0 +1,316 @@
+data/outputs/
+├── annotations
+├── exp_train
+│   ├── bp_semisup_ema_teacher_v1
+│   │   ├── args.json
+│   │   ├── merged_model_opt.json
+│   │   ├── runner_config.json
+│   │   ├── semisup_backbone_epoch10.pt
+│   │   ├── semisup_backbone_epoch5.pt
+│   │   ├── semisup_ema_backbone_epoch10.pt
+│   │   ├── semisup_ema_backbone_epoch5.pt
+│   │   ├── semisup_full_epoch10.pt
+│   │   ├── semisup_full_epoch5.pt
+│   │   └── train_log.jsonl
+│   ├── bp_semisup_multi_node_v1
+│   │   ├── args.json
+│   │   ├── merged_model_opt.json
+│   │   ├── runner_config.json
+│   │   ├── semisup_backbone_epoch10.pt
+│   │   ├── semisup_backbone_epoch15.pt
+│   │   ├── semisup_backbone_epoch20.pt
+│   │   ├── semisup_backbone_epoch5.pt
+│   │   ├── semisup_backbone_last.pt
+│   │   ├── semisup_full_epoch10.pt
+│   │   ├── semisup_full_epoch15.pt
+│   │   ├── semisup_full_epoch20.pt
+│   │   ├── semisup_full_epoch5.pt
+│   │   ├── semisup_full_last.pt
+│   │   └── train_log.jsonl
+│   ├── bp_semisup_v1
+│   │   ├── args.json
+│   │   ├── merged_model_opt.json
+│   │   ├── runner_config.json
+│   │   └── train_log.jsonl
+│   └── cc_semisup_multi_node_v1
+│       ├── args.json
+│       ├── merged_model_opt.json
+│       ├── runner_config.json
+│       └── train_log.jsonl
+├── ind_test
+│   ├── bp_ind_test_semisup_backbone_epoch10
+│   │   ├── eval_args.json
+│   │   ├── ind_test_metrics.json
+│   │   ├── merged_eval_model_opt.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_semisup_backbone_epoch5
+│   │   ├── eval_args.json
+│   │   ├── ind_test_metrics.json
+│   │   ├── merged_eval_model_opt.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_semisup_weak_backbone_epoch10
+│   │   ├── eval_args.json
+│   │   ├── ind_test_metrics.json
+│   │   ├── merged_eval_model_opt.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_semisup_weak_backbone_epoch5
+│   │   ├── eval_args.json
+│   │   ├── ind_test_metrics.json
+│   │   ├── merged_eval_model_opt.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_teacher_only
+│   │   ├── eval_args.json
+│   │   ├── ind_test_metrics.json
+│   │   ├── merged_eval_model_opt.json
+│   │   └── runner_config.json
+│   └── bp_ind_test_teacher_student_avg
+│       ├── eval_args.json
+│       ├── ind_test_metrics.json
+│       ├── merged_eval_model_opt.json
+│       └── runner_config.json
+├── ind_test_weak_query
+│   ├── bp_ind_test_weak_backbone_epoch_epoch30
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch32
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch38
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch40
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch42
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch44
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch46
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch48
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch50
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_backbone_epoch_epoch8
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch10
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch18
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch2
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch20
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch28
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch30
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch32
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch34
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch38
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch4
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch40
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch42
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch44
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch46
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch46_ens_p0.5_t0.5
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch46_ens_p0.6_t0.4
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch48
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch50
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch50_ens_p0.5_t0.5
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch50_ens_p0.6_t0.4
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch50_ens_p0.8_t0.2
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   ├── bp_ind_test_weak_query_epoch_epoch6
+│   │   ├── eval_args.json
+│   │   ├── eval_merged_model_opt.json
+│   │   ├── ind_test_metrics.json
+│   │   └── runner_config.json
+│   └── bp_ind_test_weak_query_epoch_epoch8
+│       ├── eval_args.json
+│       ├── eval_merged_model_opt.json
+│       ├── ind_test_metrics.json
+│       └── runner_config.json
+├── msa_teacher_25_10_22_probs
+│   ├── bp_exp_train_probs.float16.npy
+│   ├── cc_exp_train_probs.float16.npy
+│   └── mf_exp_train_probs.float16.npy
+├── weak_exp_train
+│   └── bp_weak_asl_prob_v1
+│       ├── args.json
+│       ├── merged_model_opt.json
+│       ├── runner_config.json
+│       ├── weak_backbone_epoch10.pt
+│       ├── weak_backbone_epoch5.pt
+│       └── weak_train_log.jsonl
+└── weak_exp_train_query
+    ├── bp_weak_asl_prob_v1
+    │   ├── args.json
+    │   ├── merged_model_opt.json
+    │   ├── runner_config.json
+    │   ├── weak_backbone_epoch10.pt
+    │   ├── weak_backbone_epoch12.pt
+    │   ├── weak_backbone_epoch14.pt
+    │   ├── weak_backbone_epoch16.pt
+    │   ├── weak_backbone_epoch18.pt
+    │   ├── weak_backbone_epoch2.pt
+    │   ├── weak_backbone_epoch20.pt
+    │   ├── weak_backbone_epoch22.pt
+    │   ├── weak_backbone_epoch24.pt
+    │   ├── weak_backbone_epoch26.pt
+    │   ├── weak_backbone_epoch28.pt
+    │   ├── weak_backbone_epoch30.pt
+    │   ├── weak_backbone_epoch32.pt
+    │   ├── weak_backbone_epoch34.pt
+    │   ├── weak_backbone_epoch36.pt
+    │   ├── weak_backbone_epoch38.pt
+    │   ├── weak_backbone_epoch4.pt
+    │   ├── weak_backbone_epoch40.pt
+    │   ├── weak_backbone_epoch42.pt
+    │   ├── weak_backbone_epoch44.pt
+    │   ├── weak_backbone_epoch46.pt
+    │   ├── weak_backbone_epoch48.pt
+    │   ├── weak_backbone_epoch5.pt
+    │   ├── weak_backbone_epoch50.pt
+    │   ├── weak_backbone_epoch6.pt
+    │   ├── weak_backbone_epoch8.pt
+    │   ├── weak_backbone_last.pt
+    │   ├── weak_query_decoder_epoch10.pt
+    │   ├── weak_query_decoder_epoch12.pt
+    │   ├── weak_query_decoder_epoch14.pt
+    │   ├── weak_query_decoder_epoch16.pt
+    │   ├── weak_query_decoder_epoch18.pt
+    │   ├── weak_query_decoder_epoch2.pt
+    │   ├── weak_query_decoder_epoch20.pt
+    │   ├── weak_query_decoder_epoch22.pt
+    │   ├── weak_query_decoder_epoch24.pt
+    │   ├── weak_query_decoder_epoch26.pt
+    │   ├── weak_query_decoder_epoch28.pt
+    │   ├── weak_query_decoder_epoch30.pt
+    │   ├── weak_query_decoder_epoch32.pt
+    │   ├── weak_query_decoder_epoch34.pt
+    │   ├── weak_query_decoder_epoch36.pt
+    │   ├── weak_query_decoder_epoch38.pt
+    │   ├── weak_query_decoder_epoch4.pt
+    │   ├── weak_query_decoder_epoch40.pt
+    │   ├── weak_query_decoder_epoch42.pt
+    │   ├── weak_query_decoder_epoch44.pt
+    │   ├── weak_query_decoder_epoch46.pt
+    │   ├── weak_query_decoder_epoch48.pt
+    │   ├── weak_query_decoder_epoch50.pt
+    │   ├── weak_query_decoder_epoch6.pt
+    │   ├── weak_query_decoder_epoch8.pt
+    │   ├── weak_query_decoder_last.pt
+    │   └── weak_train_log.jsonl
+    └── mf_weak_asl_prob_v1
+        ├── args.json
+        ├── merged_model_opt.json
+        ├── runner_config.json
+        ├── weak_backbone_epoch2.pt
+        ├── weak_query_decoder_epoch2.pt
+        └── weak_train_log.jsonl
+
+53 directories, 260 files
