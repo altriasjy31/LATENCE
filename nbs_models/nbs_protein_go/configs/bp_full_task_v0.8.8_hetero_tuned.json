@@ -1,0 +1,147 @@
+{
+  "task": "bp",
+  "data": {
+    "root": "outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp",
+    "go_protein_inverted_index_manifest": "nbs_indices/go_protein_full_task_top512/go_protein_inverted_index_manifest.json",
+    "weak_graph_predictions_manifest": "weak_graph_predictions_full_task_top512/weak_graph_predictions_manifest.json",
+    "representation_manifest": "features/representation_manifest.json",
+    "pp_sampling_indices_manifest": "nbs_indices/pp_sampling/pp_sampling_indices_manifest.json",
+    "full_go_box_manifest": "outputs/latence_nbs/ontology/go_2022/boxsqel_full/boxsqel_full_ontology_manifest.json",
+    "boxsqel_gg_relations_manifest": "outputs/latence_nbs/ontology/go_2022/boxsqel_full/gg_boxsqel_relations_manifest.json"
+  },
+  "go_boxsqel": {
+    "manifest": "outputs/go_emb/go_boxsqel_manifest_512.json",
+    "parser_report": "outputs/go_emb/go_boxsqel_parser_report_512.json",
+    "artifact_selection": "best",
+    "expected_embedding_size": 512,
+    "require_artifacts": true,
+    "alignment_manifest": "outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/nbs_indices/go_boxsqel_512/go_box_alignment_manifest.json",
+    "freeze_geometry_initially": true,
+    "require_alignment_manifest": true
+  },
+  "supervision_contract": {
+    "core_gold": {
+      "role": "core",
+      "dataset_mode": "train",
+      "source": "metadata",
+      "metadata_label_key": "prop_annotations"
+    },
+    "weak_pseudo": {
+      "role": "weak",
+      "dataset_mode": "exp_train",
+      "source": "modelout",
+      "prediction_key": "modelout::mix_expert_base_anchor::decoderprob::expert",
+      "decoder_prob_source": "expert",
+      "external_probability_used": true,
+      "comparison": ">",
+      "threshold": 0.5,
+      "use_probability_as_soft_target": false,
+      "negative_policy": "none",
+      "forbid_exp_train_prop_annotations": true
+    }
+  },
+  "ontology": {
+    "version": "2022",
+    "node_space": "boxsqel_full_classes",
+    "num_classes": 44919,
+    "message_edges": "direct_nf1_and_part_of",
+    "closure_in_message_passing": false,
+    "task_label_space": "immutable_first_stage_classifier_columns",
+    "future_version_interface": true
+  },
+  "stage": {
+    "name": "nbs_v088_hetero_tuned",
+    "freeze_first_stage_backbone": true,
+    "use_expert_probability_in_forward": false,
+    "protein_go_candidate_scope": "full_task",
+    "protein_go_candidate_topk": 512
+  },
+  "episode": {
+    "num_queries": 64,
+    "gold_support_policy": "adaptive_rare",
+    "singleton_requires_pseudo": false,
+    "weak_focus_queries_per_episode": 0
+  },
+  "full_task": {
+    "seed": 8080,
+    "weak_batch": 64,
+    "core_batch": 16,
+    "eval_batch": 16,
+    "learning_rate": 0.003,
+    "weight_decay": 0.0001,
+    "grad_clip": 5.0,
+    "log_every": 25,
+    "core_neighbors": 8,
+    "holdout_core_count": 1024,
+    "holdout_seed": 8080,
+    "retrieval_backend": "torch",
+    "neighbor_cache": "outputs/latence_nbs_experiments/v080/core_neighbors_holdout1024",
+    "model": {
+      "encoder_variant": "hetero_tuned",
+      "prediction_mode": "direct",
+      "hidden_dim": 320,
+      "sage_layers": 3,
+      "ontology_layers": 2,
+      "input_dropout": 0.1,
+      "dropout": 0.25,
+      "ontology_dropout": 0.0,
+      "bn_momentum": 0.1
+    },
+    "loss": {
+      "core_weight": 1.0,
+      "weak_weight": 0.25
+    },
+    "variant": "dynamic",
+    "checkpoint_interval": 0,
+    "weak_target_mode": "binary_membership",
+    "sampler": {
+      "mode": "dynamic",
+      "seed": 8088,
+      "native_pool_per_relation": 64,
+      "retrieval_pool_size": 64,
+      "stable_fraction": 0.5,
+      "candidate_topk": 16,
+      "cache_dir": "outputs/latence_nbs_experiments/v084/shared_pools",
+      "scan_block_size": 1000000,
+      "max_nodes": 100000,
+      "fanouts": [
+        {
+          "ppi": 1,
+          "similar_to": 1,
+          "weak_to_core": 1,
+          "core_to_weak": 1,
+          "cosine": 1
+        },
+        {
+          "ppi": 2,
+          "similar_to": 2,
+          "weak_to_core": 2,
+          "core_to_weak": 2,
+          "cosine": 2
+        },
+        {
+          "ppi": 0,
+          "similar_to": 0,
+          "weak_to_core": 0,
+          "core_to_weak": 0,
+          "cosine": 32
+        }
+      ]
+    },
+    "scheduler": {
+      "name": "epoch_warmup_hold_cosine",
+      "warmup_epochs": 0.1,
+      "hold_until_epoch": 3.0,
+      "min_lr": 0.0003
+    },
+    "experiment_preset": "hetero_tuned",
+    "epochs": 5,
+    "epoch_unit": "weak",
+    "checkpoint_epochs": [
+      1,
+      5
+    ],
+    "accumulation_steps": 4
+  },
+  "release_version": "0.8.8"
+}
