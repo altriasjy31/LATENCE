@@ -29,6 +29,7 @@ PANELS={
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--panel',choices=['future','history','all'],default='future')
+    p.add_argument('--label-view',choices=['auto','direct','propagated'],default='auto')
     p.add_argument('--namespace',choices=NS,required=True)
     p.add_argument('--metadata',type=Path,default=Path('data/unidata_with_dark_weak_eval.pkl'))
     p.add_argument('--unified-root',type=Path,default=Path('data/dark_weak_test/unified'))

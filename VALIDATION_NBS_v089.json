@@ -1,0 +1,84 @@
+{
+  "release_version": "0.8.9.1",
+  "model_architecture_version": "0.8.8",
+  "validated_at_utc": "2026-10-12",
+  "environment": {
+    "torch": "2.4.1+cpu",
+    "gpu_available": false
+  },
+  "test_suite": [
+    "nbs_models/nbs_protein_go/tests/test_v089_config_entrypoint.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_phase_v089.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_runner_v089.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_launcher_v089.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_ddp_v089.py",
+    "tests/test_full_task_eval_v089.py",
+    "tests/test_install_nbs_v089.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_model_v088.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_data_v088.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_loss_v088.py",
+    "nbs_models/nbs_protein_go/tests/test_local_loader_v088.py",
+    "nbs_models/nbs_protein_go/tests/test_full_task_schedule_v087.py",
+    "tests/test_full_task_eval_v088.py",
+    "tests/test_nbs_v088_acceptance.py"
+  ],
+  "test_command": "PYTHONPATH=.:nbs_models/nbs_protein_go:nbs_models/nbs_protein_go/tests OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest -q nbs_models/nbs_protein_go/tests/test_v089_config_entrypoint.py nbs_models/nbs_protein_go/tests/test_full_task_phase_v089.py nbs_models/nbs_protein_go/tests/test_full_task_runner_v089.py nbs_models/nbs_protein_go/tests/test_full_task_launcher_v089.py nbs_models/nbs_protein_go/tests/test_full_task_ddp_v089.py tests/test_full_task_eval_v089.py tests/test_install_nbs_v089.py nbs_models/nbs_protein_go/tests/test_full_task_model_v088.py nbs_models/nbs_protein_go/tests/test_full_task_data_v088.py nbs_models/nbs_protein_go/tests/test_full_task_loss_v088.py nbs_models/nbs_protein_go/tests/test_local_loader_v088.py nbs_models/nbs_protein_go/tests/test_full_task_schedule_v087.py tests/test_full_task_eval_v088.py tests/test_nbs_v088_acceptance.py",
+  "cpu_tests": {
+    "status": "passed",
+    "passed": 361,
+    "skipped": 2,
+    "duration_seconds": 12.52,
+    "execution_location": "complete hotfix delivery bundle"
+  },
+  "real_ddp_tests": {
+    "status": "未验证",
+    "skipped": 2,
+    "reason": "Gloo network device creation is denied: Operation not permitted. NCCL/GPU unavailable."
+  },
+  "performance": {
+    "status": "未验证",
+    "baseline_Fmax": 57.72314936447243,
+    "new_Fmax": null,
+    "delta_Fmax": null,
+    "minimum_gain": 3.0,
+    "effective_threshold": 60.72314936447243,
+    "evaluation_conditions": {
+      "proteins": 1800,
+      "BP_GO_columns": 21312,
+      "threshold_comparison": ">",
+      "threshold_step": 0.001,
+      "ontology_probability_propagation": false,
+      "standalone_model": true,
+      "output_fusion": "none"
+    },
+    "resources": {
+      "new_training_gpu_hours": null,
+      "new_training_memory_gb": null,
+      "ddp_speedup": null
+    }
+  },
+  "scope": "Correctness checks on synthetic small CPU graphs; no production-data training or external Fmax was run.",
+  "installation_checks": {
+    "status": "passed",
+    "upgraded_from_release": "0.8.9",
+    "known_release_files_upgraded": 11,
+    "known_version_metadata_files_upgraded": 2,
+    "new_loader_files": 1,
+    "identical_existing_files_not_rewritten": 65,
+    "latest_v088_source_files_verified_byte_identical": 5,
+    "repeat_install": "idempotent",
+    "installed_runner_cli_help": "passed",
+    "installed_single_and_ddp_config_gates": "passed",
+    "bash_syntax": "passed"
+  },
+  "hotfix": {
+    "root_cause": "v089 main passed new stage/release to the pinned v088 loader; earlier train-function tests bypassed main",
+    "new_loader": "nbs_models/nbs_protein_go/nbs_pg/local_loader_v089.py",
+    "real_config_entrypoint_tests": 64,
+    "coverage": "Actual delivered configs and mmap builder; four main CLI stages tested through the shared builder boundary; forged supervision/provenance rejected",
+    "v088_original_source_unchanged": true,
+    "source_epoch10_supported": true,
+    "production_data_or_gpu_run": false,
+    "real_v088_epoch10_cpu_weights_only_initialization": "passed; source horizon20, stopped10, new target100, remaining90, lifetime counts preserved"
+  }
+}

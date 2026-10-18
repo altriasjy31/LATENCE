@@ -1,0 +1,36 @@
+{
+  "release_version": "0.8.9.1",
+  "python_package_version": "0.8.9.1",
+  "model_architecture_version": "0.8.8",
+  "data_architecture_version": "0.8.8",
+  "default_target_cumulative_weak_epochs": 100,
+  "checkpoint_every_cumulative_epochs": 5,
+  "default_peak_learning_rate": 0.006,
+  "presets": {
+    "single": {
+      "world_size": 1,
+      "per_rank_weak_batch": 5120,
+      "per_rank_core_batch": 1280,
+      "global_batch": 6400
+    },
+    "ddp": {
+      "world_size": 2,
+      "per_rank_weak_batch": 5120,
+      "per_rank_core_batch": 1280,
+      "global_batch": 12800
+    }
+  },
+  "source_model_initialization": "weights and BN buffers only; new optimizer/schedule/RNG",
+  "primary_runtime_files": [
+    "scripts/nbs/train_nbs_full_task_v089.py",
+    "scripts/nbs/run_nbs_v089.sh",
+    "scripts/nbs/eval_nbs_full_task_v089.py",
+    "scripts/nbs/check_nbs_v089_acceptance.py",
+    "nbs_models/nbs_protein_go/nbs_pg/full_task_phase_v089.py",
+    "nbs_models/nbs_protein_go/nbs_pg/local_loader_v089.py"
+  ],
+  "hotfix": "Explicit v089 loader gate without changing v088 source bytes or graph/loss/evaluation semantics",
+  "example_origin_weak_epochs": 10,
+  "example_remaining_weak_epochs": 90,
+  "example_remaining_ddp_updates": 4320
+}

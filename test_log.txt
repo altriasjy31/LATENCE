@@ -1,0 +1,11 @@
+test_01_original_native_v088_byte_identical (test_v045_acceptance_split.CompatibilityTest.test_01_original_native_v088_byte_identical) ... ok
+test_02_no_acceptance_mutation (test_v045_acceptance_split.CompatibilityTest.test_02_no_acceptance_mutation) ... ok
+test_03_incompatible_schema_fails (test_v045_acceptance_split.CompatibilityTest.test_03_incompatible_schema_fails) ... ok
+test_04_input_mutation_fails (test_v045_acceptance_split.CompatibilityTest.test_04_input_mutation_fails) ... ok
+test_05_native_fmax_mismatch_fails (test_v045_acceptance_split.CompatibilityTest.test_05_native_fmax_mismatch_fails) ... ok
+test_06_prediction_manifest_mutation_fails (test_v045_acceptance_split.CompatibilityTest.test_06_prediction_manifest_mutation_fails) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 3.190s
+
+OK

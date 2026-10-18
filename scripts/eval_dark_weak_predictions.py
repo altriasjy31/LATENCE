@@ -55,7 +55,7 @@ def read_go_list(path:Path):
     return terms
 
 
-def load_case(metadata_path:Path,root:Path,split:str,ns:str,remove_roots=True):
+def load_case(metadata_path:Path,root:Path,split:str,ns:str,remove_roots=True,label_view='auto'):
     with metadata_path.open('rb') as f:
         metadata = pickle.load(f)  # trusted LATENCE pickle only
     if not isinstance(metadata,dict) or split not in metadata:
@@ -65,7 +65,10 @@ def load_case(metadata_path:Path,root:Path,split:str,ns:str,remove_roots=True):
     # Field invariant: prop_annotations ALWAYS stores the full ancestor closure.
     # The '_direct' suffix requests directly supported functions, not a
     # redefinition of the prop_annotations field.
-    label_field = 'annotations' if split.endswith('_direct') else 'prop_annotations'
+    if label_view not in ('auto','direct','propagated'):
+        raise ValueError(f'Unknown label_view={label_view}')
+    label_field = ('annotations' if (split.endswith('_direct') if label_view=='auto'
+                    else label_view=='direct') else 'prop_annotations')
     if label_field not in label_dict:
         raise KeyError(
             f'Missing {label_field} for {split}/{NS[ns]}. '
@@ -229,7 +232,8 @@ def run(args):
         raise ValueError('Removed IPR2GO mappings are NOT biological negatives. Use --allow-descriptive-labels for descriptive positive-label ranking only.')
     root=args.unified_root
     names,labs,termids,inverse,counts,accepted,canon_names=load_case(
-        args.metadata,root,args.split,args.namespace,args.exclude_roots)
+        args.metadata,root,args.split,args.namespace,args.exclude_roots,
+        getattr(args,'label_view','auto'))
     hashes={}
     cohort_path=root/'tables'/'full_dark_weak_cohort.tsv'
     if cohort_path.exists():
@@ -295,6 +299,8 @@ def main(argv=None):
     p.add_argument('--metadata',type=Path,default=Path('data/unidata_with_dark_weak_eval.pkl'))
     p.add_argument('--unified-root',type=Path,default=Path('data/dark_weak_test/unified'))
     p.add_argument('--split',required=True,help='First-level metadata key, preferably ending _direct for future novel GO')
+    p.add_argument('--label-view',choices=['auto','direct','propagated'],default='auto',
+                   help='Choose direct annotations versus full ancestor closure explicitly')
     p.add_argument('--namespace',choices=NS,required=True)
     p.add_argument('--prediction',action='append',required=True,help='MODEL=/abs/or/relative/prediction.npy; repeat')
     p.add_argument('--prediction-ids',action='append',required=True,help='MODEL=protein_ids.txt; repeat')
