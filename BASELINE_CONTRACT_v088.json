@@ -1,0 +1,1358 @@
+{
+  "schema_version": 3,
+  "evaluation_version": "0.8.7",
+  "task": "bp",
+  "num_samples": 1800,
+  "num_classes": 21312,
+  "reference_comparison_complete": true,
+  "missing_methods": [],
+  "evaluation_goal_complete": true,
+  "goal_status": "complete_comparison",
+  "goal_definition": "Compare G-E, G-M and G-B; completeness is not evidence of improvement or significance.",
+  "metric_contract": {
+    "primary_backend": "stage1",
+    "primary_scope": "overall_N_by_task_GO_matrix",
+    "stage1_helper": "/home/dataset-local/data_local/shaojiangyi/latence-project/msa_models/helper_functions/helper.py",
+    "stage1_helper_sha256": "70135074954cf10a084c75e215908f3fa106595d6bbf4c24e4cc3f2e62b7f4ef",
+    "micro_diagnostics": "flattened label-position threshold-grid Fmax and micro-AUPRC; not a substitute for Stage-1 evalperf_torch in the primary comparison",
+    "confidence_interval_scope": "paired protein bootstrap is reported only for histogram micro diagnostics; it is not presented as an evalperf_torch CI"
+  },
+  "methods": {
+    "expert_prob": {
+      "symbol": "E",
+      "primary": {
+        "fmax": 69.7811292992459,
+        "threshold": 0.4,
+        "auprc": 56.49604797363281
+      },
+      "micro": {
+        "fmax_micro": 69.7811292992459,
+        "threshold_micro": 0.3999999761581421,
+        "precision_micro": 78.90233516211453,
+        "recall_micro": 62.550244944102495,
+        "auprc_micro_hist": 64.78210531167349,
+        "auprc_micro_exact": 67.55468996047834
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": {
+            "mean": 79.80555555555556,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 35.94383437891096,
+            "num_proteins": 1800
+          }
+        },
+        "50": {
+          "precision_at_k": {
+            "mean": 44.41555555555556,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 72.30097753644345,
+            "num_proteins": 1800
+          }
+        },
+        "100": {
+          "precision_at_k": {
+            "mean": 27.30166666666667,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 81.11786893863317,
+            "num_proteins": 1800
+          }
+        }
+      },
+      "standardized": {
+        "standard_num_proteins": 1800,
+        "standard_num_go": 21312,
+        "standard_num_positive_labels": 63688,
+        "standard_num_protein_fmax_eligible": 1800,
+        "standard_num_empty_gold_proteins": 0,
+        "standard_protein_fmax": 71.6902197447025,
+        "standard_protein_fmax_threshold": 0.398,
+        "standard_protein_precision_at_fmax": 78.801860812672,
+        "standard_protein_recall_at_fmax": 65.75593584580508,
+        "standard_protein_fmax_threshold_step": 0.001,
+        "standard_protein_fmax_grid_0p01": 71.67128954976207,
+        "standard_protein_fmax_grid_0p01_threshold": 0.4,
+        "standard_micro_ap": 67.55468996047836,
+        "standard_micro_pr_auc": 67.80801688995702,
+        "standard_micro_fmax_exact": 69.80620087183348,
+        "standard_micro_fmax_exact_threshold": 0.3989257514476776,
+        "standard_micro_fmax_exact_min_included_score": 0.39892578125
+      }
+    },
+    "stage1_modelout": {
+      "symbol": "M",
+      "primary": {
+        "fmax": 69.77156291669591,
+        "threshold": 0.42,
+        "auprc": 59.21182632446289
+      },
+      "micro": {
+        "fmax_micro": 69.7715629166959,
+        "threshold_micro": 0.41999998688697815,
+        "precision_micro": 79.05335559796438,
+        "recall_micro": 62.440334128878284,
+        "auprc_micro_hist": 67.45369073307855,
+        "auprc_micro_exact": 68.79073625102657
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": {
+            "mean": 80.47222222222223,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 36.29730858961737,
+            "num_proteins": 1800
+          }
+        },
+        "50": {
+          "precision_at_k": {
+            "mean": 45.00333333333333,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 73.90646284307238,
+            "num_proteins": 1800
+          }
+        },
+        "100": {
+          "precision_at_k": {
+            "mean": 27.515555555555558,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 81.99008051191433,
+            "num_proteins": 1800
+          }
+        }
+      },
+      "standardized": {
+        "standard_num_proteins": 1800,
+        "standard_num_go": 21312,
+        "standard_num_positive_labels": 63688,
+        "standard_num_protein_fmax_eligible": 1800,
+        "standard_num_empty_gold_proteins": 0,
+        "standard_protein_fmax": 71.6448222443359,
+        "standard_protein_fmax_threshold": 0.413,
+        "standard_protein_precision_at_fmax": 78.7320844014813,
+        "standard_protein_recall_at_fmax": 65.72814194077735,
+        "standard_protein_fmax_threshold_step": 0.001,
+        "standard_protein_fmax_grid_0p01": 71.62620205664284,
+        "standard_protein_fmax_grid_0p01_threshold": 0.42,
+        "standard_micro_ap": 68.79073625102659,
+        "standard_micro_pr_auc": 68.8115950377895,
+        "standard_micro_fmax_exact": 69.78140931629304,
+        "standard_micro_fmax_exact_threshold": 0.40594378113746643,
+        "standard_micro_fmax_exact_min_included_score": 0.4059438109397888
+      }
+    },
+    "backbone_base": {
+      "symbol": "B",
+      "primary": {
+        "fmax": 55.63171527693357,
+        "threshold": 0.87,
+        "auprc": 32.008670806884766
+      },
+      "micro": {
+        "fmax_micro": 55.63171527693357,
+        "threshold_micro": 0.8700000047683716,
+        "precision_micro": 68.7752884326374,
+        "recall_micro": 46.70581585227986,
+        "auprc_micro_hist": 48.59310069143292,
+        "auprc_micro_exact": 49.45078781988871
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": {
+            "mean": 67.34444444444445,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 29.7851663389224,
+            "num_proteins": 1800
+          }
+        },
+        "50": {
+          "precision_at_k": {
+            "mean": 35.662222222222226,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 60.171380730477686,
+            "num_proteins": 1800
+          }
+        },
+        "100": {
+          "precision_at_k": {
+            "mean": 22.155555555555555,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 68.86943619028976,
+            "num_proteins": 1800
+          }
+        }
+      },
+      "standardized": {
+        "standard_num_proteins": 1800,
+        "standard_num_go": 21312,
+        "standard_num_positive_labels": 63688,
+        "standard_num_protein_fmax_eligible": 1800,
+        "standard_num_empty_gold_proteins": 0,
+        "standard_protein_fmax": 57.72314936447243,
+        "standard_protein_fmax_threshold": 0.901,
+        "standard_protein_precision_at_fmax": 71.18051637779556,
+        "standard_protein_recall_at_fmax": 48.54520711167635,
+        "standard_protein_fmax_threshold_step": 0.001,
+        "standard_protein_fmax_grid_0p01": 57.68951089134043,
+        "standard_protein_fmax_grid_0p01_threshold": 0.9,
+        "standard_micro_ap": 49.45078781988873,
+        "standard_micro_pr_auc": 50.62188186592117,
+        "standard_micro_fmax_exact": 55.64012545054533,
+        "standard_micro_fmax_exact_threshold": 0.8720703125,
+        "standard_micro_fmax_exact_min_included_score": 0.87255859375
+      }
+    },
+    "NBS_final": {
+      "symbol": "G",
+      "primary": {
+        "fmax": 56.25032513135307,
+        "threshold": 0.89,
+        "auprc": 38.427574157714844
+      },
+      "micro": {
+        "fmax_micro": 56.25032513135307,
+        "threshold_micro": 0.8899999856948853,
+        "precision_micro": 62.80542110358181,
+        "recall_micro": 50.93424192940586,
+        "auprc_micro_hist": 47.02631316119542,
+        "auprc_micro_exact": 49.29941211937418
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": {
+            "mean": 71.04444444444444,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 31.01515481529849,
+            "num_proteins": 1800
+          }
+        },
+        "50": {
+          "precision_at_k": {
+            "mean": 37.458888888888886,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 62.98425667083924,
+            "num_proteins": 1800
+          }
+        },
+        "100": {
+          "precision_at_k": {
+            "mean": 22.961666666666666,
+            "num_proteins": 1800
+          },
+          "recall_at_k": {
+            "mean": 71.29126581957394,
+            "num_proteins": 1800
+          }
+        }
+      },
+      "standardized": {
+        "standard_num_proteins": 1800,
+        "standard_num_go": 21312,
+        "standard_num_positive_labels": 63688,
+        "standard_num_protein_fmax_eligible": 1800,
+        "standard_num_empty_gold_proteins": 0,
+        "standard_protein_fmax": 57.73317664597148,
+        "standard_protein_fmax_threshold": 0.873,
+        "standard_protein_precision_at_fmax": 59.031082131170834,
+        "standard_protein_recall_at_fmax": 56.49111690641012,
+        "standard_protein_fmax_threshold_step": 0.001,
+        "standard_protein_fmax_grid_0p01": 57.72392621222635,
+        "standard_protein_fmax_grid_0p01_threshold": 0.89,
+        "standard_micro_ap": 49.29941211937418,
+        "standard_micro_pr_auc": 49.299053071297536,
+        "standard_micro_fmax_exact": 56.28452085059376,
+        "standard_micro_fmax_exact_threshold": 0.8873048424720764,
+        "standard_micro_fmax_exact_min_included_score": 0.8873049020767212
+      }
+    }
+  },
+  "reference_provenance": {
+    "expert_prob": {
+      "source_probability": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/expert_prob.f32.npy",
+      "source_sha256": "dbcd89f3e0b035a376f7b200c16bd4062cd083c2e6cb3ae4e5cbab7ab4b019a7",
+      "aligned_probability": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/expert_prob.f32.npy",
+      "aligned_sha256": "dbcd89f3e0b035a376f7b200c16bd4062cd083c2e6cb3ae4e5cbab7ab4b019a7",
+      "source_protein_ids": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/protein_ids.txt",
+      "source_protein_ids_sha256": "31685a6aae703c71f942dba1adf609fca3ca89e2a2cdf8371a4947fbe1f47813",
+      "source_go_ids": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/go_ids.txt",
+      "source_go_ids_sha256": "16e5dd34ad0d91742d6667c7147e4ad254c167a14c64d81c4d8e6e2b6360b87a",
+      "rows_reordered": false,
+      "columns_reordered": false,
+      "row_alignment": "explicit_ids",
+      "column_alignment": "explicit_original_task_go_ids",
+      "input_go_registry_sha256": "e3ee8f53486113f49f783e51ade7fdcd17335b17001692ac18e0990cbc3c97f3"
+    },
+    "stage1_modelout": {
+      "source_probability": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/stage1_modelout.f32.npy",
+      "source_sha256": "0ea8da699b982839e2874646071abab321ff011b83384cb72671c998ec9add1e",
+      "aligned_probability": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/stage1_modelout.f32.npy",
+      "aligned_sha256": "0ea8da699b982839e2874646071abab321ff011b83384cb72671c998ec9add1e",
+      "source_protein_ids": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/protein_ids.txt",
+      "source_protein_ids_sha256": "31685a6aae703c71f942dba1adf609fca3ca89e2a2cdf8371a4947fbe1f47813",
+      "source_go_ids": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/go_ids.txt",
+      "source_go_ids_sha256": "16e5dd34ad0d91742d6667c7147e4ad254c167a14c64d81c4d8e6e2b6360b87a",
+      "rows_reordered": false,
+      "columns_reordered": false,
+      "row_alignment": "explicit_ids",
+      "column_alignment": "explicit_original_task_go_ids",
+      "input_go_registry_sha256": "e3ee8f53486113f49f783e51ade7fdcd17335b17001692ac18e0990cbc3c97f3"
+    }
+  },
+  "prediction_provenance": {
+    "probability_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_experiments/v087/direct/eval_step3823/full/nbs_ind_test_prob.f32.npy",
+    "probability_sha256": "15bd4be59ba59493cfb1f21934fb10bfd67a97d3c0ea027df9dd98e63b61f506",
+    "prediction_manifest_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_experiments/v087/direct/eval_step3823/full/nbs_full_task_prediction_manifest.json",
+    "prediction_manifest_sha256": "103ce3f1f64f4ec50214bc2b3eca5b1b9643a39fda329afa37dabea7c62170fe",
+    "input_manifest_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/ind_test_input_manifest.json",
+    "input_manifest_sha256": "6cce9f88aa0552ae6af1cfa7e8963b1816093061adb16c74e31d6f7542951a1a",
+    "backbone_probability_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/backbone_ind_test_prob.f16.npy",
+    "backbone_probability_sha256": "2defa0c56a7daa0f3caa6faf29024ca530dc693edca5c7f3949a98aa073c099a",
+    "checkpoint_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_experiments/v087/direct/nbs_epoch1.pt",
+    "checkpoint_sha256": "5edd94338dc1e88125123fe29c8fabd9df2b16300d332510a3087d156d3ca6a3",
+    "checkpoint_file_verified": true,
+    "step": 3823,
+    "variant": "fixed",
+    "branch": "final",
+    "encoder_variant": "legacy",
+    "model_config": {
+      "hidden_dim": 128,
+      "query_dim": 64,
+      "ontology_layers": 2,
+      "decoder_hidden": 32,
+      "go_chunk": 512,
+      "dropout": 0.0,
+      "candidate_dropout": 0.15,
+      "activation_checkpointing": true,
+      "attention_backend": "sdpa",
+      "query_conditioned": true,
+      "pp_context_scale": 1.0,
+      "shuffle_seed": 8084,
+      "sage_layers": 2,
+      "encoder_variant": "legacy",
+      "pp_edge_dropout": 0.0,
+      "pp_dropout_seed": 8086,
+      "prediction_mode": "direct",
+      "source_dropout_query_candidate": 0.0,
+      "source_dropout_neighbor_candidate": 0.0,
+      "source_dropout_neighbor_pseudo": 0.0,
+      "source_dropout_seed": 8087,
+      "direct_bias_init": -4.0
+    },
+    "sampler_config": {
+      "mode": "fixed",
+      "seed": 8084,
+      "first_hop": 32,
+      "second_hop": 4,
+      "native_pool_per_relation": 64,
+      "retrieval_pool_size": 64,
+      "stable_fraction": 0.5,
+      "native_dropout": 0.25,
+      "candidate_topk": 16,
+      "cache_dir": "outputs/latence_nbs_experiments/v084/shared_pools",
+      "scan_block_size": 1000000
+    },
+    "model_architecture_version": "0.8.7",
+    "data_architecture_version": "0.8.4",
+    "prediction_mode": "direct",
+    "source_flags": {
+      "query_candidate": true,
+      "neighbor_candidate": true,
+      "neighbor_pseudo": true,
+      "core": true,
+      "pp": true
+    },
+    "epoch": 1,
+    "epoch_progress": null,
+    "contract": {
+      "data": {
+        "schema": 1,
+        "retrieval": "normalized_cosine_core_only_exclude_self",
+        "registry_sha256": "519907903bfe0156ed4289d4e457a167845414c57c76d0fb3a9591ebe7a86f28",
+        "representation_manifest_sha256": "74c06ef28256705a97d9352b983c9ab191aa8d307ae1dd2a35ff56bc361ed1f8",
+        "feature_files": [
+          [
+            "core",
+            "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/core_repr.f16.npy",
+            247808128,
+            1784791740194862770
+          ],
+          [
+            "weak",
+            "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/weak_repr.f16.npy",
+            2003853440,
+            1784794759883826620
+          ]
+        ],
+        "anchor_ids_sha256": "3c36c3478626cca4d6efc011de8345324bfcfea6cab0c7f251b3654b83209f43",
+        "core_neighbors": 8,
+        "num_proteins": 549722,
+        "validation_ids_sha256": "f0329d82d99266e44ae0426b3899858236a73acef0f2150d9e19afed178a5d0a",
+        "task_to_ontology_sha256": "0a7cc1a50e8d3801cc8a0ecbd902074eeac3a1c0c905fbc1cf5edcd4b44116b9",
+        "num_task_go": 21312,
+        "feature_dim": 2048,
+        "go_registry_sha256": "e3ee8f53486113f49f783e51ade7fdcd17335b17001692ac18e0990cbc3c97f3",
+        "weak_graph_predictions_manifest_sha256": "b71e83cce07d4a2ffe31d5ae69f1a60a623edcc7871faa99a2801f618b45dd16",
+        "go_protein_inverted_index_manifest_sha256": "59176d8ca907e19c4b7761ce52f339021f93a18fa2c3b07f831e88a948ce2d64",
+        "full_go_box_manifest_sha256": "b1b0474a5975d0a6ea1c9e96a4b5c09b73100c9bee93f64b08fddfeb4b6401aa",
+        "boxsqel_gg_relations_manifest_sha256": "ccc94502673dbe0ff069c22cd5967cda34677c81d8d2278f0f23dceed543f261",
+        "gold_indptr_sha256": "87d563f554f14079cb1a6d68aa1524985c6791c43be3200ab15d374c0e5af96a",
+        "gold_go_idx_sha256": "7602f176d2ab805f62d1570d46b27438af2dd73557e53bbb34467af0e6e347a3",
+        "pseudo_indptr_sha256": "a46bec895182ef2fac2bb6b54909f213a77405d67a066d4962097692beb7b392",
+        "pseudo_go_idx_sha256": "8634c870e1a88b1e7f5072122ddb609f69c88153f6b77e801d9cd428db5b569a",
+        "pseudo_probability_sha256": "c11c63d081a31ecedd1eb270d613acba96de1d302862287c8edcf5a8ea584bec",
+        "v084_supervision": "binary_csr_membership",
+        "v084_pool_signature": {
+          "version": "0.8.4",
+          "algorithm": "typed_incoming_topk_explicit_weak_inverse_v1",
+          "source": {
+            "schema": 1,
+            "retrieval": "normalized_cosine_core_only_exclude_self",
+            "registry_sha256": "519907903bfe0156ed4289d4e457a167845414c57c76d0fb3a9591ebe7a86f28",
+            "representation_manifest_sha256": "74c06ef28256705a97d9352b983c9ab191aa8d307ae1dd2a35ff56bc361ed1f8",
+            "feature_files": [
+              [
+                "core",
+                "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/core_repr.f16.npy",
+                247808128,
+                1784791740194862770
+              ],
+              [
+                "weak",
+                "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/weak_repr.f16.npy",
+                2003853440,
+                1784794759883826620
+              ]
+            ],
+            "anchor_ids_sha256": "3c36c3478626cca4d6efc011de8345324bfcfea6cab0c7f251b3654b83209f43",
+            "core_neighbors": 8,
+            "num_proteins": 549722
+          },
+          "native_sources": {
+            "ppi": {
+              "edge_index": {
+                "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_ppi_edge_index.i32.npy",
+                "size": 43665728,
+                "mtime_ns": 1785206160835378140,
+                "shape": [
+                  2,
+                  5458200
+                ],
+                "dtype": "int32"
+              },
+              "edge_attr": {
+                "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_ppi_edge_attr.f32.npy",
+                "size": 65498528,
+                "mtime_ns": 1785206160863399100,
+                "shape": [
+                  5458200,
+                  3
+                ],
+                "dtype": "float32"
+              }
+            },
+            "similar_to": {
+              "edge_index": {
+                "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_similar_to_edge_index.i32.npy",
+                "size": 48400128,
+                "mtime_ns": 1785206161983986610,
+                "shape": [
+                  2,
+                  6050000
+                ],
+                "dtype": "int32"
+              },
+              "edge_attr": {
+                "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_similar_to_edge_attr.f32.npy",
+                "size": 72600128,
+                "mtime_ns": 1785206162014857300,
+                "shape": [
+                  6050000,
+                  3
+                ],
+                "dtype": "float32"
+              }
+            },
+            "weak_to_core": {
+              "edge_index": {
+                "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_weak_to_core_edge_index.i32.npy",
+                "size": 391377728,
+                "mtime_ns": 1785206169681313990,
+                "shape": [
+                  2,
+                  48922200
+                ],
+                "dtype": "int32"
+              },
+              "edge_attr": {
+                "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_weak_to_core_edge_attr.f32.npy",
+                "size": 587066528,
+                "mtime_ns": 1785206171593388330,
+                "shape": [
+                  48922200,
+                  3
+                ],
+                "dtype": "float32"
+              }
+            }
+          },
+          "relations": [
+            "ppi",
+            "similar_to",
+            "weak_to_core",
+            "core_to_weak",
+            "cosine"
+          ],
+          "pool_size": 64,
+          "retrieval_pool_size": 64,
+          "permitted_sha256": "cd218b63e3efa7ac79223212a8eea5b94cc447280b6749f125a758a4e8343f88",
+          "ranking": "confidence_score_reciprocal_rank_desc_source_id_asc"
+        },
+        "v084_sampling": {
+          "mode": "fixed",
+          "seed": 8084,
+          "first_hop": 32,
+          "second_hop": 4,
+          "stable_fraction": 0.5,
+          "native_dropout": 0.25,
+          "candidate_topk": 16
+        },
+        "v084_label_mask": "all_batch_supervision_seeds_and_all_holdout_labels_excluded",
+        "v084_relations": [
+          "ppi",
+          "similar_to",
+          "weak_to_core",
+          "core_to_weak",
+          "cosine"
+        ],
+        "v084_pool_manifest_sha256": "b0c0784f29f77498a867e412f34bf87bbebfd8c808c00ba5d4926133993c7e88",
+        "v087_label_mask": "global_DDP_supervision_seeds_when_provided_else_local_batch; all_holdout_labels_always_excluded"
+      },
+      "ontology": {
+        "center": "a154af5bf492ea1b4790f2f92e2eae52505fe8f012784448f4e7246614fdd235",
+        "offset": "9b0bbca417921496b3437e9d721db0c7f17e3bf63d2b51911fdb5e2198077edc",
+        "stats": "6aa5702b936ade97190ef6b2ef0394d1ee1f00694138d914166863850184456f",
+        "task_to_ontology": "0a7cc1a50e8d3801cc8a0ecbd902074eeac3a1c0c905fbc1cf5edcd4b44116b9",
+        "edge_is_a": "8d335167570f13a2c1f1850b17b3cdb623eb62b2265787933759510102bc0323",
+        "edge_has_child": "11858b118431736236fa711b04ef0780790d52be79b4feefa5f0add51df6aa7a",
+        "edge_part_of": "ca3d1a0131983d9ed463ea26037a2ea8fb5b2de2ec3d244da097fed0e7c6e124",
+        "edge_has_part": "ed9ec27849fd049d537679dba3aefff67a859ca12fb763548371d145b8e21e93"
+      }
+    },
+    "sampling_inference": "deterministic_fixed_budget",
+    "ablation": "full",
+    "prediction_implementation": {
+      "full_task_model.py": "3e22158767ad7815bb06d1958eb7d48e8b5c1c5a5e95e6195861144e91b16bcd",
+      "full_task_model_v081.py": "e4eb549e7e4b3d5b352e2bf0b0c78d304f3650830b5579e910e8510b6da2849b",
+      "full_task_model_v083.py": "bcf2e8d56e30fe72db6bc02aed2d74c612f76c7ee88788faf3c79209e5e5a887",
+      "full_task_model_v084.py": "042b8af51b0fc4c977a32272c593e1afab215fd556936d719b3f668a6fb48b4a",
+      "full_task_model_v086.py": "56c367a6fc5296dcf054196669b266609df51dd30042f33bf46d319d227ca6b6",
+      "full_task_model_v087.py": "db2b25ca60da1452051133d1a685d241ddcafde3718c0d327deb3eeeeff70e3d",
+      "full_task_data.py": "c852a9c9e4cc43d7068e86c682294e553f39fff43aedc6e2e4e0dae9040153a5",
+      "full_task_data_v083.py": "c9d891621a8eaf4afdd29b18929182990256ba6a239a7ca1ff8cab9a2344e8da",
+      "full_task_data_v084.py": "0a20abb51d8dacde0380e6df5fd45179b3032a37adc2ebae003864973b79fffe",
+      "full_task_data_v087.py": "8f6adb68246bde2784d6107d1f6c0c4ad36c2db415077819bb3e277ae6888c54",
+      "local_loader.py": "d146238a0055f5ba7fbf80d81556d652b16f5d7ecf2e65ea91159c6f8a2db81f",
+      "local_loader_v087.py": "4c44d5a779fb5140a52e2a25c9d7492a2ade4d6ca4117f6035268f3f6fb17cfa",
+      "latence_graph_stores.py": "389433f595e24ea78b9a9c6d4066661e70b699a3bd7d1c173792f8f2b4882e7a",
+      "train_nbs_full_task_v087.py": "c33ba701e912d96ac73bd7a2a9a091c547f3701678dbe684f3155f5b8a3281e8"
+    },
+    "evaluator_sha256": "742f7b6b56bde8380a5155b4c1282a104977488999184416be97501c35e64789",
+    "manifest": {
+      "version": "0.8.7",
+      "runner_version": "0.8.7",
+      "variant": "fixed",
+      "step": 3823,
+      "branch": "final",
+      "model_architecture_version": "0.8.7",
+      "data_architecture_version": "0.8.4",
+      "encoder_variant": "legacy",
+      "prediction_mode": "direct",
+      "source_flags": {
+        "query_candidate": true,
+        "neighbor_candidate": true,
+        "neighbor_pseudo": true,
+        "core": true,
+        "pp": true
+      },
+      "epoch_plan": {
+        "n_weak": 489222,
+        "n_core": 59476,
+        "weak_batch_size": 64,
+        "core_batch_size": 16,
+        "world_size": 2,
+        "epochs": 5
+      },
+      "epoch": 1,
+      "model_config": {
+        "hidden_dim": 128,
+        "query_dim": 64,
+        "ontology_layers": 2,
+        "decoder_hidden": 32,
+        "go_chunk": 512,
+        "dropout": 0.0,
+        "candidate_dropout": 0.15,
+        "activation_checkpointing": true,
+        "attention_backend": "sdpa",
+        "query_conditioned": true,
+        "pp_context_scale": 1.0,
+        "shuffle_seed": 8084,
+        "sage_layers": 2,
+        "encoder_variant": "legacy",
+        "pp_edge_dropout": 0.0,
+        "pp_dropout_seed": 8086,
+        "prediction_mode": "direct",
+        "source_dropout_query_candidate": 0.0,
+        "source_dropout_neighbor_candidate": 0.0,
+        "source_dropout_neighbor_pseudo": 0.0,
+        "source_dropout_seed": 8087,
+        "direct_bias_init": -4.0
+      },
+      "sampler_config": {
+        "mode": "fixed",
+        "seed": 8084,
+        "first_hop": 32,
+        "second_hop": 4,
+        "native_pool_per_relation": 64,
+        "retrieval_pool_size": 64,
+        "stable_fraction": 0.5,
+        "native_dropout": 0.25,
+        "candidate_topk": 16,
+        "cache_dir": "outputs/latence_nbs_experiments/v084/shared_pools",
+        "scan_block_size": 1000000
+      },
+      "scheduler": {
+        "version": 1,
+        "contract": {
+          "max_lr": 0.0001,
+          "min_lr": 1e-05,
+          "steps_per_epoch": 3823,
+          "epochs": 5,
+          "warmup_epochs": 0.1,
+          "hold_until_epoch": 3.0
+        },
+        "last_step": 3823,
+        "last_lr": 0.0001
+      },
+      "checkpoint_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_experiments/v087/direct/nbs_epoch1.pt",
+      "probability_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_experiments/v087/direct/eval_step3823/full/nbs_ind_test_prob.f32.npy",
+      "prediction_implementation": {
+        "full_task_model.py": "3e22158767ad7815bb06d1958eb7d48e8b5c1c5a5e95e6195861144e91b16bcd",
+        "full_task_model_v081.py": "e4eb549e7e4b3d5b352e2bf0b0c78d304f3650830b5579e910e8510b6da2849b",
+        "full_task_model_v083.py": "bcf2e8d56e30fe72db6bc02aed2d74c612f76c7ee88788faf3c79209e5e5a887",
+        "full_task_model_v084.py": "042b8af51b0fc4c977a32272c593e1afab215fd556936d719b3f668a6fb48b4a",
+        "full_task_model_v086.py": "56c367a6fc5296dcf054196669b266609df51dd30042f33bf46d319d227ca6b6",
+        "full_task_model_v087.py": "db2b25ca60da1452051133d1a685d241ddcafde3718c0d327deb3eeeeff70e3d",
+        "full_task_data.py": "c852a9c9e4cc43d7068e86c682294e553f39fff43aedc6e2e4e0dae9040153a5",
+        "full_task_data_v083.py": "c9d891621a8eaf4afdd29b18929182990256ba6a239a7ca1ff8cab9a2344e8da",
+        "full_task_data_v084.py": "0a20abb51d8dacde0380e6df5fd45179b3032a37adc2ebae003864973b79fffe",
+        "full_task_data_v087.py": "8f6adb68246bde2784d6107d1f6c0c4ad36c2db415077819bb3e277ae6888c54",
+        "local_loader.py": "d146238a0055f5ba7fbf80d81556d652b16f5d7ecf2e65ea91159c6f8a2db81f",
+        "local_loader_v087.py": "4c44d5a779fb5140a52e2a25c9d7492a2ade4d6ca4117f6035268f3f6fb17cfa",
+        "latence_graph_stores.py": "389433f595e24ea78b9a9c6d4066661e70b699a3bd7d1c173792f8f2b4882e7a",
+        "train_nbs_full_task_v087.py": "c33ba701e912d96ac73bd7a2a9a091c547f3701678dbe684f3155f5b8a3281e8"
+      },
+      "num_task_go": 21312,
+      "prediction_space": "complete_task_classifier_columns",
+      "uses_expert_probability_in_nbs_forward": false,
+      "checkpoint_sha256": "5edd94338dc1e88125123fe29c8fabd9df2b16300d332510a3087d156d3ca6a3",
+      "input_manifest_sha256": "6cce9f88aa0552ae6af1cfa7e8963b1816093061adb16c74e31d6f7542951a1a",
+      "output_probability_sha256": "15bd4be59ba59493cfb1f21934fb10bfd67a97d3c0ea027df9dd98e63b61f506",
+      "ablation": "full",
+      "graph_forward": "GO_evidence_injection_then_two_relation_SAGE_layers; encoder=legacy",
+      "supervision": "binary_core_gold_and_weak_pseudo_membership",
+      "uses_modelout_probability_as_target": false,
+      "uses_neighbor_weak_pseudo_membership": true,
+      "sampling_inference": "deterministic_fixed_budget",
+      "go_shuffle_semantics": "GO_association_permutation; not protein_topology_permutation",
+      "contract": {
+        "data": {
+          "schema": 1,
+          "retrieval": "normalized_cosine_core_only_exclude_self",
+          "registry_sha256": "519907903bfe0156ed4289d4e457a167845414c57c76d0fb3a9591ebe7a86f28",
+          "representation_manifest_sha256": "74c06ef28256705a97d9352b983c9ab191aa8d307ae1dd2a35ff56bc361ed1f8",
+          "feature_files": [
+            [
+              "core",
+              "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/core_repr.f16.npy",
+              247808128,
+              1784791740194862770
+            ],
+            [
+              "weak",
+              "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/weak_repr.f16.npy",
+              2003853440,
+              1784794759883826620
+            ]
+          ],
+          "anchor_ids_sha256": "3c36c3478626cca4d6efc011de8345324bfcfea6cab0c7f251b3654b83209f43",
+          "core_neighbors": 8,
+          "num_proteins": 549722,
+          "validation_ids_sha256": "f0329d82d99266e44ae0426b3899858236a73acef0f2150d9e19afed178a5d0a",
+          "task_to_ontology_sha256": "0a7cc1a50e8d3801cc8a0ecbd902074eeac3a1c0c905fbc1cf5edcd4b44116b9",
+          "num_task_go": 21312,
+          "feature_dim": 2048,
+          "go_registry_sha256": "e3ee8f53486113f49f783e51ade7fdcd17335b17001692ac18e0990cbc3c97f3",
+          "weak_graph_predictions_manifest_sha256": "b71e83cce07d4a2ffe31d5ae69f1a60a623edcc7871faa99a2801f618b45dd16",
+          "go_protein_inverted_index_manifest_sha256": "59176d8ca907e19c4b7761ce52f339021f93a18fa2c3b07f831e88a948ce2d64",
+          "full_go_box_manifest_sha256": "b1b0474a5975d0a6ea1c9e96a4b5c09b73100c9bee93f64b08fddfeb4b6401aa",
+          "boxsqel_gg_relations_manifest_sha256": "ccc94502673dbe0ff069c22cd5967cda34677c81d8d2278f0f23dceed543f261",
+          "gold_indptr_sha256": "87d563f554f14079cb1a6d68aa1524985c6791c43be3200ab15d374c0e5af96a",
+          "gold_go_idx_sha256": "7602f176d2ab805f62d1570d46b27438af2dd73557e53bbb34467af0e6e347a3",
+          "pseudo_indptr_sha256": "a46bec895182ef2fac2bb6b54909f213a77405d67a066d4962097692beb7b392",
+          "pseudo_go_idx_sha256": "8634c870e1a88b1e7f5072122ddb609f69c88153f6b77e801d9cd428db5b569a",
+          "pseudo_probability_sha256": "c11c63d081a31ecedd1eb270d613acba96de1d302862287c8edcf5a8ea584bec",
+          "v084_supervision": "binary_csr_membership",
+          "v084_pool_signature": {
+            "version": "0.8.4",
+            "algorithm": "typed_incoming_topk_explicit_weak_inverse_v1",
+            "source": {
+              "schema": 1,
+              "retrieval": "normalized_cosine_core_only_exclude_self",
+              "registry_sha256": "519907903bfe0156ed4289d4e457a167845414c57c76d0fb3a9591ebe7a86f28",
+              "representation_manifest_sha256": "74c06ef28256705a97d9352b983c9ab191aa8d307ae1dd2a35ff56bc361ed1f8",
+              "feature_files": [
+                [
+                  "core",
+                  "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/core_repr.f16.npy",
+                  247808128,
+                  1784791740194862770
+                ],
+                [
+                  "weak",
+                  "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/features/weak_repr.f16.npy",
+                  2003853440,
+                  1784794759883826620
+                ]
+              ],
+              "anchor_ids_sha256": "3c36c3478626cca4d6efc011de8345324bfcfea6cab0c7f251b3654b83209f43",
+              "core_neighbors": 8,
+              "num_proteins": 549722
+            },
+            "native_sources": {
+              "ppi": {
+                "edge_index": {
+                  "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_ppi_edge_index.i32.npy",
+                  "size": 43665728,
+                  "mtime_ns": 1785206160835378140,
+                  "shape": [
+                    2,
+                    5458200
+                  ],
+                  "dtype": "int32"
+                },
+                "edge_attr": {
+                  "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_ppi_edge_attr.f32.npy",
+                  "size": 65498528,
+                  "mtime_ns": 1785206160863399100,
+                  "shape": [
+                    5458200,
+                    3
+                  ],
+                  "dtype": "float32"
+                }
+              },
+              "similar_to": {
+                "edge_index": {
+                  "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_similar_to_edge_index.i32.npy",
+                  "size": 48400128,
+                  "mtime_ns": 1785206161983986610,
+                  "shape": [
+                    2,
+                    6050000
+                  ],
+                  "dtype": "int32"
+                },
+                "edge_attr": {
+                  "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_similar_to_edge_attr.f32.npy",
+                  "size": 72600128,
+                  "mtime_ns": 1785206162014857300,
+                  "shape": [
+                    6050000,
+                    3
+                  ],
+                  "dtype": "float32"
+                }
+              },
+              "weak_to_core": {
+                "edge_index": {
+                  "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_weak_to_core_edge_index.i32.npy",
+                  "size": 391377728,
+                  "mtime_ns": 1785206169681313990,
+                  "shape": [
+                    2,
+                    48922200
+                  ],
+                  "dtype": "int32"
+                },
+                "edge_attr": {
+                  "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/pp_edge_types/pp_weak_to_core_edge_attr.f32.npy",
+                  "size": 587066528,
+                  "mtime_ns": 1785206171593388330,
+                  "shape": [
+                    48922200,
+                    3
+                  ],
+                  "dtype": "float32"
+                }
+              }
+            },
+            "relations": [
+              "ppi",
+              "similar_to",
+              "weak_to_core",
+              "core_to_weak",
+              "cosine"
+            ],
+            "pool_size": 64,
+            "retrieval_pool_size": 64,
+            "permitted_sha256": "cd218b63e3efa7ac79223212a8eea5b94cc447280b6749f125a758a4e8343f88",
+            "ranking": "confidence_score_reciprocal_rank_desc_source_id_asc"
+          },
+          "v084_sampling": {
+            "mode": "fixed",
+            "seed": 8084,
+            "first_hop": 32,
+            "second_hop": 4,
+            "stable_fraction": 0.5,
+            "native_dropout": 0.25,
+            "candidate_topk": 16
+          },
+          "v084_label_mask": "all_batch_supervision_seeds_and_all_holdout_labels_excluded",
+          "v084_relations": [
+            "ppi",
+            "similar_to",
+            "weak_to_core",
+            "core_to_weak",
+            "cosine"
+          ],
+          "v084_pool_manifest_sha256": "b0c0784f29f77498a867e412f34bf87bbebfd8c808c00ba5d4926133993c7e88",
+          "v087_label_mask": "global_DDP_supervision_seeds_when_provided_else_local_batch; all_holdout_labels_always_excluded"
+        },
+        "ontology": {
+          "center": "a154af5bf492ea1b4790f2f92e2eae52505fe8f012784448f4e7246614fdd235",
+          "offset": "9b0bbca417921496b3437e9d721db0c7f17e3bf63d2b51911fdb5e2198077edc",
+          "stats": "6aa5702b936ade97190ef6b2ef0394d1ee1f00694138d914166863850184456f",
+          "task_to_ontology": "0a7cc1a50e8d3801cc8a0ecbd902074eeac3a1c0c905fbc1cf5edcd4b44116b9",
+          "edge_is_a": "8d335167570f13a2c1f1850b17b3cdb623eb62b2265787933759510102bc0323",
+          "edge_has_child": "11858b118431736236fa711b04ef0780790d52be79b4feefa5f0add51df6aa7a",
+          "edge_part_of": "ca3d1a0131983d9ed463ea26037a2ea8fb5b2de2ec3d244da097fed0e7c6e124",
+          "edge_has_part": "ed9ec27849fd049d537679dba3aefff67a859ca12fb763548371d145b8e21e93"
+        }
+      }
+    },
+    "protein_ids_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/protein_ids.txt",
+    "protein_ids_file_sha256": "31685a6aae703c71f942dba1adf609fca3ca89e2a2cdf8371a4947fbe1f47813",
+    "input_go_registry_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/gg_relations/go_registry.tsv",
+    "input_go_registry_sha256": "e3ee8f53486113f49f783e51ade7fdcd17335b17001692ac18e0990cbc3c97f3"
+  },
+  "deltas": {
+    "G_minus_E": {
+      "status": "ok",
+      "primary": {
+        "fmax": -13.530804167892832,
+        "auprc": -18.06847381591797
+      },
+      "micro": {
+        "fmax_micro": -13.530804167892832,
+        "precision_micro": -16.096914058532718,
+        "recall_micro": -11.616003014696638,
+        "auprc_micro_hist": -17.755792150478072,
+        "auprc_micro_exact": -18.25527784110416
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": -8.76111111111112,
+          "recall_at_k": -4.928679563612466
+        },
+        "50": {
+          "precision_at_k": -6.9566666666666706,
+          "recall_at_k": -9.316720865604218
+        },
+        "100": {
+          "precision_at_k": -4.340000000000003,
+          "recall_at_k": -9.826603119059229
+        }
+      },
+      "standardized": {
+        "standard_protein_fmax": -13.95704309873102,
+        "standard_protein_precision_at_fmax": -19.77077868150117,
+        "standard_protein_recall_at_fmax": -9.264818939394964,
+        "standard_protein_fmax_grid_0p01": -13.947363337535712,
+        "standard_micro_ap": -18.255277841104174,
+        "standard_micro_pr_auc": -18.50896381865948,
+        "standard_micro_fmax_exact": -13.521680021239725
+      }
+    },
+    "G_minus_M": {
+      "status": "ok",
+      "primary": {
+        "fmax": -13.52123778534284,
+        "auprc": -20.784252166748047
+      },
+      "micro": {
+        "fmax_micro": -13.521237785342826,
+        "precision_micro": -16.247934494382577,
+        "recall_micro": -11.506092199472427,
+        "auprc_micro_hist": -20.427377571883127,
+        "auprc_micro_exact": -19.49132413165239
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": -9.427777777777791,
+          "recall_at_k": -5.282153774318882
+        },
+        "50": {
+          "precision_at_k": -7.544444444444444,
+          "recall_at_k": -10.922206172233139
+        },
+        "100": {
+          "precision_at_k": -4.553888888888892,
+          "recall_at_k": -10.698814692340392
+        }
+      },
+      "standardized": {
+        "standard_protein_fmax": -13.911645598364416,
+        "standard_protein_precision_at_fmax": -19.701002270310468,
+        "standard_protein_recall_at_fmax": -9.237025034367228,
+        "standard_protein_fmax_grid_0p01": -13.902275844416486,
+        "standard_micro_ap": -19.491324131652405,
+        "standard_micro_pr_auc": -19.512541966491966,
+        "standard_micro_fmax_exact": -13.496888465699278
+      }
+    },
+    "G_minus_B": {
+      "status": "ok",
+      "primary": {
+        "fmax": 0.6186098544195033,
+        "auprc": 6.418903350830078
+      },
+      "micro": {
+        "fmax_micro": 0.6186098544195033,
+        "precision_micro": -5.969867329055589,
+        "recall_micro": 4.228426077125995,
+        "auprc_micro_hist": -1.5667875302375052,
+        "auprc_micro_exact": -0.15137570051452798
+      },
+      "top_k": {
+        "10": {
+          "precision_at_k": 3.6999999999999886,
+          "recall_at_k": 1.2299884763760893
+        },
+        "50": {
+          "precision_at_k": 1.7966666666666598,
+          "recall_at_k": 2.8128759403615504
+        },
+        "100": {
+          "precision_at_k": 0.806111111111111,
+          "recall_at_k": 2.4218296292841757
+        }
+      },
+      "standardized": {
+        "standard_protein_fmax": 0.010027281499056073,
+        "standard_protein_precision_at_fmax": -12.149434246624722,
+        "standard_protein_recall_at_fmax": 7.9459097947337725,
+        "standard_protein_fmax_grid_0p01": 0.0344153208859197,
+        "standard_micro_ap": -0.1513757005145493,
+        "standard_micro_pr_auc": -1.3228287946236321,
+        "standard_micro_fmax_exact": 0.6443954000484311
+      }
+    }
+  },
+  "checkpoint_selection": "ind_test is descriptive, never an early-stop or hyperparameter-selection set",
+  "standardized_metric_contract": {
+    "definitions": {
+      "schema": "0.8.5-standard-metrics-v1",
+      "score_unit": "percent; thresholds remain in probability units",
+      "protein_fmax": "Harmonic mean of mean per-protein precision and mean per-protein recall, maximized on the stated uniform [0,1] grid; strict >. Exclude empty-gold proteins from both means; precision includes only eligible proteins with predictions, recall includes all eligible proteins. Earliest threshold wins an exact F tie.",
+      "micro_ap": "Exact non-interpolated AP over all protein-GO pairs; equal scores grouped.",
+      "micro_pr_auc": "Exact trapezoidal area over the empirical micro PR curve, including the precision=1, recall=0 endpoint; equal scores grouped.",
+      "micro_fmax_exact": "Best micro F1 among complete equal-score groups. Strict > threshold is next representable score below the minimum included score; can be negative when zero-score pairs are included.",
+      "no_positive_labels": "All standardized scores are defined as zero if no positive gold exists.",
+      "task_columns": "All supplied columns; no zero-positive-class filtering or ontology propagation.",
+      "legacy_fields": "Historical Stage-1 metric fields are preserved and are not overwritten."
+    },
+    "implementation_sha256": "d056ecb578f59ace9cf06c9aeb7e287d0b0657d77fd1961ab25c396d1dc0d314",
+    "threshold_step": 0.001,
+    "score_unit": "percent except thresholds",
+    "ontology_probability_propagation": false,
+    "legacy_policy": "Historical primary fields remain unchanged; they are not standardized protein-centric Fmax or exact PR-AUC."
+  },
+  "legacy_metric_contract": {
+    "primary_backend": "stage1",
+    "primary_scope": "overall_N_by_task_GO_matrix",
+    "stage1_helper": "/home/dataset-local/data_local/shaojiangyi/latence-project/msa_models/helper_functions/helper.py",
+    "stage1_helper_sha256": "70135074954cf10a084c75e215908f3fa106595d6bbf4c24e4cc3f2e62b7f4ef",
+    "micro_diagnostics": "flattened label-position threshold-grid Fmax and micro-AUPRC; not a substitute for Stage-1 evalperf_torch in the primary comparison",
+    "confidence_interval_scope": "paired protein bootstrap is reported only for histogram micro diagnostics; it is not presented as an evalperf_torch CI"
+  },
+  "standardized_comparison_complete": true,
+  "standardized_goal_definition": "Prospectively compare protein-centric Fmax and exact micro PR-AUC against Expert; report exact micro AP separately. Completeness does not imply improvement or statistical significance.",
+  "metadata_provenance": {
+    "path": "/home/dataset-assist-0/datafile/latence-dataset/unidata_with_exp_train_pseudo.pkl",
+    "sha256": "10060a7f611000cbc0420d1535a3cc4ea969b044d0fa7f5aa0ff0c308952ae15",
+    "protein_ids_sha256": "31685a6aae703c71f942dba1adf609fca3ca89e2a2cdf8371a4947fbe1f47813"
+  },
+  "stage1_reference_generation": {
+    "manifest_path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/stage1_reference_manifest.json",
+    "manifest_sha256": "ab292dad51022e6b7ef4ce460bc846315e143d999481fdf6aa6e94fcbc47c35f",
+    "manifest": {
+      "schema_version": 1,
+      "builder": "v081-stage1-references-1",
+      "cache_signature": {
+        "version": "v081-stage1-references-1",
+        "sources": {
+          "input_manifest": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/ind_test_input_manifest.json",
+            "sha256": "6cce9f88aa0552ae6af1cfa7e8963b1816093061adb16c74e31d6f7542951a1a"
+          },
+          "weak_manifest": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/weak_graph_predictions_full_task_top512/weak_graph_predictions_manifest.json",
+            "sha256": "b71e83cce07d4a2ffe31d5ae69f1a60a623edcc7871faa99a2801f618b45dd16"
+          },
+          "checkpoint": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/weak_exp_train_detr/bp_weak_detr_v3_expert_prob_warmstart340_to400/weak_detr_decoder_epoch100.pt",
+            "sha256": "ee7b5dd132aabd59eb23f49acd9a4dfe7f7dd0f20c53c20926c7b00c97d7d7be"
+          },
+          "metadata": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/unidata_with_exp_train_pseudo.pkl",
+            "sha256": "10060a7f611000cbc0420d1535a3cc4ea969b044d0fa7f5aa0ff0c308952ae15"
+          },
+          "msa_index": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/ind_MSA_bin/index.pkl",
+            "sha256": "b9ded53b7c4c8b2937eaf507f423ee74edec2ebe9c6ec63de14861a74b5beb4b"
+          },
+          "go_registry": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/gg_relations/go_registry.tsv",
+            "sha256": "e3ee8f53486113f49f783e51ade7fdcd17335b17001692ac18e0990cbc3c97f3"
+          },
+          "input_proteins": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/protein_ids.txt",
+            "sha256": "31685a6aae703c71f942dba1adf609fca3ca89e2a2cdf8371a4947fbe1f47813"
+          },
+          "cached_backbone": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/backbone_ind_test_prob.f16.npy",
+            "sha256": "2defa0c56a7daa0f3caa6faf29024ca530dc693edca5c7f3949a98aa073c099a"
+          },
+          "external_probability": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/external_probs/esm2_3b/bp_predictions.prop.float16.npy",
+            "sha256": "2e46399996350e47a0208bcb112e97fd7fc4baa957777c21cde41f36503a5445"
+          },
+          "reference_script": {
+            "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/scripts/nbs/prepare_nbs_stage1_references_v081.py",
+            "sha256": "edba38afe6c7a040b9ed4b58dd90f21c9be48e74735b6bc4ee6acf78dd72e58a"
+          },
+          "input_helper": {
+            "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/scripts/nbs/prepare_nbs_ind_test_inputs.py",
+            "sha256": "9628ccbaa1e8d0ba5a65ce1cf2f609c49e732045bf3c3f3a60c167de2c41aebb"
+          },
+          "export_helper": {
+            "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/scripts/export_weak_graph_predictions.py",
+            "sha256": "15396c06358fdd5f6eb16523d5323e408c3b7905037c44db69330a530e19b1c0"
+          },
+          "diagnostic_script": {
+            "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/experiments/eval_weak_ind_test_detr_diagnostics.py",
+            "sha256": "3bbcfcdb9065dfd669bbc197ac6dfb0d64a7c491245b1bbd6e8dd73c8262edcf"
+          },
+          "train_args_json": {
+            "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/weak_exp_train_detr/bp_weak_detr_v3_expert_prob_warmstart340_to400/args.json",
+            "sha256": "59b9b26926ff88c2ef65d4ab6864d0d3bb27ac757db015a2c8908b3c10bcdc00"
+          }
+        },
+        "task": "bp",
+        "shape": [
+          1800,
+          21312
+        ],
+        "modelout_key": "modelout::mix_expert_base_anchor::decoderprob::expert",
+        "batch_size": 8,
+        "device": "cuda:0",
+        "no_amp": false,
+        "amp_dtype": "bfloat16",
+        "backbone_atol": 0.002,
+        "external_row_contract": "Stage1_PseudoProbDataset_metadata_ind_test_order",
+        "external_column_contract": "inherited_Stage1_ordered_task_columns_no_external_GO_sidecar",
+        "external_column_identity_independently_verified": false
+      },
+      "outputs": {
+        "expert_prob": {
+          "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/expert_prob.f32.npy",
+          "sha256": "dbcd89f3e0b035a376f7b200c16bd4062cd083c2e6cb3ae4e5cbab7ab4b019a7"
+        },
+        "stage1_modelout": {
+          "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/stage1_modelout.f32.npy",
+          "sha256": "0ea8da699b982839e2874646071abab321ff011b83384cb72671c998ec9add1e"
+        },
+        "backbone_recomputed": {
+          "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/backbone_recomputed.f32.npy",
+          "sha256": "373eca161fa6c0a439d2fa7644eed4cd983a91fe91f88bd708b9dbdadfd050ff"
+        },
+        "protein_ids": {
+          "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/protein_ids.txt",
+          "sha256": "31685a6aae703c71f942dba1adf609fca3ca89e2a2cdf8371a4947fbe1f47813"
+        },
+        "go_ids": {
+          "path": "/home/dataset-assist-0/datafile/latence-dataset/outputs/latence_nbs_eval/bp_shared_full_task_top512_v071_v2/stage1_references_v081/go_ids.txt",
+          "sha256": "16e5dd34ad0d91742d6667c7147e4ad254c167a14c64d81c4d8e6e2b6360b87a"
+        }
+      },
+      "runtime_source_files": {
+        "resolved_model_config": {
+          "path": "/home/dataset-assist-0/datafile/latence-dataset/msa_models/configs/model_opts/bp_msa_model_config.pkl",
+          "sha256": "1e8743ad70d88742a92f42ba4a939963071b4ac0d1d6792810b8db0460d3a67a"
+        },
+        "weak_model_module": {
+          "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/experiments/weak_exp_train_detr.py",
+          "sha256": "9e28dac938456cac4c3f11004d77f7e518e293fd3477380c47a2ba708931872d"
+        },
+        "msa_runtime_module": {
+          "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/experiments/exp_train.py",
+          "sha256": "d2abcd65f03184412d0230c1a8992a72114a2debff6855187ff699fb07c4cda7"
+        },
+        "msa_binary_dataset_module": {
+          "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/experiments/msabin.py",
+          "sha256": "917ae888de963fae3302e278d6dd59800c49366fa9a5f12a86410f20bc977b97"
+        },
+        "backbone_model_module": {
+          "path": "/home/dataset-local/data_local/shaojiangyi/latence-project/msa_models/models/gendis.py",
+          "sha256": "c7a6d76abce6b0620ba6c298cbd035b5c0e5460828560a0ff9f7d24ed724aefc"
+        }
+      },
+      "checkpoint_load": {
+        "checkpoint_type": "weak_detr_decoder_v3",
+        "detr_version": 3,
+        "missing_backbone": [],
+        "unexpected_backbone": [],
+        "missing_query_decoder": [],
+        "unexpected_query_decoder": []
+      },
+      "config_sources": [
+        "/home/dataset-assist-0/datafile/latence-dataset/outputs/weak_exp_train_detr/bp_weak_detr_v3_expert_prob_warmstart340_to400/args.json"
+      ],
+      "resolved_arg_sources": {
+        "model_config": "training_config",
+        "init_ckpt": "training_config",
+        "file_address": "exporter_cli",
+        "working_address": "exporter_cli",
+        "task": "training_config",
+        "num_classes": "training_config",
+        "output_dir": "training_config",
+        "top_k": "training_config",
+        "max_len": "training_config",
+        "msa_max_size": "training_config",
+        "permute_dims": "training_config",
+        "torch_compile": "training_config",
+        "use_query_decoder": "training_config",
+        "query_decoder_topk": "training_config",
+        "query_decoder_topk_source": "training_config",
+        "selector_static_source": "training_config",
+        "external_prob_blend_alpha": "training_config",
+        "query_decoder_delta_max": "training_config",
+        "query_decoder_mode": "training_config",
+        "query_decoder_dim": "training_config",
+        "query_decoder_heads": "training_config",
+        "query_decoder_layers": "training_config",
+        "query_decoder_ffn_dim": "training_config",
+        "query_decoder_dropout": "training_config",
+        "query_decoder_detach_query_weight": "training_config",
+        "query_decoder_include_label_boost": "training_config",
+        "query_decoder_label_boost": "training_config",
+        "query_decoder_memory_mode": "training_config",
+        "query_decoder_memory_grid_h": "training_config",
+        "query_decoder_memory_grid_w": "training_config",
+        "use_trainable_query_embedding": "training_config",
+        "query_embed_init": "training_config",
+        "query_embed_residual_scale": "training_config",
+        "use_query_score_features": "training_config",
+        "query_score_embed_scale": "training_config",
+        "query_score_detach": "training_config",
+        "query_decoder_logit_base_mode": "training_config",
+        "expert_base_mix_alpha": "training_config",
+        "anchor_delta_gate_init": "training_config",
+        "use_learnable_selector": "training_config",
+        "selector_prefilter_topm": "training_config",
+        "selector_hidden_dim": "training_config",
+        "selector_pos_weight": "training_config",
+        "selector_logit_residual_scale": "training_config",
+        "selector_use_term_bias": "training_config",
+        "selector_use_protein_term_affinity": "training_config",
+        "selector_detach_base_logits": "training_config",
+        "selector_detach_term_features": "training_config",
+        "gpu_ids": "training_config",
+        "dataloader_num_workers": "training_config",
+        "pin_memory": "training_config",
+        "msa_read_mode": "training_config",
+        "msa_sample_strategy": "training_config",
+        "msa_shuffle_rows_at_getitem": "training_config",
+        "msa_cache_gb": "training_config",
+        "msa_max_open_files": "training_config",
+        "sample_seed": "training_config",
+        "sampler_seed": "training_config",
+        "prefetch_factor": "training_config",
+        "persistent_workers": "training_config",
+        "device": "training_config",
+        "seed": "training_config",
+        "no_amp": "training_config"
+      },
+      "configuration_conflicts": {},
+      "resolved_model_args": {
+        "checkpoint": "/home/dataset-assist-0/datafile/latence-dataset/outputs/weak_exp_train_detr/bp_weak_detr_v3_expert_prob_warmstart340_to400/weak_detr_decoder_epoch100.pt",
+        "train_args_json": "auto",
+        "allow_missing_train_args": false,
+        "output_dir": "/home/dataset-local/data_local/shaojiangyi/latence-project/outputs/weak_exp_train_detr/bp_weak_detr_v3_expert_prob_warmstart340_to400",
+        "mode": "ind_test",
+        "external_prob_path": null,
+        "original_prob_path": null,
+        "decoder_prob_sources": "expert,mix_expert_base,mix_expert_original",
+        "decoder_prob_mix_alphas": "0.5,0.7,0.8,0.9",
+        "skip_legacy_query_sources": false,
+        "eval_batch_size": 8,
+        "max_batches": null,
+        "model_config": "/home/dataset-assist-0/datafile/latence-dataset/msa_models/configs/model_opts/bp_msa_model_config.pkl",
+        "init_ckpt": "/home/dataset-local/data_local/shaojiangyi/latence-project/data/msa_models/checkpoints/bp_msa_model_rank1.pt",
+        "file_address": "/home/dataset-assist-0/datafile/latence-dataset/unidata_with_exp_train_pseudo.pkl",
+        "working_address": "/home/dataset-assist-0/datafile/latence-dataset/ind_MSA_bin/index.pkl",
+        "task": "biological_process",
+        "num_classes": 21312,
+        "top_k": 64,
+        "max_len": 2048,
+        "msa_max_size": -1,
+        "permute_dims": [
+          0,
+          3,
+          2,
+          1
+        ],
+        "torch_compile": false,
+        "msa_read_mode": "full",
+        "msa_sample_strategy": "random",
+        "msa_shuffle_rows_at_getitem": false,
+        "msa_cache_gb": 4.0,
+        "msa_max_open_files": 256,
+        "sample_seed": 1,
+        "sampler_seed": 1,
+        "prefetch_factor": 2,
+        "persistent_workers": true,
+        "dataloader_num_workers": 0,
+        "pin_memory": true,
+        "gpu_ids": "0",
+        "device": "cuda:0",
+        "seed": 3407,
+        "no_amp": false,
+        "use_query_decoder": true,
+        "query_decoder_topk": 768,
+        "query_decoder_topk_source": "blend",
+        "selector_static_source": "blend",
+        "external_prob_blend_alpha": 1.0,
+        "query_decoder_mode": "residual",
+        "query_decoder_dim": 256,
+        "query_decoder_heads": 8,
+        "query_decoder_layers": 1,
+        "query_decoder_ffn_dim": 1024,
+        "query_decoder_dropout": 0.1,
+        "query_decoder_delta_max": 1.0,
+        "query_decoder_detach_query_weight": true,
+        "query_decoder_include_label_boost": false,
+        "query_decoder_label_boost": 2.0,
+        "query_decoder_memory_mode": "tokens_plus_pooled",
+        "query_decoder_memory_grid_h": 0,
+        "query_decoder_memory_grid_w": 0,
+        "query_decoder_logit_base_mode": "mix_expert_base_anchor",
+        "expert_base_mix_alpha": 0.8,
+        "anchor_delta_gate_init": 0.3,
+        "use_trainable_query_embedding": true,
+        "query_embed_init": "classifier_plus_residual",
+        "query_embed_residual_scale": 0.1,
+        "use_query_score_features": true,
+        "query_score_embed_scale": 0.1,
+        "query_score_detach": true,
+        "use_learnable_selector": true,
+        "selector_prefilter_topm": 6144,
+        "selector_hidden_dim": 64,
+        "selector_pos_weight": 10.0,
+        "selector_logit_residual_scale": 1.0,
+        "selector_use_term_bias": true,
+        "selector_use_protein_term_affinity": true,
+        "selector_detach_base_logits": true,
+        "selector_detach_term_features": true,
+        "query_modes": "base_topk,external_topk,blend_topk",
+        "delta_scales": "0,0.25,0.5,0.75,1.0",
+        "external_high_threshold": 0.5,
+        "allow_eval_label_boost": false,
+        "store_float16": true,
+        "threshold_step": 0.01,
+        "auprc_mode": "hist",
+        "compute_sample_fmax": false,
+        "no_empty_labels": false,
+        "no_zero_classes": false,
+        "metrics_are_percent": true,
+        "ensemble_alphas": "0.1,0.3,0.5,0.7,0.9",
+        "ensemble_query_modes": "external_topk,blend_topk,decoderprob,anchorlogit,modelout",
+        "ensemble_delta_scales": "0.5,1.0",
+        "do_rare_analysis": true,
+        "rare_metric_keys": "",
+        "enable_ic_fusion": false,
+        "ic_fusion_alpha_rare": 0.5,
+        "ic_fusion_alpha_medium": 0.5,
+        "ic_fusion_alpha_common": 0.8,
+        "ic_fusion_source": "base",
+        "enable_simulated_ic": false,
+        "simulated_ic_source_key": "backbone_base",
+        "simulated_ic_threshold_min": 0.01,
+        "simulated_ic_threshold_max": 1.0,
+        "simulated_ic_threshold_step": 0.01,
+        "simulated_ic_include_zero_threshold": false,
+        "simulated_ic_save_counts": false,
+        "batch_size": 8,
+        "distributed": false,
+        "rank": 0,
+        "world_size": 1,
+        "local_rank": 0
+      },
+      "runtime_environment": {
+        "torch_version": "2.4.0",
+        "device": "cuda:0",
+        "cuda_device_name": "NVIDIA A100-SXM4-80GB"
+      },
+      "backbone_parity": {
+        "max_abs_error": 0.000244140625,
+        "mean_abs_error": 1.3191027351475657e-06,
+        "pairs_above_atol": 0,
+        "pair_count": 38361600,
+        "atol": 0.002,
+        "cached_backbone_replaced": false
+      },
+      "semantics": {
+        "expert_prob": "Stage-1 external_only, source quantized float16 then converted to float32",
+        "stage1_modelout": "modelout::mix_expert_base_anchor::decoderprob::expert",
+        "modelout_formula": "sigmoid(query_decoder(..., external_prob=E, y_hint=None)['logits'].float())",
+        "decoder_topk": "restored from Stage-1 checkpoint/model_args; not NBS candidate_topk",
+        "output_dtype": "float32",
+        "historical_diagnostic_store_dtype": "float16 by default; modelout output quantization may differ",
+        "labels_consumed_by_model": false,
+        "ind_test_label_boost": false,
+        "ic_fusion_computed": false
+      }
+    }
+  }
+}

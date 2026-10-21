@@ -1,0 +1,28 @@
+--- nbs_models/nbs_protein_go/nbs_pg/local_loader.py
++++ nbs_models/nbs_protein_go/nbs_pg/local_loader.py
+@@ -923,6 +923,25 @@
+             episode = self.sampler.sample(**kwargs)
+         else:
+             episode = self.sampler.sample(seed=seed)
++        if (
++            local_step + 1 == self.steps
++            and self.coverage_plan.get("epoch_unit") == "weak_primary_exhaustive"
++            and hasattr(self.sampler, "weak_primary_progress")
++        ):
++            progress = self.sampler.weak_primary_progress(
++                epoch=self.epoch,
++                rank=self.rank,
++                world_size=self.world_size,
++            )
++            if int(progress["remaining"]) != 0:
++                raise RuntimeError(
++                    "weak-primary exhaustive epoch ended before the rank-owned "
++                    "queue was drained: "
++                    f"rank={self.rank}, selected={int(progress['selected'])}/"
++                    f"{int(progress['owned'])}, remaining="
++                    f"{int(progress['remaining'])}. The epoch planner needs "
++                    "additional drain steps for this data/configuration."
++                )
+         episode_sample_seconds = time.perf_counter() - phase_started
+         phase_started = time.perf_counter()
+         batch = self.materializer.materialize(episode, seed=seed + 31)

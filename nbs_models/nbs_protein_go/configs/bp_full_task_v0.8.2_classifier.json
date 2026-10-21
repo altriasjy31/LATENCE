@@ -1,0 +1,130 @@
+{
+  "task": "bp",
+  "data": {
+    "root": "outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp",
+    "go_protein_inverted_index_manifest": "nbs_indices/go_protein_full_task_top512/go_protein_inverted_index_manifest.json",
+    "weak_graph_predictions_manifest": "weak_graph_predictions_full_task_top512/weak_graph_predictions_manifest.json",
+    "representation_manifest": "features/representation_manifest.json",
+    "pp_sampling_indices_manifest": "nbs_indices/pp_sampling/pp_sampling_indices_manifest.json",
+    "full_go_box_manifest": "outputs/latence_nbs/ontology/go_2022/boxsqel_full/boxsqel_full_ontology_manifest.json",
+    "boxsqel_gg_relations_manifest": "outputs/latence_nbs/ontology/go_2022/boxsqel_full/gg_boxsqel_relations_manifest.json"
+  },
+  "go_boxsqel": {
+    "manifest": "outputs/go_emb/go_boxsqel_manifest_512.json",
+    "parser_report": "outputs/go_emb/go_boxsqel_parser_report_512.json",
+    "artifact_selection": "best",
+    "expected_embedding_size": 512,
+    "require_artifacts": true,
+    "alignment_manifest": "outputs/latence_nbs/bp_weak_detr_v3_expert_prob_warmstart340_to400/epoch100/bp/nbs_indices/go_boxsqel_512/go_box_alignment_manifest.json",
+    "freeze_geometry_initially": true,
+    "require_alignment_manifest": true
+  },
+  "supervision_contract": {
+    "core_gold": {
+      "role": "core",
+      "dataset_mode": "train",
+      "source": "metadata",
+      "metadata_label_key": "prop_annotations"
+    },
+    "weak_pseudo": {
+      "role": "weak",
+      "dataset_mode": "exp_train",
+      "source": "modelout",
+      "prediction_key": "modelout::mix_expert_base_anchor::decoderprob::expert",
+      "decoder_prob_source": "expert",
+      "external_probability_used": true,
+      "comparison": ">",
+      "threshold": 0.5,
+      "use_probability_as_soft_target": true,
+      "negative_policy": "none",
+      "forbid_exp_train_prop_annotations": true
+    }
+  },
+  "ontology": {
+    "version": "2022",
+    "node_space": "boxsqel_full_classes",
+    "num_classes": 44919,
+    "message_edges": "direct_nf1_and_part_of",
+    "closure_in_message_passing": false,
+    "task_label_space": "immutable_first_stage_classifier_columns",
+    "future_version_interface": true
+  },
+  "stage": {
+    "name": "nbs_v082_classifier",
+    "freeze_first_stage_backbone": true,
+    "use_expert_probability_in_forward": false,
+    "protein_go_candidate_scope": "full_task",
+    "protein_go_candidate_topk": 512,
+    "dense_teacher_in_forward": false
+  },
+  "episode": {
+    "num_queries": 64,
+    "gold_support_policy": "adaptive_rare",
+    "singleton_requires_pseudo": false,
+    "weak_focus_queries_per_episode": 0
+  },
+  "full_task": {
+    "seed": 8080,
+    "steps": 4000,
+    "checkpoints": [
+      600,
+      2000,
+      4000
+    ],
+    "weak_batch": 64,
+    "core_batch": 16,
+    "eval_batch": 80,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "warmup_steps": 25,
+    "grad_clip": 5.0,
+    "log_every": 25,
+    "core_neighbors": 8,
+    "holdout_core_count": 1024,
+    "holdout_seed": 8080,
+    "retrieval_backend": "torch",
+    "neighbor_cache": "outputs/latence_nbs_experiments/v080/core_neighbors_holdout1024",
+    "model": {
+      "hidden_dim": 128,
+      "query_dim": 64,
+      "ontology_layers": 2,
+      "decoder_hidden": 32,
+      "go_chunk": 512,
+      "dropout": 0.0,
+      "candidate_dropout": 0.15,
+      "activation_checkpointing": true,
+      "attention_backend": "sdpa",
+      "query_conditioned": true,
+      "query_budget": 256,
+      "selector_high_fraction": 0.375,
+      "selector_uncertain_fraction": 0.25,
+      "selector_weak_fraction": 0.1875,
+      "selector_core_fraction": 0.125,
+      "selector_eval_seed": 8082
+    },
+    "loss": {
+      "teacher_weight": 1.0,
+      "core_positive_weight": 1.0,
+      "core_hard_pu_weight": 0.2,
+      "core_background_pu_weight": 0.05,
+      "core_medium_pu_weight": 0.05,
+      "weak_weight": 1.0,
+      "core_weight": 1.0,
+      "refine_weight": 0.5,
+      "teacher_low_threshold": 0.05,
+      "teacher_high_threshold": 0.5,
+      "hard_pu_k": 64,
+      "background_pu_k": 64,
+      "gamma_neg": 2.0,
+      "negative_clip": 0.05,
+      "support_pu_floor": 0.25
+    },
+    "variant": "classifier",
+    "structural_support": {
+      "min_similarity": 0.5,
+      "min_neighbors": 2,
+      "min_vote_fraction": 0.5
+    },
+    "checkpoint_interval": 1000
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "predictions": {
+    "BLAST_best_hit": {
+      "role": "naive_homology_transfer",
+      "probability": "/path/to/blast_best_hit_full_task_prob.npy",
+      "protein_ids": "/path/to/blast_best_hit_protein_ids.txt",
+      "go_registry": "/path/to/the_frozen_task_go_registry.json",
+      "deployable": true
+    },
+    "label_propagation": {
+      "role": "naive_same_graph_label_propagation",
+      "probability": "/path/to/label_propagation_full_task_prob.npy",
+      "protein_ids": "/path/to/label_propagation_protein_ids.txt",
+      "go_registry": "/path/to/the_frozen_task_go_registry.json",
+      "deployable": true
+    },
+    "NetGO3.0": {
+      "role": "recent_external_method",
+      "probability": "/path/to/netgo3_full_task_prob.npy",
+      "protein_ids": "/path/to/netgo3_protein_ids.txt",
+      "go_registry": "/path/to/the_frozen_task_go_registry.json",
+      "deployable": true
+    },
+    "SPROF-GO": {
+      "role": "recent_external_method",
+      "probability": "/path/to/sprof_go_full_task_prob.npy",
+      "protein_ids": "/path/to/sprof_go_protein_ids.txt",
+      "go_registry": "/path/to/the_frozen_task_go_registry.json",
+      "deployable": true
+    },
+    "PANDA2": {
+      "role": "recent_external_method",
+      "probability": "/path/to/panda2_full_task_prob.npy",
+      "protein_ids": "/path/to/panda2_protein_ids.txt",
+      "go_registry": "/path/to/the_frozen_task_go_registry.json",
+      "deployable": true
+    }
+  }
+}

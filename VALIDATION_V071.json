@@ -1,0 +1,197 @@
+{
+  "python": "3.12.14",
+  "torch": "2.4.0+cpu",
+  "cuda_available": false,
+  "scope": "CPU tensor/sampler/trainer/experiment contracts; no production data or PyG graph materialization",
+  "passed": 44,
+  "skipped": 2,
+  "failed": 0,
+  "tests": [
+    {
+      "test": "test_alignment_v071.test_evidence_is_order_invariant_and_shared_by_training_and_inference",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_full_query_positives_hard_budget_and_label_independent_evidence",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_rotation_changes_assignments_and_hard_queries_never_use_pseudo",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_double_zero_branch_is_dead_and_nonzero_scale_starts_residual",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_cold_start_full_matcher_gradient_chain_opens_after_optimizer_steps",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_candidate_only_export_preserves_base_and_diagnostic_arrays",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_audit_reports_complete_positive_alignment_and_actual_hard_pairs",
+      "status": "passed"
+    },
+    {
+      "test": "test_alignment_v071.test_v060_inference_load_only_allows_absent_disabled_go_branch",
+      "status": "passed"
+    },
+    {
+      "test": "test_candidate_evidence_encoder.test_three_column_candidate_evidence_starts_from_reciprocal_rank",
+      "status": "passed"
+    },
+    {
+      "test": "test_candidate_evidence_encoder.test_scalar_candidate_evidence_remains_supported",
+      "status": "passed"
+    },
+    {
+      "test": "test_dual_axis_loss_v070.test_protein_column_asl_is_explicit_loss_contribution",
+      "status": "passed"
+    },
+    {
+      "test": "test_dual_axis_loss_v070.test_unknown_decoded_anchor_covers_only_unsupervised_pairs",
+      "status": "passed"
+    },
+    {
+      "test": "test_dual_axis_loss_v070.test_column_mean_is_invariant_to_repeating_one_proteins_pairs",
+      "status": "passed"
+    },
+    {
+      "test": "test_dual_axis_loss_v070.test_unknown_anchor_moves_toward_base_without_supervising_known_pairs",
+      "status": "passed"
+    },
+    {
+      "test": "test_isolated_candidate_encoder_v070",
+      "status": "skipped",
+      "reason": "PyG graph/scatter dependency unavailable; run --require-pyg on the training server"
+    },
+    {
+      "test": "test_go_residual_query_v070.test_go_tower_layer_deltas_are_attended_into_query",
+      "status": "passed"
+    },
+    {
+      "test": "test_residual_refinement.test_zero_initialized_graph_delta_is_exact_baseline",
+      "status": "passed"
+    },
+    {
+      "test": "test_matcher_equivalence.test_factorized_context_matches_explicit",
+      "status": "passed"
+    },
+    {
+      "test": "test_source_additivity",
+      "status": "skipped",
+      "reason": "PyG graph/scatter dependency unavailable; run --require-pyg on the training server"
+    },
+    {
+      "test": "test_hybrid_weak_focus_v054.test_weak_focus_reserves_queries_and_forces_unseen_targets",
+      "status": "passed"
+    },
+    {
+      "test": "test_hybrid_weak_focus_v054.test_hybrid_epoch_planner_uses_unique_weak_target",
+      "status": "passed"
+    },
+    {
+      "test": "test_hybrid_weak_focus_v054.test_weak_primary_queue_exhausts_only_on_forced_anchors",
+      "status": "passed"
+    },
+    {
+      "test": "test_hybrid_weak_focus_v054.test_weak_primary_query_bank_assigns_multiple_positive_go",
+      "status": "passed"
+    },
+    {
+      "test": "test_hybrid_weak_focus_v054.test_weak_primary_epoch_plan_uses_largest_ddp_shard",
+      "status": "passed"
+    },
+    {
+      "test": "test_hybrid_weak_focus_v054.test_active_rows_only_count_eligible_pseudo_go",
+      "status": "passed"
+    },
+    {
+      "test": "test_background_unlabelled_v056.test_background_selector_respects_probability_occupied_and_excluded",
+      "status": "passed"
+    },
+    {
+      "test": "test_background_unlabelled_v056.test_background_config_is_lower_weight_than_hard_pu",
+      "status": "passed"
+    },
+    {
+      "test": "test_background_unlabelled_v056.test_episode_adds_background_without_adding_proteins_or_graph_candidates",
+      "status": "passed"
+    },
+    {
+      "test": "test_supervision_weight.test_supervision_weight_can_remove_sampled_unlabelled_negative",
+      "status": "passed"
+    },
+    {
+      "test": "test_loss_v045.test_pseudo_asl_is_nonzero_and_contributes_to_total",
+      "status": "passed"
+    },
+    {
+      "test": "test_loss_v045.test_gold_and_pseudo_asl_configs_are_independent",
+      "status": "passed"
+    },
+    {
+      "test": "test_loss_v045.test_v04_legacy_loss_config_remains_loadable",
+      "status": "passed"
+    },
+    {
+      "test": "test_loss_v045.test_formal_bp_config_enables_pseudo_asl_and_messages",
+      "status": "passed"
+    },
+    {
+      "test": "test_loss_v045.test_v060_formal_config_retains_all_sampled_supervision",
+      "status": "passed"
+    },
+    {
+      "test": "test_fixed_epoch_training.test_fixed_epoch_training_saves_named_snapshots_without_best",
+      "status": "passed"
+    },
+    {
+      "test": "test_fixed_epoch_training.test_validation_and_early_stopping_are_rejected",
+      "status": "passed"
+    },
+    {
+      "test": "test_fixed_epoch_training.test_save_interval_is_combined_with_named_and_final_epochs",
+      "status": "passed"
+    },
+    {
+      "test": "test_fixed_epoch_training.test_legacy_save_every_alias_is_supported_but_conflicts_are_rejected",
+      "status": "passed"
+    },
+    {
+      "test": "test_episode_sampler.test_episode_sampler_keeps_support_and_candidates_disjoint",
+      "status": "passed"
+    },
+    {
+      "test": "test_eval_checkpoint_series_summary.test_parse_epochs_is_ordered_and_unique",
+      "status": "passed"
+    },
+    {
+      "test": "test_eval_checkpoint_series_summary.test_summarize_checkpoint_series",
+      "status": "passed"
+    },
+    {
+      "test": "test_experiment_runner_v071.test_stale_environment_cannot_override_experiment",
+      "status": "passed"
+    },
+    {
+      "test": "test_experiment_runner_v071.test_smoke_and_probe_have_independent_epoch_scheduler_contracts",
+      "status": "passed"
+    },
+    {
+      "test": "test_experiment_runner_v071.test_analysis_never_calls_fmax_only_increase_a_ranking_success",
+      "status": "passed"
+    },
+    {
+      "test": "test_experiment_runner_v071.test_missing_gradient_logs_fail_smoke_gate",
+      "status": "passed"
+    },
+    {
+      "test": "test_experiment_runner_v071.test_training_gradient_probe_records_before_clipping",
+      "status": "passed"
+    }
+  ]
+}

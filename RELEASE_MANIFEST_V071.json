@@ -1,0 +1,808 @@
+{
+  "version": "0.7.1",
+  "date": "2026-09-10",
+  "base_archive": "latence_nbs_v070_alignment_20260901.tar.gz",
+  "base_sha256": "5eed24801e5736604e7a926b2710a582069534bad739997c6d65e08c29e4ccef",
+  "evaluation_tools_source": "latence_nbs_v060_indtest_series_20260902.tar.gz",
+  "evaluation_tools_sha256": "8313ba7670948f2a8a900fff80308693f9571e956b98e7f504f7f1757973d525",
+  "validation": {
+    "passed": 44,
+    "failed": 0,
+    "skipped": 2,
+    "torch": "2.4.0+cpu",
+    "cuda_production_smoke": "not_run_requires_server",
+    "legacy_disabled_query_cpu_parity": "exact"
+  },
+  "files": [
+    {
+      "path": "EXPERIMENT_ENTRYPOINT_CHECKS_V071.json",
+      "size": 783,
+      "sha256": "e5284c99b2b9ffabeac65bb0223d10de5faaca108353d13c74c75cb565a90c2b"
+    },
+    {
+      "path": "NBS_EVAL_EPOCH_SERIES_V060.md",
+      "size": 3383,
+      "sha256": "306b2a51fe0db0684e5fed33314e407a69b8c6197e5e7304990f834470b3fa78"
+    },
+    {
+      "path": "NBS_V071_EXPERIMENT_GUIDE.md",
+      "size": 15577,
+      "sha256": "4f56b924a6617bf67f7f022d3e74bf71094c7400cac6b2b19d52f6d216b02cef"
+    },
+    {
+      "path": "PACKAGE_MANIFEST.sha256",
+      "size": 16833,
+      "sha256": "93937d97b79eea40ff4c15612ef00801c72c881769f6dca94546d9f4e17098a2"
+    },
+    {
+      "path": "VALIDATION_V071.json",
+      "size": 6670,
+      "sha256": "4d5c434f547c06483151e63f72804c1575704717233fd6e425eedd87be8f4e3f"
+    },
+    {
+      "path": "experiments/nbs/__init__.py",
+      "size": 49,
+      "sha256": "c1373374b0e16f3d1182a22f146fc9e4f00c4845b365e7a7a228694d340d7146"
+    },
+    {
+      "path": "experiments/nbs/latence_nbs_components.py",
+      "size": 6679,
+      "sha256": "dc50c2850029b915748f767fb0f742bd5568b298b9048d19510e8fe27cc9e848"
+    },
+    {
+      "path": "experiments/nbs/latence_nbs_loader.py",
+      "size": 289,
+      "sha256": "7e325b14e6a0b1ec207ed1ecaa35ea501f9b616bf739f5808678ea2a07946b2e"
+    },
+    {
+      "path": "experiments/nbs/references/v060_epoch16_20_reference.json",
+      "size": 244856,
+      "sha256": "b9a2a675c64d3972d3ca47d09d303ed418cf7a456e7720a1c76a40993af2e67b"
+    },
+    {
+      "path": "experiments/nbs/references/v060_epoch16_20_reference.tsv",
+      "size": 2865,
+      "sha256": "d0f1a496de50fdda1166f8f90a6d04900cd118eb0e84de181e1fc3115b77d6c8"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/FULL_RESTORE_V060_20260901.md",
+      "size": 2080,
+      "sha256": "40239c90c9dbf427199fb2e19c3451a0bcfc782d4680bd5377f40f3ad2b57526"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/MIGRATION.md",
+      "size": 3473,
+      "sha256": "2ee1adb8ed4b382c1d12bc5b9f23b26eb84bca24ad48aff581685660652f03c2"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/PERFOPT_V060.md",
+      "size": 5558,
+      "sha256": "7f50b6cf5105a32787cf8fabffc17716f5235a7fe66a87461c586cb4e6873c57"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/README.md",
+      "size": 13989,
+      "sha256": "3194d4617aafdd8c3ca3218428e5c55c9e43bd4b8e6adde6265c4f5cc7573a71"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/V070_ALIGNMENT.md",
+      "size": 6215,
+      "sha256": "9f6daa657e2a759187aabd5eeac7c5c2fb2188115bd215d2ab1e93d9d39e2dd7"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/VALIDATION.md",
+      "size": 1245,
+      "sha256": "4af855499322b78fae041071932e78f408764ec7811ab1176769a01cf2c518af"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_batch_probe_q128_v0.4.7.json",
+      "size": 5699,
+      "sha256": "47ccd346b83a043e1fdabc53797b457174e6f8dea374a78aa5a10636c31528e0"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_batch_probe_q16_v0.4.6.json",
+      "size": 5519,
+      "sha256": "6e8d4bb916e98d949d170a9eeb18d31622922ee2c34281d0f0ed52fc7c8e81f0"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_batch_probe_q32_v0.4.6.json",
+      "size": 5519,
+      "sha256": "9b81c1b1e96543210a03f05142e0f5af7041922334cf969e1273a600f847d152"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_batch_probe_q64_v0.4.6.json",
+      "size": 5520,
+      "sha256": "0b03ccc07a58be9ae198c38352c5f9945bbd0a8d195aa8318dd7fae5a6de6acd"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.3.json",
+      "size": 3249,
+      "sha256": "e7cef775ffb16dcb972d5b7d19595cf015551721e97f5dcbc0fee1092380af3d"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.5.json",
+      "size": 5434,
+      "sha256": "dda4b97848b00b07dc4ecd649a3009fb760987317d22b0f0470c39adfb1ddb71"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.6.json",
+      "size": 5531,
+      "sha256": "fdc74c42b7007b98475d39ca5eadcdd3222219f46b9cdd83f34d2ea991d48286"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.7.json",
+      "size": 5718,
+      "sha256": "5567cf1355897406f15330d5233478976d16ba00a203ea32991425c4f9f0fcc2"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.8.json",
+      "size": 5716,
+      "sha256": "027c4fae2479eb39ec791fe413d02914ba0a124b636c1924f672f4ec1e9bc581"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.9.json",
+      "size": 5716,
+      "sha256": "640c5629589efc5f2c8c80ac4cba5a1dd3137c31024db5407f58493a5aa4dad7"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.4.json",
+      "size": 5131,
+      "sha256": "c9a897950b3dcbe936cc64f7d694bd05cc5c614888d7f21bf4161238492004b0"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.0.json",
+      "size": 5919,
+      "sha256": "4766fa24478216f61d7f403db51b12ce053e08c78da527a0236e8c168a8e3907"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.1.json",
+      "size": 6046,
+      "sha256": "10ab31f66d304bff42e3279bc0b592a006006da505c4495aaa5b56edf530b338"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.2.json",
+      "size": 6185,
+      "sha256": "cc51eb0d8d23a8728d1f734d912a6f72dee40cc5864db7efa97bd54352aa5bd9"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.3.json",
+      "size": 6508,
+      "sha256": "1e3f2dccac596d00e94c3249c64aa59ddb01765e3f0cceb35da7be47f216f3f1"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.4.json",
+      "size": 6788,
+      "sha256": "f257444f87c013577b611fecf0cd308acf81c7e525802fb0ccf05c9333beb847"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.5.json",
+      "size": 6804,
+      "sha256": "4ca64dc2d2f095698a21ffba0b95967e1a3d73457783ddcab025487c4f01774c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.5.6.json",
+      "size": 6985,
+      "sha256": "7ec47b3c024c996223ec312526efa1d7fa3d7f5c5f9e012459544625dc7f9004"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.6.0.json",
+      "size": 7263,
+      "sha256": "c146ea8bf03c66045a9d30159bad775cf0328ce23ccbf279ec74d3124fc80377"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.6.0_perfopt.json",
+      "size": 7411,
+      "sha256": "5075e204ee1fc68a835c0426563ada6dcf55bbcc56b87a90a42e64b6375af615"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.7.0_inductive_aligned_probe.json",
+      "size": 7953,
+      "sha256": "7c5ac88bd7ab662499cddfe4915f34b7c57ce20d5c78c89f909635fe18fa6a8e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.7.0_sampling_loss_probe.json",
+      "size": 7877,
+      "sha256": "e7b73b70343e87746caf71b5a4ea25d4cb8c56b25f94936690423be8c67dd11e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.7.1_correctness_control_probe.json",
+      "size": 7528,
+      "sha256": "b21197512c62e5e7c1b689eb248e223d8e881a619cd26f6947bcf2cedcdf1c95"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.7.1_inductive_aligned_probe.json",
+      "size": 8237,
+      "sha256": "fb51a7b206bc91f7a55ce0c533c226b81b512b7b43c5e6811cfc60d220421231"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_fixed_epoch_v0.7.1_sampling_loss_probe.json",
+      "size": 8157,
+      "sha256": "243e2a844cbe8efafa5a033b8d4177f74c6ade07e57c0d0cb84f642f496288e2"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/bp_protein_major_probe_v0.5.2.json",
+      "size": 6162,
+      "sha256": "8888df86f01f8f4cf461b3a74498bbaefb2a3467bed64ce1ff11a742dcd7f647"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/go_boxsqel/go_boxsqel_manifest_512.json",
+      "size": 3749,
+      "sha256": "7188ed5d96339dcc133c7c3cb35d4b014a0f82f1b24ad570f54bfee886eab327"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/configs/go_boxsqel/go_boxsqel_parser_report_512.json",
+      "size": 792,
+      "sha256": "9e63c0e0fdeb542b8491b236fb61f190285d867c582c65485d3382af1c04ba8b"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/examples/build_from_tensors.py",
+      "size": 2190,
+      "sha256": "99b37895934ba1176582b4f224b7c95e89cf9bf96c54de897cb4052a18ba4f5c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/examples/ddp_fixed_epoch_smoke.py",
+      "size": 2525,
+      "sha256": "c82c5c9fb04a3728cfebaff1f1c8fe04dbb6897515674018f5247fac559f8d88"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/examples/fixed_epoch_train.py",
+      "size": 1572,
+      "sha256": "a69d94a008abf97b6a20eb41d820e79ff516a0dfd881cbb1606f2a9be6d0c046"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/examples/toy_train.py",
+      "size": 4502,
+      "sha256": "c0cf288a171bd006ffed65d0cea518bf5e48218bff61b2a7f79faeb159005d25"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/__init__.py",
+      "size": 6242,
+      "sha256": "e5db8a98cef2ff3e2c5244103be720b9868ed4da86c01a012f0a0d9e8dbf7892"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/backbones.py",
+      "size": 12085,
+      "sha256": "c5a14bbe0b3c029b128f2e1d248023510310275fa3bf745bec937dbac30c08c6"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/box_geometry.py",
+      "size": 8196,
+      "sha256": "b5a68fe15ef776806c85dbe3b03b421607a9089f7dba1e8f255141a03c498168"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/boxsqel_manifest.py",
+      "size": 22456,
+      "sha256": "65fbac9aa1c89eb0e26e3c957cf367764f4341c69cb37828bc524f9eee83da79"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/boxsqel_relations.py",
+      "size": 17176,
+      "sha256": "166f9edeb5dec914940b9451ec95b7a04ff686b52a30c603ee68996394ffe1da"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/candidate_evidence.py",
+      "size": 2295,
+      "sha256": "85dcd40c35897540faeee7a73c6efbdbada9db88c5ad209c9eacfdf937356caf"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/checkpoint_compat.py",
+      "size": 1162,
+      "sha256": "de101c74986b98c0379693417fb16c5f69f62f03b58e5ef9b59761216f0a305e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/compat.py",
+      "size": 688,
+      "sha256": "9a96f0b22cd7b616c615b57cafd8bc73e4a33895b3735829b02e7f27bda7bc9c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/config.py",
+      "size": 6566,
+      "sha256": "78a393231ffae901420c268ed2265350e4f0d1f5a9514689c6e8ee9e56d34008"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/data.py",
+      "size": 20811,
+      "sha256": "c4a875fbfb0c546d5a8cd77e6e66a283a798f5e26ab069faeda44d3236194b3a"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/distributed.py",
+      "size": 4709,
+      "sha256": "a89df7f858a91599e52d0699ebfce094a0c5fdf7e8ca78faae486c668f1731e0"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/episode.py",
+      "size": 129831,
+      "sha256": "b7fe3b5d527e55b1a7ec8aa7d4c60cb34013cc2076e5744b64be35e0e73c4252"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/go_encoder.py",
+      "size": 8465,
+      "sha256": "35c9c822b28f33657b80efb0eca3eee89718b8f7ae2c37629314df38ee26bc2f"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/hierarchy.py",
+      "size": 2167,
+      "sha256": "fc6a84c14d9f4532c2add8a66f3db22989144ec4b7420a6b37974fb4c45b7537"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/inference.py",
+      "size": 20339,
+      "sha256": "e89c69c7d6b9d2d54f70f05bf594347e44a80a7b2c38b8956857b63425b3ac60"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/inverted_index.py",
+      "size": 22767,
+      "sha256": "a3e9a7334cee96c5b67fdf5364aa9a065757bb6d01003fec12b728fc1c29b8c2"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/latence_graph_stores.py",
+      "size": 22257,
+      "sha256": "389433f595e24ea78b9a9c6d4066661e70b699a3bd7d1c173792f8f2b4882e7a"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/latence_stores.py",
+      "size": 10732,
+      "sha256": "08eebc04c21c7a5a64f5d365b6ba46cb37114c1c4def50b436d89eb9bfb1fd67"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/layers.py",
+      "size": 7637,
+      "sha256": "47e9883a1b629e3147daf38d1685a0083af214b581bf7870d63312d1ce4910e8"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/local_loader.py",
+      "size": 89896,
+      "sha256": "4a0c359107d7e19c5efb6bff0602a3b22c26f6baa21aa3ebc18fddec7ea9776b"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/losses.py",
+      "size": 19832,
+      "sha256": "0b0ebd6ff8c4344bac549b6f5d7b850d94b879e556e95280e8e0aac02036d904"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/matcher.py",
+      "size": 15357,
+      "sha256": "204a28e2fa78bd72697e98d52f05925cb739051132f2417d08d0b0f83c43168c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/model.py",
+      "size": 25262,
+      "sha256": "94d95c3a1478bb171d39bd9b12e2ce871f6d40cf39a07c685dc6ce19de4b0146"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/ops.py",
+      "size": 2594,
+      "sha256": "b6dff0df1e3929f0eb821826eeac8f6a9d020cf0c58cdad6b3d63f9cb7ca7cec"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/query.py",
+      "size": 15335,
+      "sha256": "45ac2211d9b640235285195d04557b264f795cf62a7454e4813e479b07a68629"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/sampling.py",
+      "size": 4516,
+      "sha256": "21ea1f6a369adaf07b9da8d1b65c55a42dda95d002f07f763c0d9f4478e6ab96"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/sampling_indices.py",
+      "size": 5227,
+      "sha256": "f457bdf095ce17d944d951538dcb6ad1d9c6fdbcf350f67091cf7e9e412e6e02"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/schema.py",
+      "size": 2457,
+      "sha256": "e6ba987c1ea07b37e85c605923e426c2f1fd84ac35c7c0ede904f4d18a432680"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/training.py",
+      "size": 97492,
+      "sha256": "58c27feda930d481d66ebe354f715b9b7623cddeab2d90dd566b277ad49a1cdc"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/types.py",
+      "size": 6359,
+      "sha256": "cdca3e471d70102f7c50e52f833365c6a337f46c13f4b839338088fbd9f3e01a"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/pyproject.toml",
+      "size": 390,
+      "sha256": "96c0ab91dcf6767826fe8e96a10f9e0f4fd0bff6586a6df20cdc69c5ed9620b6"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/requirements.txt",
+      "size": 197,
+      "sha256": "822e46b383dcf4ecf6652663846afa60f2c4d9d9fba115e62118e7506644fd2e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_alignment_v071.py",
+      "size": 14453,
+      "sha256": "ff52121df5c47366b045c60e5a9a67424c8fe51dec2c09db3bd93326c1b3623d"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_background_unlabelled_v056.py",
+      "size": 3944,
+      "sha256": "6df334bcf5d3da87069023ffb6e136a5071582106a201a447694939eeba9ba6c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_box_geometry.py",
+      "size": 1114,
+      "sha256": "af93b89543e3ecdac1272106a8bb4603ed69896688a51ca2fb9380ebe0d80630"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_boxsqel_manifest.py",
+      "size": 4453,
+      "sha256": "aa86fdd52bf7de23ac3b9a23ae5b465014df81e4e3ed6ff16cf5c6c782fb1b2c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_boxsqel_relations_v04.py",
+      "size": 4496,
+      "sha256": "5524e8c7747592a9fc8a3e8b26363e66d4e2cd692abdc44be206344383e52e03"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_candidate_evidence_encoder.py",
+      "size": 965,
+      "sha256": "64e5197dd687d3f82bae4a7650b7e11d70c0a394a3b0700669e04a9fc4d93925"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_data_leakage.py",
+      "size": 873,
+      "sha256": "488d6b722a59023efd9f4f438d75786558f142b13afa1433109cfb796bd471cd"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_ddp_episode_sharding_v04.py",
+      "size": 2020,
+      "sha256": "12c9dbb6d27c62a345eea2881a45bfa2c8649f580e53e1002357ce88147f72c2"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_distributed_context_v04.py",
+      "size": 462,
+      "sha256": "e9c417589798a5a9b39b7ccc14f0a3e6a555b1d05d32e2bbfbee109d3349aae6"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_dual_axis_loss_v070.py",
+      "size": 3783,
+      "sha256": "36846038113a87b39e659bc205655f8a80d564a4ad85c63995b5641c15d5c869"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_episode_sampler.py",
+      "size": 2512,
+      "sha256": "61db8481637d0ac58c66af2698e377d928c7a6b09fa0504b7a60ebd4082f7a5f"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_eval_checkpoint_series_summary.py",
+      "size": 2408,
+      "sha256": "7f3b44816a628f1ee1e18a0619ecf6a67e7971bb395956e545a256f62e540ebd"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_experiment_runner_v071.py",
+      "size": 4623,
+      "sha256": "3e3c6452e20db38710f0df8d5120a719dedfe7c460b98fdb2f451454e6620fb4"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_fixed_epoch_training.py",
+      "size": 4490,
+      "sha256": "a2c3297d60c34ee9ec3275f51b0b33ecfc3308cab6e1c88f454c06c2d79b2e58"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_global_go_fallback.py",
+      "size": 1326,
+      "sha256": "d8a0d0e478617c1b346733ce7dbacee1914543a694245275ed0b1fd4a8bea92e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_go_box_encoder.py",
+      "size": 639,
+      "sha256": "f942241e2da05130acee8ee5e0e087741829cd15f996ee23c543f449e597e8be"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_go_residual_query_v070.py",
+      "size": 1548,
+      "sha256": "91e9ab73158cdd91ee76e79d5596a55f2b34eb409f976bf31db01401f41424fd"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_hybrid_weak_focus_v054.py",
+      "size": 10158,
+      "sha256": "bdc3e3014bf445461538ffd04cb131d3031f56a780e8496ae42e736447ee32f5"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_inductive_full_task_v053.py",
+      "size": 627,
+      "sha256": "c8f6e3ffb768989954fe98a49943cab39b38b99f2015fa7a5c41031a6b136b0e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_inductive_input_pipeline_v057.py",
+      "size": 6837,
+      "sha256": "db061708f035e1349688c6b9fae6528b7854b2ba8d3e217f4aa79a7a326254c0"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_inductive_routing_spaces_v058.py",
+      "size": 3424,
+      "sha256": "4f94519423ccc7b0b48b1507fc1b56ce29ebf28f968178712ed351ca38bb8e28"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_inverted_index.py",
+      "size": 5470,
+      "sha256": "3dfc8e67b28ccb8e4c6c86842bd348bf29e9b5b0afb1214a909964cab8135887"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_isolated_candidate_encoder_v070.py",
+      "size": 1023,
+      "sha256": "bbf1ac0a9d55924a9f0d6288c73ebba2722b936ce5c9878977cc0e227904f1de"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_local_materializer_contract_v04.py",
+      "size": 7173,
+      "sha256": "48c3e3731d4054e4f2609541ca2c8389e0f2923b1c0185553cec39044cd5252f"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_loss_v045.py",
+      "size": 4143,
+      "sha256": "32af2049fd443196c3cd39e03d1e81cc30943117bf2fb6e603a7375e280f95e3"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_matcher_equivalence.py",
+      "size": 763,
+      "sha256": "2c28c2412e8da56d7e3b09f6b75c3e6562e11fe683387625a0efbc0d816ed389"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_ontology_context_v055.py",
+      "size": 2658,
+      "sha256": "495afcca203746b36dee57c5768965b79677ceb381e2fc34b1900d78470a7c90"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_performance_paths_v060.py",
+      "size": 3151,
+      "sha256": "d47cd8f0cedd2528bed962539666de09d11060b11693cfb3ff1aba63a1859b27"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_protein_epoch_coverage_v051.py",
+      "size": 4275,
+      "sha256": "47027a3097b7b6bf2b7c5299c8183cd3ef88f12dcc782e1041c20886c34502ec"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_protein_major_epoch_v052.py",
+      "size": 4016,
+      "sha256": "cace53eddeaaf26e10ebf529dfaadb441a842218949947fa2dd1ae29068a9b15"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_pseudo_supervision_contract_v044.py",
+      "size": 6505,
+      "sha256": "c458f12a71ce0b3625ee16f7fc729fb3af8935bfed8ef15008de0101e4553ff8"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_query_axis_hierarchy_loss.py",
+      "size": 832,
+      "sha256": "2ca3527e0804d8026f2b091ddd5595dff72cac6629e9e8f10042eddca9bca3ab"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_real_local_batch_v04.py",
+      "size": 3806,
+      "sha256": "3a9062b3a87ed9ca40cf5a1c5aa1a57d23ace04887d68341bea2f9fbd710e2de"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_residual_refinement.py",
+      "size": 1283,
+      "sha256": "05b38ed1521bf3295ba11e62161bc41b74643f652f520fa6344f82c10d73cff5"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_sampling_indices_v04.py",
+      "size": 1056,
+      "sha256": "a669cd76e760c88233970fcdc95f15738b6f309f5dab82e8049ff7dda16faeeb"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_scheduler_v050.py",
+      "size": 8040,
+      "sha256": "47ee18f5b8b1ccfbcd3673c1f90bd1becfa00d31b485c661423bdc0f5d467fcf"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_source_additivity.py",
+      "size": 1112,
+      "sha256": "60100988b0148c39ca20df3cdb28c93674207a6a0e2ad01caf866749f73841dc"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_student_gate.py",
+      "size": 1339,
+      "sha256": "9a70580224ab8b8b4b11406427b99468be9e9b37291021ae5a44e888543e9d3c"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_supervision_weight.py",
+      "size": 849,
+      "sha256": "e41dd2a45bc39e425344b1feaca348d4a8e13d341884fde15d03d9c91afa7b08"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_training_v046.py",
+      "size": 2214,
+      "sha256": "1400555e67e150f7098733ea051f6904badf5a730a7f16b4740169dc4f1b8ce6"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_training_v047.py",
+      "size": 6086,
+      "sha256": "b524bb52aa45196b1965de61a0a9b6307cede25f9bbbf154b46c5f845b2e58bf"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_training_v048.py",
+      "size": 6497,
+      "sha256": "40676f11ffb4fbca2bf17783058aa834f0bcf00c4b442ebeb86db5a575dd2a36"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_training_v049.py",
+      "size": 2263,
+      "sha256": "0be2df402857297c2d17e990d07ddd6fffe34db924b661ae09be396ddb9c4bc5"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/tests/test_unique_weak_sampling_v053.py",
+      "size": 3470,
+      "sha256": "adb8414632bf4d9f9bea431540845b7aa19f2807c5a8f718ed618442cf7d22f2"
+    },
+    {
+      "path": "scripts/export_weak_graph_predictions.py",
+      "size": 92460,
+      "sha256": "15396c06358fdd5f6eb16523d5323e408c3b7905037c44db69330a530e19b1c0"
+    },
+    {
+      "path": "scripts/nbs/analyze_nbs_v071_experiments.py",
+      "size": 8576,
+      "sha256": "0c56ae6be8c16e8abfaeb881af48178d52a36778c18a2ae35c6f34e29db3faa9"
+    },
+    {
+      "path": "scripts/nbs/audit_nbs_protein_go_batch_alignment.py",
+      "size": 16855,
+      "sha256": "fbdc5ae2f81e6bfe474b4b1c3821cca19a1981e1ebd955d251990c24438bc7ab"
+    },
+    {
+      "path": "scripts/nbs/audit_nbs_v04_training_inputs.py",
+      "size": 31580,
+      "sha256": "5a901a74abcb962aef8a49201257995beaec45125123d0a4ed02f769e275b844"
+    },
+    {
+      "path": "scripts/nbs/build_boxsqel_gg_relations.py",
+      "size": 1547,
+      "sha256": "a803ae0e562f6ad9e570a19c751445b2099b29c922e5c12560f7d35ba1990d82"
+    },
+    {
+      "path": "scripts/nbs/build_go_protein_inverted_index.py",
+      "size": 2482,
+      "sha256": "a311ab629ef9298095aafa60b11e0e924606b8e8610e087a00d48467e26c9c73"
+    },
+    {
+      "path": "scripts/nbs/build_pp_sampling_indices.py",
+      "size": 954,
+      "sha256": "a9ecdddae59805d7595dd53188b151a8491b4ae0e8ce726e8175a463fc342ab3"
+    },
+    {
+      "path": "scripts/nbs/eval_nbs_ind_test_predictions.py",
+      "size": 96287,
+      "sha256": "7bd9104a4527c629ae0a229e88b98c0bb5af312211b2d3f189d4b2b72e41c99e"
+    },
+    {
+      "path": "scripts/nbs/evaluation_v061_comparisons.example.json",
+      "size": 1472,
+      "sha256": "8970a3456bcea58dfd13646d15188398dc68793c0a4b44cc45c09bf3a6d35163"
+    },
+    {
+      "path": "scripts/nbs/export_gold_protein_go_edges.py",
+      "size": 20107,
+      "sha256": "c3c3aaa9eaa9b67117e935d2857574063932b843860b8e4ec0db5a4a3624cbff"
+    },
+    {
+      "path": "scripts/nbs/export_nbs_full_task_predictions.py",
+      "size": 19175,
+      "sha256": "0511b7e8cbc5937fca941e2fd28d86463d96792f3b948e19fcd40d1fa6920c95"
+    },
+    {
+      "path": "scripts/nbs/prepare_boxsqel_full_ontology_for_nbs.py",
+      "size": 1324,
+      "sha256": "ae050a44a9625c1a03595e1ff2ccd8754ad476b5c9007c515639ffe1e95907ab"
+    },
+    {
+      "path": "scripts/nbs/prepare_go_boxsqel_for_nbs.py",
+      "size": 1710,
+      "sha256": "948a3c9dd73c6b5b3f0532e2727fe4414a38fce0c0aaf8b9cc8e01b8877687dc"
+    },
+    {
+      "path": "scripts/nbs/prepare_nbs_ind_test_inputs.py",
+      "size": 49501,
+      "sha256": "b1bd9518a665445599cd7224bdf9d9ae42b08c42b92c017b4b98234644070124"
+    },
+    {
+      "path": "scripts/nbs/run_audit_nbs_v04_training_inputs.py",
+      "size": 2457,
+      "sha256": "d2df1844ef00c15b6bbbccad1b068c68ecc12c9a292585388e3f05fa2943c2a4"
+    },
+    {
+      "path": "scripts/nbs/run_build_boxsqel_gg_relations.py",
+      "size": 2227,
+      "sha256": "e3c57730d9ff384a061d9edf3506789ad6cd95feccd51d8f85e4466c19daf549"
+    },
+    {
+      "path": "scripts/nbs/run_build_go_protein_inverted_index.py",
+      "size": 7762,
+      "sha256": "290b13d2ef0393d450cd87c508d139e928cd8083bf9a36f4b845f2dd1b3daa93"
+    },
+    {
+      "path": "scripts/nbs/run_build_pp_sampling_indices.py",
+      "size": 1089,
+      "sha256": "e88acaa84d696574a9cc953f216ea849c0be75f1cb464863d1e5832f2597abf9"
+    },
+    {
+      "path": "scripts/nbs/run_eval_nbs_checkpoint_series.py",
+      "size": 7439,
+      "sha256": "f115b5f1620666c6f4e17d0ac995e040db7205929fdcf68230b0e851650b5dbd"
+    },
+    {
+      "path": "scripts/nbs/run_eval_nbs_ind_test_predictions.py",
+      "size": 17831,
+      "sha256": "0028daad92a205381dcdde7270db350d5777e117b19ab7de42840ce1c4744c3a"
+    },
+    {
+      "path": "scripts/nbs/run_export_gold_protein_go_edges.py",
+      "size": 3032,
+      "sha256": "89d8fe6012cd4031125b5645ffb1f668cbba37f999b13a002a71cc1f0483c696"
+    },
+    {
+      "path": "scripts/nbs/run_export_nbs_ind_test_predictions.py",
+      "size": 3833,
+      "sha256": "1264d79189435bdd1293467df6cadbb3f66e0b40de785a27764c9a2cc0f28548"
+    },
+    {
+      "path": "scripts/nbs/run_nbs_v071_contract_tests.py",
+      "size": 4124,
+      "sha256": "7ff0275352ded241de229a4bcbc6a3ca1d649d74049bf3177dbeb173b79fd58c"
+    },
+    {
+      "path": "scripts/nbs/run_nbs_v071_experiments.py",
+      "size": 9052,
+      "sha256": "3111d89f17e34510e08b1dfe9ff61370248d0ef63393fb1c415f8481c26d2789"
+    },
+    {
+      "path": "scripts/nbs/run_prepare_boxsqel_full_ontology_for_nbs.py",
+      "size": 1430,
+      "sha256": "5369d8de2014cbfe7a62d5321b0b832216ca9a6f781c0187ef6139daca72c33e"
+    },
+    {
+      "path": "scripts/nbs/run_prepare_go_boxsqel_for_nbs.py",
+      "size": 1994,
+      "sha256": "a0f02620818de4385eab4a2d82978cff685023738f347a5c76eec31d37b72f89"
+    },
+    {
+      "path": "scripts/nbs/run_prepare_nbs_v04_training_inputs.py",
+      "size": 808,
+      "sha256": "5e0f4f9e52616183bbc4c8a2f93ba215b2cfe21679ed060db7648f0764dc3ea4"
+    },
+    {
+      "path": "scripts/nbs/run_smoke_test_nbs_train_loader.py",
+      "size": 807,
+      "sha256": "1933d3255bbbf0bb40134c04caaf15bdbcc43a2569389645b08771a5578494c6"
+    },
+    {
+      "path": "scripts/nbs/run_train_nbs_fixed_epochs.py",
+      "size": 7368,
+      "sha256": "21ab21aac8708475c1151e1c0445d64ed9667e14d80dd4afa049bb44a77faa8b"
+    },
+    {
+      "path": "scripts/nbs/smoke_test_nbs_train_loader.py",
+      "size": 8869,
+      "sha256": "653d093df4b3807116b2e1fb0b6b5c2d9d667f95cae76172631a91d4be168af7"
+    },
+    {
+      "path": "scripts/nbs/summarize_nbs_checkpoint_series.py",
+      "size": 9745,
+      "sha256": "3baa6ec817fabc09cc1280caeab386d873770da5eba1a6110efc7bd723469a54"
+    },
+    {
+      "path": "scripts/nbs/train_nbs_fixed_epochs.py",
+      "size": 17976,
+      "sha256": "7184c8899e93888cab50d86e12300bd104e6020d7e57bd7ff2a79301655d2e16"
+    },
+    {
+      "path": "scripts/run_export_weak_graph_predictions.py",
+      "size": 12475,
+      "sha256": "301b7b5ce7d362c29738d072fd42648b19d63f2ab81129df8bdd163cca0235ec"
+    },
+    {
+      "path": "scripts/test_export_weak_graph_predictions.py",
+      "size": 7125,
+      "sha256": "0f1b42d2775b7ea08c75d72db444fae66b741cd06987010d3d6a3df3e86fea57"
+    }
+  ]
+}

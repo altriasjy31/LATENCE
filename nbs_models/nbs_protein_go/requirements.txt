@@ -1,0 +1,5 @@
+torch>=2.4
+torch-geometric>=2.5
+numpy>=1.26
+# Production training uses custom mmap/CSR local materialization rather than a
+# global NeighborLoader over the hundred-million-edge candidate relation.

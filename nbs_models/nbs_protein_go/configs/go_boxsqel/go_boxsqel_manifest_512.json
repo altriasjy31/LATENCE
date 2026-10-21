@@ -1,0 +1,133 @@
+{
+  "model": "BoxSquaredEL",
+  "architecture": {
+    "class_representation": "one axis-aligned box per class",
+    "class_layout": "[center(d), abs(offset)(d)]",
+    "class_vector_width": 1024,
+    "relation_layout": "[head_center(d), head_abs_offset(d), tail_center(d), tail_abs_offset(d)]",
+    "relation_vector_width": 2048,
+    "bump_width": 512
+  },
+  "config": {
+    "data_file": "data/go.norm",
+    "embedding_size": 512,
+    "class_vector_width": 1024,
+    "relation_vector_width": 2048,
+    "batch_size": 512,
+    "epochs": 1000,
+    "learning_rate": 0.001,
+    "margin": 0.0,
+    "neg_dist": 2.0,
+    "reg_factor": 0.05,
+    "num_negatives": 2,
+    "filter_known_negatives": true,
+    "negative_loss_mode": "official",
+    "loss_weights": {
+      "nf1": 1.0,
+      "nf2": 1.0,
+      "nf3": 1.0,
+      "nf4": 1.0,
+      "disjoint": 1.0,
+      "role_inclusion": 1.0,
+      "role_chain": 1.0,
+      "nf3_neg": 1.0
+    },
+    "clip_norm": 1.0,
+    "device": "cuda:0",
+    "seed": 100,
+    "deterministic": false,
+    "scheduler": "multistep",
+    "lr_milestones": [
+      600,
+      800
+    ],
+    "lr_gamma": 0.1,
+    "diagnostic_every": 10,
+    "diagnostic_pairs": 4096,
+    "diagnostic_class_sample_size": 4096,
+    "diagnostic_tolerance": 1e-07,
+    "diagnostic_temperature": 0.1,
+    "selection_metric": "geometry",
+    "strict_parser": true,
+    "steps_per_epoch": 156
+  },
+  "parser": {
+    "input_file": "data/go.norm",
+    "report": {
+      "total_lines": 122062,
+      "blank_lines": 0,
+      "comment_lines": 0,
+      "ignored_lines": 0,
+      "parsed_lines": 122062,
+      "expanded_axioms": 122062,
+      "unparsed_lines": 0,
+      "nf1": 79740,
+      "nf2": 11614,
+      "nf3": 19117,
+      "nf4": 11582,
+      "disjoint": 0,
+      "role_inclusion": 3,
+      "role_chain": 6
+    },
+    "classes": 44919,
+    "relations": 8,
+    "axiom_shapes": {
+      "nf1": [
+        79740,
+        2
+      ],
+      "nf2": [
+        11614,
+        3
+      ],
+      "nf3": [
+        19117,
+        3
+      ],
+      "nf4": [
+        11582,
+        3
+      ],
+      "disjoint": [
+        0,
+        2
+      ],
+      "role_inclusion": [
+        3,
+        2
+      ],
+      "role_chain": [
+        6,
+        3
+      ]
+    },
+    "unparsed_examples": [],
+    "artificial_disjoint_axioms": 0
+  },
+  "training": {
+    "start_epoch": 1,
+    "last_epoch": 1000,
+    "best_epoch": 1000,
+    "best_score": 0.31660131830722094,
+    "selection_metric": "geometry",
+    "nan_detected": false,
+    "stopped_early": false
+  },
+  "artifacts": {
+    "selected_classes": "outputs/go_emb/go_boxsqel_classes_512.pkl",
+    "selected_relations": "outputs/go_emb/go_boxsqel_relations_512.pkl",
+    "selected_bumps": "outputs/go_emb/go_boxsqel_bumps_512.pkl",
+    "best_classes": "outputs/go_emb/go_boxsqel_classes_512_best.pkl",
+    "best_relations": "outputs/go_emb/go_boxsqel_relations_512_best.pkl",
+    "best_bumps": "outputs/go_emb/go_boxsqel_bumps_512_best.pkl",
+    "final_classes": "outputs/go_emb/go_boxsqel_classes_512_final.pkl",
+    "final_relations": "outputs/go_emb/go_boxsqel_relations_512_final.pkl",
+    "final_bumps": "outputs/go_emb/go_boxsqel_bumps_512_final.pkl",
+    "best_checkpoint": "outputs/go_emb/go_boxsqel_checkpoint_512_best.pt",
+    "final_checkpoint": "outputs/go_emb/go_boxsqel_checkpoint_512_final.pt",
+    "history": "outputs/go_emb/go_boxsqel_history_512.csv",
+    "parser_report": "outputs/go_emb/go_boxsqel_parser_report_512.json",
+    "npy_directory": "outputs/go_emb/boxsqel_npy_512"
+  },
+  "evaluation_command": "python evaluate_go_embedding.py --embedding-file outputs/go_emb/go_boxsqel_classes_512.pkl --go-file <go.obo> --geometry box --layout center_offset --embedding-dim 512 --edge-types is_a --output-dir <output_dir>"
+}
