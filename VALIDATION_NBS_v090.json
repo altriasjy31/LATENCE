@@ -1,0 +1,66 @@
+{
+  "release_version": "0.9.0",
+  "environment": {
+    "python": "3.12",
+    "torch": "2.4.1+cpu",
+    "numpy": "2.3.5",
+    "pytest": "9.1.1",
+    "cuda": false
+  },
+  "cpu_tests": {
+    "passed": 212,
+    "skipped": 1,
+    "test_files": [
+      "nbs_models/nbs_protein_go/tests/test_full_task_model_v090.py",
+      "nbs_models/nbs_protein_go/tests/test_full_task_loss_v090.py",
+      "nbs_models/nbs_protein_go/tests/test_full_task_data_v090.py",
+      "nbs_models/nbs_protein_go/tests/test_go_registry_v090.py",
+      "nbs_models/nbs_protein_go/tests/test_full_task_runner_v090.py",
+      "nbs_models/nbs_protein_go/tests/test_v090_entrypoints.py",
+      "nbs_models/nbs_protein_go/tests/test_full_task_model_v088.py",
+      "nbs_models/nbs_protein_go/tests/test_full_task_loss_v088.py",
+      "nbs_models/nbs_protein_go/tests/test_local_loader_v088.py",
+      "tests/test_compare_nbs_cached_v090.py",
+      "tests/test_install_nbs_v090.py",
+      "tests/test_nbs_v088_acceptance.py",
+      "tests/test_full_task_eval_v088.py"
+    ],
+    "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=.:nbs_models/nbs_protein_go:nbs_models/nbs_protein_go/tests OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m pytest -q nbs_models/nbs_protein_go/tests/test_full_task_model_v090.py nbs_models/nbs_protein_go/tests/test_full_task_loss_v090.py nbs_models/nbs_protein_go/tests/test_full_task_data_v090.py nbs_models/nbs_protein_go/tests/test_go_registry_v090.py nbs_models/nbs_protein_go/tests/test_full_task_runner_v090.py nbs_models/nbs_protein_go/tests/test_v090_entrypoints.py nbs_models/nbs_protein_go/tests/test_full_task_model_v088.py nbs_models/nbs_protein_go/tests/test_full_task_loss_v088.py nbs_models/nbs_protein_go/tests/test_local_loader_v088.py tests/test_compare_nbs_cached_v090.py tests/test_install_nbs_v090.py tests/test_nbs_v088_acceptance.py tests/test_full_task_eval_v088.py",
+    "scope": "small synthetic graphs and existing metric/source contracts; no production training or inference"
+  },
+  "ddp_test": {
+    "status": "未验证",
+    "attempted": true,
+    "reason": "Actual two-process Gloo initialization denied: gloo/transport/tcp/device.cc Operation not permitted"
+  },
+  "original_v088_v089_files_byte_identical": true,
+  "model_parameters": {
+    "v088": 11423680,
+    "v090": 4685249,
+    "v088_head": 6841152,
+    "v090_head": 102721,
+    "scope": "parameter counting with feature_dim2048, geometry512 and4ontology relations; no biological performance experiment"
+  },
+  "performance": {
+    "status": "未验证",
+    "baseline_Fmax": 57.72314936447243,
+    "new_Fmax": null,
+    "delta_Fmax": null,
+    "effective_threshold": 60.72314936447243,
+    "gpu_hours": null,
+    "gpu_peak_memory_gb": null
+  },
+  "dynamic_new_GO": {
+    "interfaces_and_synthetic_correctness": "implemented_and_tested",
+    "strict_temporal_benchmark": "not_run; valid new geometry/alignment and time-frozen gold not supplied"
+  },
+  "installation_checks": {
+    "status": "passed",
+    "new_files_installed": 27,
+    "existing_dependencies_preserved_without_rewrite": 68,
+    "repeat_install": "idempotent",
+    "installed_python_entrypoint_help": 4,
+    "bash_syntax": "passed",
+    "unknown_local_change": "rejected_before_any_write_by_unit_test"
+  }
+}

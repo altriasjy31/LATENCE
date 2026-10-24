@@ -1,0 +1,34 @@
+{
+  "revision": "0.9.0-single12800-r1",
+  "test_summary": {
+    "passed": 162,
+    "skipped": 1,
+    "seconds": 50.3,
+    "skip_reason": "Real multiprocess Gloo unavailable in this execution environment (Operation not permitted)."
+  },
+  "new_checks": [
+    "six real message-flow blocks and six-hop dependency",
+    "six-layer forward/backward",
+    "supervision and holdout support exclusion",
+    "unchanged three-layer arrays and contracts",
+    "single-process launcher and environment isolation",
+    "accumulation 1 and 2 separately exact stop/resume",
+    "six-layer fixed-epoch export and evaluator identity",
+    "actual delivered configuration preflight and 48/4800 update counters"
+  ],
+  "install_checks": {
+    "known_data_adapter_upgrade_with_backup": true,
+    "unknown_source_conflict_preflight": true,
+    "idempotent": true,
+    "preserved_dependencies_hash_and_mtime": 68,
+    "preserved_user_modified_ddp_config": true,
+    "all_original_v0891_archive_files_unchanged": 458
+  },
+  "not_verified": [
+    "production GPU memory for six-layer direct batch 12800",
+    "production throughput and concurrent training stability",
+    "production Fmax improvement",
+    "new-GO/zero-shot generalization quality"
+  ],
+  "source_config_sha256": "542ca1ffdb577fb37b17e8b90824d8d1bbca3e94a6607b3fd177eabb1d45b669"
+}

@@ -1,0 +1,263 @@
+"""Additive label-holdout filtering over the unchanged v088 graph engine.
+
+Stage-2 holdout is the default claim for a partial label split: upstream
+features, predictions and candidate ordering may already encode heldout labels.
+Strict pipeline claims require hash-bound provenance for every upstream source.
+No independent-test gold is opened or used by this module.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import date
+import json
+from numbers import Integral
+from pathlib import Path
+from typing import Mapping
+
+import numpy as np
+import torch
+
+from .full_task_data_v088 import DEFAULT_FANOUTS, FullTaskDataV088, RELATIONS
+from .go_registry_v090 import mapping_sha256, sha256_file
+
+
+LABEL_SPLIT_SCHEMA = "nbs-v090-label-split-v1"
+
+
+def _configured_sampling_depth(config):
+    """Validate depth/fanouts before opening any dataset or building stores.
+
+    Legacy three-layer configurations retain their original default fanouts.
+    A different depth must explicitly describe every outer-to-inner block;
+    silently repeating three preexisting blocks would not add graph depth.
+    """
+    options = config.get("full_task", {})
+    if not isinstance(options, Mapping):
+        raise ValueError("v090 full_task must be a mapping")
+    model, sampler = options.get("model", {}), options.get("sampler", {})
+    if not isinstance(model, Mapping) or not isinstance(sampler, Mapping):
+        raise ValueError("v090 full_task model and sampler must be mappings")
+    depth = model.get("sage_layers", 3)
+    if isinstance(depth, (bool, np.bool_)) or not isinstance(depth, Integral) or depth <= 0:
+        raise ValueError("v090 model.sage_layers must be a positive integer")
+    depth = int(depth)
+    if depth != 3 and "fanouts" not in sampler:
+        raise ValueError("v090 non-three-layer depth requires explicit outer-to-inner sampler.fanouts")
+    fanouts = sampler.get("fanouts", DEFAULT_FANOUTS)
+    if not isinstance(fanouts, (list, tuple)) or len(fanouts) != depth:
+        raise ValueError("v090 sampler.fanouts length must equal model.sage_layers in outer-to-inner order")
+    # These bounds are configuration-only; the parent rechecks the actual pool
+    # settings after construction. No graph/resource access is needed here.
+    try:
+        native_limit = int(sampler.get("native_pool_per_relation", 64))
+        retrieval_limit = int(sampler.get("retrieval_pool_size", 64))
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ValueError("v090 immutable pool sizes must be valid integers") from exc
+    for layer, item in enumerate(fanouts):
+        if not isinstance(item, Mapping) or set(item) - set(RELATIONS):
+            raise ValueError("v090 fanouts contain an unknown relation or non-mapping layer")
+        total = 0
+        for relation in RELATIONS:
+            count = item.get(relation, 0)
+            if isinstance(count, (bool, np.bool_)) or not isinstance(count, Integral) or count < 0:
+                raise ValueError("v090 relation fanouts must be nonnegative integers")
+            limit = retrieval_limit if relation == "cosine" else native_limit
+            if count > limit:
+                raise ValueError(f"v090 layer {layer} {relation} fanout exceeds immutable pool size")
+            total += int(count)
+        if total == 0:
+            raise ValueError("each v090 layer must request at least one relation")
+    return depth
+
+
+class FullTaskDataV090(FullTaskDataV088):
+    VERSION = "0.9.0"
+
+    def __init__(self, config, stores=None):
+        # The inherited engine constructs independent, chained message blocks
+        # using this instance's depth. Immutable candidate pools remain v084.
+        self.NUM_LAYERS = _configured_sampling_depth(config)
+        if stores is None:
+            from .local_loader_v090 import build_latence_nbs_stores
+            stores = build_latence_nbs_stores(config)
+        super().__init__(config, stores=stores)
+        raw = getattr(self.stores, "task_to_ontology", None)
+        if raw is None:
+            raw = getattr(self.stores.episode_sampler, "task_to_ontology_go", None)
+        mapping = np.asarray(raw)
+        if (mapping.shape != (self.num_task_go,) or mapping.dtype.kind not in "iu"
+                or np.any(mapping < 0)):
+            raise ValueError("v090 needs an immutable valid task_to_ontology mapping")
+        self.task_to_ontology_rows = mapping.astype(np.int64, copy=True)
+        self.task_to_ontology_rows.setflags(write=False)
+        self.seen_task_mask, self.label_split_contract = self._load_label_split(
+            self.options.get("label_split"))
+        self.seen_task_mask.setflags(write=False)
+
+    def _load_label_split(self, selection):
+        mapping_hash = mapping_sha256(self.task_to_ontology_rows)
+        if selection is None or selection == "all_seen" or selection == {"mode": "all_seen"}:
+            mask = np.ones(self.num_task_go, dtype=bool)
+            return mask, {"schema": LABEL_SPLIT_SCHEMA, "scope": "closed_set_all_seen",
+                          "num_task_go": self.num_task_go, "seen_task_columns": list(range(self.num_task_go)),
+                          "task_to_ontology_sha256": mapping_hash,
+                          "strict_pipeline_zero_shot": False,
+                          "claim": "closed_set_supervision_no_zero_shot_claim"}
+        value = selection.get("manifest") if isinstance(selection, Mapping) else selection
+        if not isinstance(value, (str, Path)):
+            raise ValueError("label_split must be all_seen or a split manifest path")
+        path = Path(value).resolve()
+        split = json.loads(path.read_text(encoding="utf-8"))
+        if split.get("schema") != LABEL_SPLIT_SCHEMA:
+            raise ValueError("unsupported v090 label split schema")
+        scope = split.get("scope")
+        if scope not in ("stage2_label_holdout", "strict_pipeline_zero_shot"):
+            raise ValueError("label split scope must be stage2_label_holdout or strict_pipeline_zero_shot")
+        if split.get("task_to_ontology_sha256") != mapping_hash or split.get("num_task_go") != self.num_task_go:
+            raise ValueError("label split task mapping hash or width mismatch")
+        if self._go_registry_sha256 is not None and split.get("go_registry_sha256") != self._go_registry_sha256:
+            raise ValueError("label split immutable task GO registry hash mismatch")
+        columns = split.get("seen_task_columns")
+        if (not isinstance(columns, list) or not columns
+                or any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < self.num_task_go for i in columns)
+                or len(set(columns)) != len(columns)):
+            raise ValueError("seen_task_columns must contain unique valid integer columns")
+        mask = np.zeros(self.num_task_go, dtype=bool)
+        mask[columns] = True
+        if mask.all():
+            raise ValueError("label holdout scope needs unseen columns; use all_seen for closed-set training")
+        for canonical in np.unique(self.task_to_ontology_rows):
+            group = mask[self.task_to_ontology_rows == canonical]
+            if group.any() and not group.all():
+                raise ValueError("seen/unseen must hold out whole canonical alias groups")
+        contract = {"schema": LABEL_SPLIT_SCHEMA, "scope": scope,
+                    "num_task_go": self.num_task_go, "seen_task_columns": columns,
+                    "task_to_ontology_sha256": mapping_hash,
+                    "go_registry_sha256": self._go_registry_sha256,
+                    "manifest_sha256": sha256_file(path),
+                    "strict_pipeline_zero_shot": scope == "strict_pipeline_zero_shot",
+                    "claim": "stage2_only; upstream_features_candidates_and_graph_may_have_seen_heldout_GO"}
+        if scope == "strict_pipeline_zero_shot":
+            contract["strict_provenance"] = self._strict_provenance(split, path, mask)
+            contract["claim"] = "verified_hash_bound_upstream_declarations; not_independent_retraining_audit"
+        return mask, contract
+
+    def _strict_provenance(self, split, path, mask):
+        provenance = split.get("strict_provenance")
+        if not isinstance(provenance, Mapping):
+            raise ValueError("strict_pipeline_zero_shot requires complete strict_provenance")
+        try:
+            cutoff = date.fromisoformat(provenance["training_cutoff"])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError("strict provenance requires an ISO training_cutoff") from exc
+        registry = getattr(self.stores, "go_registry_v090", None)
+        if registry is None:
+            raise ValueError("strict provenance requires hash-bound go_registry_v090")
+        if (not registry.artifact_hashes.get("full_manifest_sha256")
+                or not registry.artifact_hashes.get("ontology_registry_sha256")
+                or not registry.artifact_hashes.get("task_registry_sha256")
+                or not np.array_equal(registry.task_to_ontology, self.task_to_ontology_rows)):
+            raise ValueError("strict provenance registry must bind actual source files and original task mapping")
+        if (self._go_registry_sha256 is not None
+                and registry.artifact_hashes["task_registry_sha256"] != self._go_registry_sha256):
+            raise ValueError("strict provenance registry differs from current task GO source")
+        sources = provenance.get("sources")
+        if not isinstance(sources, Mapping) or set(sources) != {"stage1", "teacher", "features", "candidate"}:
+            raise ValueError("strict provenance requires stage1/teacher/features/candidate sources")
+        unseen = set(map(int, self.task_to_ontology_rows[~mask]))
+        expected = {"features": Path(self.stores.features.manifest_path).resolve()}
+        weak = self.config.get("data", {}).get("weak_graph_predictions_manifest")
+        if weak:
+            expected["candidate"] = (Path(self.config["data"]["root"]) / weak).resolve()
+        else:
+            raise ValueError("strict provenance requires the configured candidate source manifest")
+        verified = {}
+        for role, source in sources.items():
+            if not isinstance(source, Mapping):
+                raise ValueError(f"strict {role} source must be a mapping")
+            files = {}
+            for name in ("artifact", "provenance"):
+                value, digest = source.get(name + "_path"), source.get(name + "_sha256")
+                if not isinstance(value, str) or not isinstance(digest, str) or len(digest) != 64:
+                    raise ValueError(f"strict {role} requires {name} path and sha256")
+                item = Path(value)
+                item = item if item.is_absolute() else path.parent / item
+                if not item.is_file() or sha256_file(item) != digest:
+                    raise ValueError(f"strict {role} {name} hash mismatch or unavailable file")
+                files[name] = item.resolve()
+            if role in expected and files["artifact"] != expected[role]:
+                raise ValueError(f"strict {role} artifact is not the configured source")
+            info = json.loads(files["provenance"].read_text(encoding="utf-8"))
+            if (info.get("schema") != "nbs-v090-source-supervision-v1"
+                    or info.get("source_role") != role
+                    or info.get("artifact_sha256") != source["artifact_sha256"]
+                    or info.get("go_registry_identity_sha256") != registry.identity_sha256):
+                raise ValueError(f"strict {role} provenance identity mismatch")
+            try:
+                source_cutoff = date.fromisoformat(info["supervision_cutoff"])
+            except (ValueError, TypeError, KeyError) as exc:
+                raise ValueError(f"strict {role} missing supervision cutoff") from exc
+            if source_cutoff > cutoff:
+                raise ValueError(f"strict {role} supervision is newer than training cutoff")
+            labels = info.get("supervised_canonical_go_ids")
+            if not isinstance(labels, list) or info.get("supervision_scope_complete") is not True:
+                raise ValueError(f"strict {role} must declare its complete upstream supervision scope")
+            rows = set()
+            for go in labels:
+                if registry.canonical_go_id(go) != go:
+                    raise ValueError(f"strict {role} supervision IDs must be canonical")
+                rows.add(registry.resolve_one(go))
+            if rows & unseen:
+                raise ValueError(f"strict {role} supervision overlaps unseen canonical GO")
+            # This includes influences of candidate sorting, feature fitting,
+            # teacher ancestry and all graph construction, not only active IDs.
+            if info.get("includes_all_upstream_label_dependencies") is not True:
+                raise ValueError(f"strict {role} lacks complete upstream dependency attestation")
+            verified[role] = {"artifact_sha256": source["artifact_sha256"],
+                              "provenance_sha256": source["provenance_sha256"],
+                              "supervision_cutoff": source_cutoff.isoformat(),
+                              "supervised_canonical_go_count": len(rows)}
+        return {"training_cutoff": cutoff.isoformat(), "sources": verified,
+                "verification": "file_hashes_dates_and_declared_complete_canonical_supervision_scopes"}
+
+    def data_contract(self):
+        result = super().data_contract()
+        result["v090_label_split"] = deepcopy(self.label_split_contract)
+        return result
+
+    def _filter_label_view(self, batch):
+        output = dict(batch)
+        device = output["protein_x"].device
+        output["seen_task_mask"] = torch.as_tensor(self.seen_task_mask.copy(), device=device)
+        if self.seen_task_mask.all():
+            return output  # All preexisting v088 arrays remain exactly intact.
+        for prefix in ("", "sampled_"):
+            key, attr_key = prefix + "candidate_go", prefix + "candidate_attr"
+            if key in output:
+                ids = output[key].clone()
+                attrs = output[attr_key].clone()
+                seen = torch.as_tensor(self.seen_task_mask.copy(), device=ids.device)
+                active = ids >= 0
+                allowed = torch.zeros_like(active)
+                allowed[active] = seen[ids[active]]
+                ids[~allowed], attrs[~allowed] = -1, 0
+                output[key], output[attr_key] = ids, attrs
+        for key in ("sampled_gold_edge", "sampled_pseudo_edge"):
+            if key in output:
+                edge = output[key]
+                seen = torch.as_tensor(self.seen_task_mask.copy(), device=edge.device)
+                output[key] = edge[:, seen[edge[1]]]
+        for key in ("targets", "positive_mask"):
+            if key in output:
+                values = output[key].clone()
+                seen = torch.as_tensor(self.seen_task_mask.copy(), device=values.device)
+                values[:, ~seen] = 0
+                output[key] = values
+        return output
+
+    def batch(self, protein_ids, device="cpu", *, supervision_seed_ids=None):
+        return self._filter_label_view(super().batch(protein_ids, device,
+            supervision_seed_ids=supervision_seed_ids))
+
+    def inference_batch(self, input_dir, row_ids, device="cpu"):
+        return self._filter_label_view(super().inference_batch(input_dir, row_ids, device))

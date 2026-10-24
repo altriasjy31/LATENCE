@@ -1,0 +1,165 @@
+{
+  "repository": "https://github.com/LUOyk1999/tunedGNN",
+  "commit": "23f9604e8b13a9a6d3faa2f691cd844006979153",
+  "paper": "https://arxiv.org/html/2406.08993v2",
+  "paper_title": "Classic GNNs are Strong Baselines: Reassessing GNNs for Node Classification",
+  "venue": "NeurIPS 2024 Datasets and Benchmarks",
+  "code_proteins_sage": {
+    "layers": 6,
+    "n_hidden_argument": 80,
+    "n_heads_argument": 4,
+    "effective_hidden": 320,
+    "input_dropout": 0.1,
+    "dropout": 0.25,
+    "jk": false,
+    "edge_dropout_effective_for_sage": 0,
+    "optimizer": "AdamW",
+    "lr": 0.01,
+    "weight_decay": 0,
+    "epochs": 1000,
+    "schedule": {
+      "name": "ReduceLROnPlateau",
+      "validation_metric": "ROC-AUC",
+      "mode": "max",
+      "factor": 0.75,
+      "patience": 50
+    },
+    "training_batch": "ceil(Ntrain / 10)",
+    "eval_batch": 65536,
+    "training_fanout_per_layer": 32,
+    "eval_fanout_per_layer": 100
+  },
+  "paper_table9_proteins_sage": {
+    "layers": 6,
+    "hidden": 512,
+    "normalization": "BN",
+    "residual": true,
+    "dropout": 0.3,
+    "lr": 0.01,
+    "epochs": 1000
+  },
+  "paper_table7_proteins_sage_roc_auc": {
+    "full": 82.21,
+    "without_normalization": 77.42,
+    "without_dropout": 80.52,
+    "without_residual": 81.75
+  },
+  "corrections": [
+    "Paper Appendix B.3 removes JK from final tuning space; source option remains but shell does not use it.",
+    "SAGE does not consume edge_drop; GATConv does.",
+    "65536 is evaluation batch only.",
+    "Official proteins schedule is validation-driven, not warmup/cosine.",
+    "Paper table and repository shell parameters differ.",
+    "Heterogeneous node/edge types do not imply heterophily."
+  ],
+  "latence_v090_main": {
+    "change": "shared protein-GO scorer; preserve audited heterogeneous encoder",
+    "hidden": 320,
+    "sage_layers": 3,
+    "ontology_layers": 2,
+    "input_dropout": 0.1,
+    "dropout": 0.25,
+    "jk_mode": "last",
+    "edge_dropout": 0,
+    "optimizer": "AdamW",
+    "lr": 0.006,
+    "weight_decay": 0.0001,
+    "epochs": 100,
+    "warmup_epochs": 2,
+    "hold_until_epoch": 10,
+    "min_lr": 0.0006,
+    "performance_status": "未验证"
+  },
+  "evidence_files": {
+    "repository": "LUOyk1999/tunedGNN",
+    "commit": "23f9604e8b13a9a6d3faa2f691cd844006979153",
+    "fetched_via": "GitHub plugin fetch_file",
+    "files": [
+      {
+        "path": "large_graph/README.md",
+        "git_blob_sha": "70981b47a267b9152ebc0bb75c896e46681f4305",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/README.md"
+      },
+      {
+        "path": "large_graph/arxiv.sh",
+        "git_blob_sha": "e63e86f4f816fd245a529382ff4ea38aadd25015",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/arxiv.sh"
+      },
+      {
+        "path": "large_graph/data_utils.py",
+        "git_blob_sha": "1d353cf7af5a25d85b364a2c5dd5734f2589ba52",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/data_utils.py"
+      },
+      {
+        "path": "large_graph/dataset.py",
+        "git_blob_sha": "3641be92d41c1cab64fd2a4d9d1a3156d2796a75",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/dataset.py"
+      },
+      {
+        "path": "large_graph/eval.py",
+        "git_blob_sha": "4fdc5d93407945c3760463d53a7074d892610d3f",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/eval.py"
+      },
+      {
+        "path": "large_graph/lg_model.py",
+        "git_blob_sha": "4f9004d96f52a736b06daa9130bcbecbdac9c65b",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/lg_model.py"
+      },
+      {
+        "path": "large_graph/lg_parse.py",
+        "git_blob_sha": "d4fab5d248df7cba5a878ad862c9299adb691f01",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/lg_parse.py"
+      },
+      {
+        "path": "large_graph/logger.py",
+        "git_blob_sha": "9d0bba2aed344f5113c30fdb71518c0d5c93a940",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/logger.py"
+      },
+      {
+        "path": "large_graph/main-arxiv.py",
+        "git_blob_sha": "4fcfde9e8d174995a7db97fe1f56720522954d39",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/main-arxiv.py"
+      },
+      {
+        "path": "large_graph/main-batch.py",
+        "git_blob_sha": "8c68d34cc40e866b7887969586eeda10a5edb3cd",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/main-batch.py"
+      },
+      {
+        "path": "large_graph/models.py",
+        "git_blob_sha": "50c73c291aa4e9aec36a069f6b956d6d0a8662ef",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/models.py"
+      },
+      {
+        "path": "large_graph/pokec.sh",
+        "git_blob_sha": "5ea5e020bde0e6a2ea4c7831d49d3e3c977d8538",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/pokec.sh"
+      },
+      {
+        "path": "large_graph/product.py",
+        "git_blob_sha": "98cbe01d4e814903a0c22bf69346a6ea823b13df",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/product.py"
+      },
+      {
+        "path": "large_graph/products.sh",
+        "git_blob_sha": "b647310165194686679b4238200b7c10f50428b2",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/products.sh"
+      },
+      {
+        "path": "large_graph/protein.py",
+        "git_blob_sha": "a22561b83bb6c25663379f73532303c1cb73353e",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/protein.py"
+      },
+      {
+        "path": "large_graph/proteins.sh",
+        "git_blob_sha": "06da43444790472d626f665c9c761cf7623f7961",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/large_graph/proteins.sh"
+      },
+      {
+        "path": "README.md",
+        "git_blob_sha": "7bfa3a8d5ee43a2fa1b59b85af247757c7f42ed4",
+        "url": "https://github.com/LUOyk1999/tunedGNN/blob/23f9604e8b13a9a6d3faa2f691cd844006979153/README.md"
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "release_version": "0.9.0",
+  "model_architecture_version": "0.9.0",
+  "data_architecture_version": "0.8.8",
+  "installation": "additive files only; existing Python package metadata and all old source bytes unchanged",
+  "main_model_change": "shared protein-GO bilinear score and GO-conditioned bias",
+  "default_jk": "last",
+  "default_edge_dropout": 0,
+  "full_closed_task_columns": 21312,
+  "baseline_Fmax": 57.72314936447243,
+  "acceptance_threshold": 60.72314936447243,
+  "new_Fmax": null,
+  "delta_Fmax": null,
+  "performance_status": "未验证",
+  "strict_temporal_new_GO_benchmark": "not provided; requires valid cross-version label resources and independent gold"
+}
