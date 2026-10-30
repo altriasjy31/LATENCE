@@ -1,0 +1,26 @@
+Validation: v091 epoch60 shared + hybrid R1
+
+Runtime: Python 3.12, PyTorch 2.4.1+cpu, CPU only.
+35 unittest cases passed; no skipped tests in the integration installation.
+Original LATENCE three-layer FullTaskGraphModelV088 and full_task_loss_v088
+were used for the real forward/backward integration tests. Stores and input
+files were replaced with a small synthetic fixture, not production data.
+
+Verified:
+- Shared-head training and full hybrid joint training execute with real AdamW.
+- Conversion logit and probability difference was zero on the tested fixture.
+- Resumed head/joint runs matched continuous runs tensor-for-tensor.
+- Auxiliary shared loss with detached hidden states does not update encoder.
+- Full objective updates protein encoder and residual parameters.
+- GO parameters and BN running statistics stay fixed in first joint phase.
+- Global-role BCE gradients equal summed microbatch gradients.
+- Cache interruption, committed-segment verification, resume and reuse.
+- Whole-macro supervision exclusions across cache microbatches.
+- Original/shared/combined/mixed-weight-bias and full-joint evaluation paths.
+- Shell stage routing, stale DDP cleanup, source/config guards.
+- Installer dry run, install, repeated install, backup and replacement.
+- Python compilation, bash syntax and ZIP-to-manifest byte checks.
+
+Not verified here: server dataset/checkpoint, CUDA kernels, A100 memory,
+production runtime, actual epoch60 Fmax/AP or predictive improvement.
+No strict zero-shot experiment is included.

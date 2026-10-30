@@ -1,0 +1,47 @@
+{
+  "schema": "nbs-shared-head-v091",
+  "source_config": "outputs/latence_nbs_experiments/v089/mb12800_fresh_ep100/resolved_config.json",
+  "source_checkpoint": "outputs/latence_nbs_experiments/v089/mb12800_fresh_ep100/nbs_epoch60.pt",
+  "source_epoch": 60,
+  "cache_dir": "outputs/latence_nbs_experiments/v091/from_v089_ep60_shared_cache",
+  "cache": {
+    "seed": 1091,
+    "query_batch": 6400,
+    "global_weak_batch": 10240,
+    "global_core_batch": 2560,
+    "sampler": "fast"
+  },
+  "head": {
+    "hidden_dim": 320,
+    "mlp_width": 512,
+    "initial_bias": -6.0
+  },
+  "train": {
+    "seed": 1091,
+    "weak_batch": 2048,
+    "core_batch": 512,
+    "steps": 500,
+    "learning_rate": 0.001,
+    "warmup_steps": 20,
+    "weight_decay": 0.0001,
+    "grad_clip": 5.0,
+    "save_every": 100
+  },
+  "loss": null,
+  "joint": {
+    "seed": 2091,
+    "steps": 100,
+    "weak_batch": 10240,
+    "core_batch": 2560,
+    "accumulation_steps": 2,
+    "encoder_lr": 0.0003,
+    "shared_lr": 0.001,
+    "residual_lr": 0.0001,
+    "shared_aux_weight": 1.0,
+    "detach_shared_hidden": true,
+    "weight_decay": 0.0001,
+    "grad_clip": 5.0,
+    "warmup_steps": 10,
+    "save_every": 25
+  }
+}

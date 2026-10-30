@@ -1,0 +1,22 @@
+v092 scratch R1 validation
+
+Runtime: Python 3.12 / PyTorch 2.4.1+cpu / CPU only.
+31 tests passed, no skips in the integration installation.
+
+- Real full model forward/backward, shared scorer and original BCE.
+- Gradients reach protein encoder, ontology encoder and raw geometry branch.
+- RFF is deterministic across batches and available to new input vectors.
+- Random matrices/phases are frozen checkpoint buffers, not per-protein ID tables.
+- Dynamic supplied-ontology target rows and no trainable per-GO classifier.
+- Model reload preserves outputs; all-seen BCE agrees with original v088 BCE.
+- Real v090 phase trainer: continuous vs resumed3updates matched all tensors exactly.
+- Actual fixed checkpoint inference, cache reuse and wrong-architecture rejection.
+- Exact AP/frequency kernels, tied scores, raw CSR counts and metadata ID reordering.
+- CLI cleanup of old environment variables, isolated outputs, correct resume/eval routing.
+- Smoke timing excludes initial5updates and weights real measured windows.
+- Installer preflight/install/idempotence/backup and package byte checks.
+
+Production stores and external evaluator/checker processes were replaced by
+small synthetic fixtures in phase integration. Extended metrics were tested
+separately with actual metric kernels. CPU tests do not establish real-data
+training throughput, A100 memory, predictive improvement or strict zero-shot.
