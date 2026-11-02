@@ -1,0 +1,3 @@
+# One requested GO identity per line. This is a seen BP example for interface testing.
+# Replace it with the BP GO identities you need; output metadata identifies seen/unseen targets.
+GO:0008150

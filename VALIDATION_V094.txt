@@ -1,0 +1,11 @@
+v094-weak-teacher-r1 validation
+
+20 CPU tests passed; 21 PyTorch-dependent tests skipped because torch is not installed locally.
+All Python sources compile.
+Automatic all-frequency calibration -> dataset build -> frozen training config -> identical reuse exercised through the installed CLI on a real-schema fixture.
+Source data/config bytes unchanged in fixture construction and repeated builds.
+Installer preflight, additive installation, idempotence and unknown-local-file refusal verified.
+
+The skipped suite includes real model/loss, runtime data and phase-engine training/resume/export checks.
+No full server dataset build, GPU smoke, or model performance claim is made here.
+Run scripts/nbs/run_nbs_v094.py check and smoke on the server before production training.

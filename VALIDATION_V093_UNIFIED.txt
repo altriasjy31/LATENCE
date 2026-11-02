@@ -1,0 +1,35 @@
+LATENCE NBS v093 unified r1 validation
+
+Executed local suite: 58 tests discovered, 30 passed, 28 explicitly skipped.
+Skipped tests require real PyTorch: 14 runtime/loss, 13 model (including CUDA
+anchor compatibility), 1 real optimizer/resume/export integration probe.
+PyTorch is absent in this development environment; installation attempts could
+not download a wheel. No skipped test is represented as executed or passed.
+
+Executed checks cover:
+- Real-schema CPU dataset construction and installed command-line execution;
+- Group threshold histogram versus brute-force strict > decisions;
+- Calibration core/role-local addressing, original protein holdout exclusion,
+  seen-only fitting for canonical label holdout and matching builder identity;
+- Saved FP16 modelout boundary-membership restoration;
+- Rare/medium candidate quotas, deduplication and -1 padding;
+- Original source-file immutability and complete-output reuse;
+- GO identities/aliases, explicit new-registry anchors and checkpoint contracts;
+- Exact AP against sklearn for score ties and fixed working-point P/R;
+- Generated fixed 200-epoch config, isolated environment and shared eval locks.
+
+A complete installed CPU CLI path was also exercised on a synthetic project:
+core threshold fit -> weak/candidate rebuild -> training config. Identical
+rebuild reused files; a separate canonical holdout build succeeded. Old data
+and source configuration remained unchanged.
+
+All new Python files compile. Source-level model/data/loss/inference reviews
+were completed. The new checkpoint model/data/runner identity is 0.9.3; the
+original phase counter and scheduler implementations are reused with explicit
+v093 phase identity. Original v092 source files are not edited.
+
+Run `python scripts/nbs/run_nbs_v093.py check` in the existing PyTorch environment
+before the real-data smoke. Then run smoke, inspect generated weak coverage,
+and start the fresh experiment. No real-data rebuild or GPU training has been
+performed here; no new performance improvement or strict pipeline zero-shot
+accuracy is claimed.

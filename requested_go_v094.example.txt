@@ -1,0 +1,2 @@
+# Interface example: an existing seen BP GO, not a zero-shot benchmark.
+GO:0008150
