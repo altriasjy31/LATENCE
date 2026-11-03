@@ -1,0 +1,19 @@
+{
+  "version": "0.9.5-asl-hierarchy-r1",
+  "requires": "existing v094 project and built dataset",
+  "files": {
+    "nbs_models/nbs_protein_go/nbs_pg/evaluation_report_v095.py": "40d540f775b6bbc68eefe49ac727ded66be6557a98de2da6470fd360824d915e",
+    "nbs_models/nbs_protein_go/nbs_pg/full_task_loss_v095.py": "b0ad085dd36164dbf490218630875d9abc776fc958f605333106f0afd2eb4c24",
+    "nbs_models/nbs_protein_go/nbs_pg/full_task_model_v095.py": "5146060c4d4851b9113af114931f6bf3d2a224cde9dc7b1292945eb43ed55921",
+    "nbs_models/nbs_protein_go/nbs_pg/optimizer_v095.py": "1aa071dc348f4a3353938d2f55872ef9d027308e27d51df44c0d6134ea6a1242",
+    "scripts/nbs/predict_nbs_go_v095.py": "98c54e2030be0fc0f961c06ef1ef312989923a93b023208f3dd0234be832c200",
+    "scripts/nbs/run_nbs_v095.py": "e292d586f79035e84ca53f0196469a3ddfba7e3f83e443dc9ed36d14c727ab5a",
+    "scripts/nbs/train_nbs_full_task_v095.py": "57bdb31ef50b488010d6caebfa797b2b1603a8daaeb8919a11d1b2170fee3ea5",
+    "tests/test_v095_integration.py": "558cd0652026ca570ef1c8c896c5db6f7acc3dbbd21e8265111b87ef73fe1f66",
+    "tests/test_v095_launcher.py": "08a0d6adaa146f1d3e6289d9d02e5affc8f6cbf7c4f8b751e3547031eb213c0d",
+    "tests/test_v095_loss.py": "c8648847a502be6f578a98306dcb44c4deac515f2accddeedad0d4669005bff7",
+    "tests/test_v095_worker.py": "b0aed87321bfd89e07c91783dcce802a62a2b9f337f488edca17f1b81adf9d85",
+    "README_NBS_V095.md": "fe2443e29002990048861dc0045caa257af90bb7aaa99d0841e137199ad6df98",
+    "VALIDATION_V095.json": "805527f59230ac34bc7a1c997aed3fc44c2ddc40715b2a41e0f2be4772800102"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "tests_run": 20,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "success": true,
+  "python": "3.12.14",
+  "torch": "2.15.0+cpu",
+  "device": "CPU",
+  "cuda_tested": false,
+  "full_production_dataset_tested": false,
+  "original_source_files_unchanged": 588,
+  "checks": [
+    "ASL/PU/KL/hierarchy gradients",
+    "microbatch/DDP loss normalization",
+    "real tiny heterogeneous model FP32 and CPU BF16",
+    "optimizer/model exact restart",
+    "launcher and source checkpoint contracts",
+    "actual isolated worker training/checkpoint/resume"
+  ],
+  "log": "test_checkpoint_roundtrip_inference_needs_no_teacher_or_targets (test_v095_integration.V095IntegrationTests.test_checkpoint_roundtrip_inference_needs_no_teacher_or_targets) ... /workspace/scratch/25f97b10c0b0/asl_review/source/latence-project/nbs_models/nbs_protein_go/nbs_pg/full_task_model.py:36: UserWarning: Sparse invariant checks are implicitly disabled. Memory errors (e.g. SEGFAULT) will occur when operating on a sparse tensor which violates the invariants, but checks incur performance overhead. To silence this warning, explicitly opt in or out. See `torch.sparse.check_sparse_tensor_invariants.__doc__` for guidance.  (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/Context.cpp:916.)\n  return torch.sparse_coo_tensor(\nok\ntest_cpu_bfloat16_autocast_has_finite_graph_forward_and_backward (test_v095_integration.V095IntegrationTests.test_cpu_bfloat16_autocast_has_finite_graph_forward_and_backward) ... ok\ntest_optimizer_resume_matches_uninterrupted_next_update (test_v095_integration.V095IntegrationTests.test_optimizer_resume_matches_uninterrupted_next_update) ... ok\ntest_real_graph_objective_trains_shared_head_geometry_and_relations (test_v095_integration.V095IntegrationTests.test_real_graph_objective_trains_shared_head_geometry_and_relations) ... ok\ntest_runtime_optimizer_proxy_does_not_mutate_global_torch (test_v095_integration.V095IntegrationTests.test_runtime_optimizer_proxy_does_not_mutate_global_torch) ... ok\ntest_initialization_verifies_data_model_manifest_and_fixed_epoch (test_v095_launcher.InitializationTests.test_initialization_verifies_data_model_manifest_and_fixed_epoch) ... ok\ntest_config_reuses_dataset_and_freezes_all_changes (test_v095_launcher.LauncherTests.test_config_reuses_dataset_and_freezes_all_changes) ... ok\ntest_eval_has_separate_lock (test_v095_launcher.LauncherTests.test_eval_has_separate_lock) ... ok\ntest_optional_init_is_fixed_file_hash_and_not_reused_optimizer (test_v095_launcher.LauncherTests.test_optional_init_is_fixed_file_hash_and_not_reused_optimizer) ... ok\ntest_resume_cannot_redefine_init_or_precision (test_v095_launcher.LauncherTests.test_resume_cannot_redefine_init_or_precision) ... ok\ntest_smoke_and_training_use_separate_paths_and_gpu (test_v095_launcher.LauncherTests.test_smoke_and_training_use_separate_paths_and_gpu) ... [v095 complete] smoke: /tmp/tmpi0bfz51h/new_smoke\nok\ntest_config_rejects_invalid_thresholds_and_topk (test_v095_loss.V095LossTests.test_config_rejects_invalid_thresholds_and_topk) ... ok\ntest_easy_core_negatives_have_zero_gradient_but_positives_are_retained (test_v095_loss.V095LossTests.test_easy_core_negatives_have_zero_gradient_but_positives_are_retained) ... ok\ntest_hierarchy_orientation_canonical_dedup_and_unseen_exclusion (test_v095_loss.V095LossTests.test_hierarchy_orientation_canonical_dedup_and_unseen_exclusion) ... ok\ntest_low_teacher_cannot_override_B_positive (test_v095_loss.V095LossTests.test_low_teacher_cannot_override_B_positive) ... ok\ntest_microbatch_and_DDP_loss_and_gradients_match_global (test_v095_loss.V095LossTests.test_microbatch_and_DDP_loss_and_gradients_match_global) ... ok\ntest_selected_KL_confidence_and_negative_weight (test_v095_loss.V095LossTests.test_selected_KL_confidence_and_negative_weight) ... ok\ntest_unseen_nan_and_alias_cells_have_no_gradient (test_v095_loss.V095LossTests.test_unseen_nan_and_alias_cells_have_no_gradient) ... ok\ntest_weak_unknown_is_not_hard_negative (test_v095_loss.V095LossTests.test_weak_unknown_is_not_hard_negative) ... ok\ntest_installed_training_worker_checkpoint_and_resume (test_v095_worker.V095WorkerTests.test_installed_training_worker_checkpoint_and_resume) ... ok\n\n----------------------------------------------------------------------\nRan 20 tests in 4.332s\n\nOK\n"
+}
