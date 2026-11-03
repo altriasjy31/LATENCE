@@ -1,0 +1,18 @@
+{
+  "version": "0.5.4",
+  "synthetic_tests": {
+    "total": 14,
+    "passed": 13,
+    "skipped": 1,
+    "skipped_reason": "PyTorch unavailable locally; original official helper parity including Smin requires user training environment"
+  },
+  "command": "python -m unittest discover -s tests -p '*v054.py' -v",
+  "python": "3.12.14",
+  "real_predictions_available": false,
+  "real_evaluation_recomputed": false,
+  "notes": [
+    "Diagnostics original functions executed via unchanged ASTs; scalar binning reference agrees.",
+    "Native v085 all fields retained and compared with source kernel.",
+    "End-to-end fixtures cover manifest/explicit inputs, ID reorder, raw grouping and tie bounds."
+  ]
+}

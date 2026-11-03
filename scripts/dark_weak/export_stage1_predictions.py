@@ -42,6 +42,23 @@ def hash_file(path):
     return h.hexdigest()
 
 
+def resolve_task_aliases(task_arg: str) -> tuple[str, str]:
+    """Return (short task code, full metadata namespace) without conflating them.
+
+    experiments.exp_train.normalize_task('bp') -> 'biological_process'.
+    Datasets/metadata require the full name, while model widths/reporting use bp/mf/cc.
+    """
+    full_name = stage1.normalize_task(task_arg)
+    short_name = {
+        'biological_process': 'bp',
+        'molecular_function': 'mf',
+        'cellular_component': 'cc',
+    }.get(full_name)
+    if short_name is None:
+        raise ValueError(f'Unsupported LATENCE task namespace: {full_name!r}')
+    return short_name, full_name
+
+
 def export(args):
     if getattr(args, 'allow_eval_label_boost', False):
         raise ValueError('Evaluation-label boost is forbidden in the Dark–Weak inference protocol.')
@@ -50,8 +67,8 @@ def export(args):
         if n not in (21312,7038,2903):
             raise ValueError('Set --num_classes to your unchanged task vocabulary width')
         args.num_classes = int(n)
-    task = stage1.normalize_task(args.task)
-    expected_width = {'bp':21312,'mf':7038,'cc':2903}[task]
+    task_short, task = resolve_task_aliases(args.task)
+    expected_width = {'bp':21312,'mf':7038,'cc':2903}[task_short]
     if args.num_classes != expected_width:
         raise ValueError(f'Task={task} expects {expected_width} GO columns, got {args.num_classes}')
     go_ids = [s.strip() for s in Path(args.go_ids).read_text().splitlines() if s.strip()]
@@ -61,7 +78,8 @@ def export(args):
     import pickle
     with Path(args.file_address).open('rb') as handle:
         meta = pickle.load(handle)
-    original_target_ids = [str(x) for x in meta[args.mode][{'bp':'biological_process','mf':'molecular_function','cc':'cellular_component'}[task]]['proteins']]
+    # 'task' is already the full namespace returned by normalize_task().
+    original_target_ids = [str(x) for x in meta[args.mode][task]['proteins']]
     if original_target_ids != requested:
         raise ValueError('Expected ID file must have the EXACT order of the inference metadata split; '
                          'the external probability wrapper indexes probabilities by this metadata order')
@@ -207,7 +225,8 @@ def export(args):
     (out/'protein_ids.txt').write_text('\n'.join(requested)+'\n')
     (out/'go_ids.txt').write_text('\n'.join(go_ids)+'\n')
     manifest={
-        'model_family':'LATENCE Stage1 DETR', 'task':task, 'mode':args.mode,
+        'model_family':'LATENCE Stage1 DETR', 'task':task_short,
+        'task_namespace':task, 'mode':args.mode,
         'num_proteins':len(requested),'num_go':len(go_ids), 'channels':channels,
         'checkpoint':str(Path(args.checkpoint).resolve()),
         'checkpoint_sha256':hash_file(args.checkpoint),

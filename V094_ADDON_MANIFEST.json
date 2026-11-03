@@ -1,0 +1,22 @@
+{
+  "schema": "LATENCE-v094-DarkWeak-additive-evaluation-v0.5.0",
+  "version": "v0.5.0",
+  "native_version": "v0.9.4",
+  "workflow": "additive-only",
+  "native_files_replaced": false,
+  "new_test_cases_passed": 10,
+  "source_uploaded_zip": "latence_nbs_v094_mysrc.zip",
+  "files": {
+    "docs/DARK_WEAK_V094_EVALUATION.md": "69d161a0c9e07e4d9b307067fc9316cde5f8c4899ac713066d781331e0de8627",
+    "scripts/dark_weak/v094_graph_audit.py": "538e975995ac0453c07872e29a5854adff1a76b9db1b0f190e16b3782e2722f7",
+    "scripts/dark_weak/v094_ind_test_supplement.py": "f6be8efe13db60da46c2c961901c6b03a9cdedc1163d1a441ec8955f7cda3c39",
+    "scripts/dark_weak/v094_native_adapter.py": "0c4fb566a1844d0e492013d5c2a0498dd9800b2383049963d7779e56d89e0b36",
+    "scripts/dark_weak/v094_unified_score.py": "b8fee16a37b64e916014a1e1505faea13a3919b880be4a7f6f99a6cc15908be1",
+    "tests/test_dark_weak_v094_additive.py": "18060f7479801e1a35099b6c19c8d631d18c8de898461b45c4e4855ad9b6b9d2"
+  },
+  "limitations": [
+    "No real GPU checkpoint inference tested",
+    "Original v094 source has one unrelated failing mock fixture in 41 tests; test-only fix passes 41/41",
+    "MSA historical provenance cutoff needs independent audit"
+  ]
+}

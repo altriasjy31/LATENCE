@@ -1,0 +1,21 @@
+[v094 v085 supplementary] /tmp/tmpsgiu8kpb/native_scores.json
+[v094 adapter] /tmp/tmp0o9xe08j/adapter.json; N=2, G=21312; epoch=5, step=12
+[v094 provenance] verified native checkpoint, input, logits and full GO order
+/mnt/data/work_v094_audit/latence-project/scripts/dark_weak/run_complete_evaluation.py:201: RuntimeWarning: Model prediction matrices have mixed storage dtypes {'nbs': 'float32', 'backbone': 'float16'}. Casting fp16 to fp32 does NOT undo ties; v085 PR-AUC/AP use exact grouped-score ranking. Prefer re-exporting Stage-1 float32 to match v088 float32.
+  warnings.warn(message, RuntimeWarning)
+
+=== bp dark_weak_test_direct ===
+/mnt/data/work_v094_audit/latence-project/scripts/eval_dark_weak_predictions.py:243: UserWarning: No sequence hash available: bootstrap will group by protein name, less conservative.
+  warnings.warn('No sequence hash available: bootstrap will group by protein name, less conservative.')
+Ranking nbs: 2 positive proteins in bp/dark_weak_test_direct
+Ranking backbone: 2 positive proteins in bp/dark_weak_test_direct
+   model                 split namespace  n_proteins  n_confirmed_positive_pairs  mean_best_positive_reciprocal_rank  pairwise_mrr  mean_positive_rank_percentile  macro_recall_at_1  micro_recall_at_1  macro_recall_at_10  micro_recall_at_10
+     nbs dark_weak_test_direct        bp           2                           2                                 1.0           1.0                            1.0                1.0                1.0                 1.0                 1.0
+backbone dark_weak_test_direct        bp           2                           2                                 1.0           1.0                            1.0                1.0                1.0                 1.0                 1.0
+[Unified evaluation] /tmp/tmp0o9xe08j/score
+[v094 Dark–Weak provenance] /tmp/tmp0o9xe08j/score/bp_v094_provenance.json
+[v094 adapter] /tmp/tmpy260d5sh/adapter.json; N=2, G=21312; epoch=5, step=12
+----------------------------------------------------------------------
+Ran 10 tests in 1.275s
+
+OK

@@ -1,0 +1,80 @@
+{
+  "bp": {
+    "backbone": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/backbone.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/go_ids.txt",
+      "branch": "backbone_base"
+    },
+    "expert": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/expert.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/go_ids.txt",
+      "branch": "external_only"
+    },
+    "modelout": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/modelout.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/go_ids.txt",
+      "branch": "REPLACE_WITH_ACTUAL_MODEL_BRANCH"
+    },
+    "nbs": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/nbs.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/bp/go_ids.txt",
+      "branch": "REPLACE_WITH_CHECKPOINT_AND_NATIVE_EXPORT_IDENTITY"
+    }
+  },
+  "mf": {
+    "backbone": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/backbone.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/go_ids.txt",
+      "branch": "backbone_base"
+    },
+    "expert": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/expert.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/go_ids.txt",
+      "branch": "external_only"
+    },
+    "modelout": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/modelout.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/go_ids.txt",
+      "branch": "REPLACE_WITH_ACTUAL_MODEL_BRANCH"
+    },
+    "nbs": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/nbs.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/mf/go_ids.txt",
+      "branch": "REPLACE_WITH_CHECKPOINT_AND_NATIVE_EXPORT_IDENTITY"
+    }
+  },
+  "cc": {
+    "backbone": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/backbone.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/go_ids.txt",
+      "branch": "backbone_base"
+    },
+    "expert": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/expert.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/go_ids.txt",
+      "branch": "external_only"
+    },
+    "modelout": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/modelout.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/go_ids.txt",
+      "branch": "REPLACE_WITH_ACTUAL_MODEL_BRANCH"
+    },
+    "nbs": {
+      "probability": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/nbs.prob.f32.npy",
+      "protein_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/protein_ids.txt",
+      "go_ids": "/REPLACE_WITH_FOUR_VIEW_EXPORT/cc/go_ids.txt",
+      "branch": "REPLACE_WITH_CHECKPOINT_AND_NATIVE_EXPORT_IDENTITY"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "version": "0.6.0",
+  "synthetic_tests": {
+    "total": 16,
+    "passed": 16,
+    "failed": 0,
+    "skipped": 0
+  },
+  "command": "python -m unittest discover -s tests -p '*v060.py' -v",
+  "python": "3.12.14",
+  "scope": [
+    "canonical nested evidence sets",
+    "full vocabulary ranks and tie bounds",
+    "stage2 incremental gains/losses",
+    "four-view three-namespace end-to-end",
+    "frozen prediction hashes and ID coverage",
+    "optional native/histogram classification"
+  ],
+  "limitations": [
+    "Real user probabilities unavailable; no real Atlas scores recomputed.",
+    "Original Torch helper path retained but not executed locally without PyTorch.",
+    "Unseen GO document is an implementation plan; no unseen retraining or new GO geometry generated."
+  ]
+}

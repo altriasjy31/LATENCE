@@ -1,0 +1,24 @@
+{
+  "version": "0.6.1",
+  "tests": {
+    "total": 12,
+    "passed": 12,
+    "failed": 0,
+    "skipped": 0
+  },
+  "python": "3.12.14",
+  "command": "LATENCE_TEST_PROJECT_ROOT=/workspace/scratch/bdc5fa7fe0d4/validation_v060 python -m unittest discover -s LATENCE_atlas_input_helper_v0.6.1/tests -p '*v061.py' -v",
+  "scope": [
+    "native Stage-1 three-channel input binding",
+    "unchanged v060 integration",
+    "inventory coverage warnings",
+    "missing rows fail without padding",
+    "source ID/GO/probability hash and shape checks",
+    "float32 Expert ID alignment"
+  ],
+  "limitations": [
+    "No real GPU export performed.",
+    "Missing6496 real rows are not synthesized.",
+    "Requires installed v0.6.0 and existing original exporter."
+  ]
+}

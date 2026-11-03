@@ -1,0 +1,73 @@
+{
+  "source": "User-provided counts, original model GO columns; canonical/root-free evaluation counts may differ",
+  "splits": {
+    "dark_weak_test_direct": {
+      "bp": {
+        "proteins": 176,
+        "direct_pairs": 250,
+        "ancestor_pairs": 3626
+      },
+      "mf": {
+        "proteins": 345,
+        "direct_pairs": 438,
+        "ancestor_pairs": 2860
+      },
+      "cc": {
+        "proteins": 117,
+        "direct_pairs": 165,
+        "ancestor_pairs": 1700
+      }
+    },
+    "dark_weak_test_exp_direct": {
+      "bp": {
+        "proteins": 92,
+        "direct_pairs": 155,
+        "ancestor_pairs": 2283
+      },
+      "mf": {
+        "proteins": 39,
+        "direct_pairs": 57,
+        "ancestor_pairs": 286
+      },
+      "cc": {
+        "proteins": 84,
+        "direct_pairs": 118,
+        "ancestor_pairs": 1407
+      }
+    },
+    "dark_weak_test_ipr2go_direct": {
+      "bp": {
+        "proteins": 84,
+        "direct_pairs": 95,
+        "ancestor_pairs": 1343
+      },
+      "mf": {
+        "proteins": 310,
+        "direct_pairs": 381,
+        "ancestor_pairs": 2582
+      },
+      "cc": {
+        "proteins": 33,
+        "direct_pairs": 47,
+        "ancestor_pairs": 293
+      }
+    },
+    "dark_weak_test_2022_ipr2go_direct": {
+      "bp": {
+        "proteins": 6504,
+        "direct_pairs": 6749,
+        "ancestor_pairs": 137383
+      },
+      "mf": {
+        "proteins": 9445,
+        "direct_pairs": 10078,
+        "ancestor_pairs": 83351
+      },
+      "cc": {
+        "proteins": 5006,
+        "direct_pairs": 7600,
+        "ancestor_pairs": 25470
+      }
+    }
+  }
+}

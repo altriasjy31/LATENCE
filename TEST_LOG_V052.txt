@@ -1,0 +1,41 @@
+test_frozen_native_metrics_and_rank_full_vocab_and_original_intact (test_dark_weak_stage1_frequency_v052.FrequencyV052.test_frozen_native_metrics_and_rank_full_vocab_and_original_intact) ... [frequency] dark_weak_test_exp_direct: loading frozen predictions
+[frequency] dark_weak_test_ipr2go_direct: loading frozen predictions
+[frequency] dark_weak_test_direct: loading frozen predictions
+[original overall]
+                       split    model  Fmax_percent  AuPRC_percent  AP_percent
+   dark_weak_test_exp_direct backbone          99.0           98.0        97.0
+   dark_weak_test_exp_direct   expert          99.0           98.0        97.0
+   dark_weak_test_exp_direct modelout          99.0           98.0        97.0
+dark_weak_test_ipr2go_direct backbone          99.0           98.0        97.0
+dark_weak_test_ipr2go_direct   expert          99.0           98.0        97.0
+dark_weak_test_ipr2go_direct modelout          99.0           98.0        97.0
+       dark_weak_test_direct backbone          99.0           98.0        97.0
+       dark_weak_test_direct   expert          99.0           98.0        97.0
+       dark_weak_test_direct modelout          99.0           98.0        97.0
+[frequency] Completed: /tmp/tmpu88rf1np/strata
+ok
+test_go_column_order_mutation_rejected (test_dark_weak_stage1_frequency_v052.FrequencyV052.test_go_column_order_mutation_rejected) ... ok
+test_no_future_label_used_to_construct_bins (test_dark_weak_stage1_frequency_v052.FrequencyV052.test_no_future_label_used_to_construct_bins) ... ok
+test_prediction_hash_mutation_rejected (test_dark_weak_stage1_frequency_v052.FrequencyV052.test_prediction_hash_mutation_rejected) ... ok
+test_v094_native_frequency_integration (test_dark_weak_stage1_frequency_v052.FrequencyV052.test_v094_native_frequency_integration) ... [frequency] dark_weak_test_exp_direct: loading frozen predictions
+[frequency] dark_weak_test_ipr2go_direct: loading frozen predictions
+[frequency] dark_weak_test_direct: loading frozen predictions
+[original overall]
+                       split    model  Fmax_percent  AuPRC_percent  AP_percent
+   dark_weak_test_exp_direct backbone          99.0           98.0        97.0
+   dark_weak_test_exp_direct   expert          99.0           98.0        97.0
+   dark_weak_test_exp_direct modelout          99.0           98.0        97.0
+dark_weak_test_ipr2go_direct backbone          99.0           98.0        97.0
+dark_weak_test_ipr2go_direct   expert          99.0           98.0        97.0
+dark_weak_test_ipr2go_direct modelout          99.0           98.0        97.0
+       dark_weak_test_direct backbone          99.0           98.0        97.0
+       dark_weak_test_direct   expert          99.0           98.0        97.0
+       dark_weak_test_direct modelout          99.0           98.0        97.0
+[frequency] Completed: /tmp/tmpzh2gp_hq/out
+ok
+test_wrong_output_exists_rejected (test_dark_weak_stage1_frequency_v052.FrequencyV052.test_wrong_output_exists_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.269s
+
+OK
