@@ -1,0 +1,64 @@
+{
+  "suite": {
+    "command": "python -m unittest discover -s tests -p 'test_*v06*.py' -v",
+    "tests_run": 49,
+    "passed": 48,
+    "skipped": 1,
+    "failed": 0,
+    "skip_reason": "Original Stage1 official PyTorch parity: Torch absent from this executor; test shipped and official branch retained."
+  },
+  "integration": {
+    "evidence_layers": [
+      "history",
+      "future_union",
+      "future_exp",
+      "future_ipr"
+    ],
+    "stage1_models": [
+      "backbone",
+      "expert",
+      "modelout"
+    ],
+    "classification_rows": 12,
+    "legacy_max_metric_cells_forced_to": 1,
+    "all_four_views_retained": true,
+    "precision_denominators_verified": true,
+    "conservative_recall_matches_existing_rank_module": true,
+    "input_routes_tested": [
+      "prediction_config",
+      "native_stage1_export_dir"
+    ],
+    "all_metrics_reference_scope": "Native and Stage1 histogram numerical parity; official parity test skipped locally"
+  },
+  "installer": {
+    "preserves_existing_v060_v061_metric_sources": true,
+    "idempotent_reapply_verified": true
+  },
+  "full_shape_memory_regression": {
+    "test": "synthetic_full_history_shape_regression",
+    "shape": [
+      6504,
+      21312
+    ],
+    "cells": 138613248,
+    "n_gold_positive": 137383,
+    "chunk_rows": 32,
+    "computation_elapsed_seconds": 3.1408755960001145,
+    "peak_rss_mib": 572.27734375,
+    "whole_cohort_retained": true,
+    "official_enabled": false,
+    "large_temporary_probability_deleted": true,
+    "note": "Synthetic discrete-score data, not actual LATENCE accuracy. PeakRSS includes resident memory-mapped input pages. No dense reference implementation used at this size."
+  },
+  "limitations": [
+    "Full-shape benchmark uses synthetic discrete scores, not user accuracy or representative runtime.",
+    "Actual user history Fmax requires rerunning against their full exported prediction matrices.",
+    "Local PyTorch official equivalence test skipped; run the shipped tests in the LATENCE PyTorch environment."
+  ],
+  "implementation_sha256": {
+    "scripts/dark_weak/eval_atlas_v062.py": "ded02c07f59cc4e041c31d452ecf0b0f5598be3b5d5c0ad4fcfbe0d223948cf0",
+    "scripts/dark_weak/streaming_metric_pack_v062.py": "f6c8f2552ee365efa3ba62535bdfa42d86b73156424cf40c3dfd6d8ed978f09c",
+    "scripts/dark_weak/atlas_precision_v062.py": "cc1ec7da200bba103328cd10d99794ff3b8cf85d6e4ff47a0505d13ad3b0d0c1",
+    "install_atlas_v062.py": "c5262446f34e66679e8fcd22a436dba784fafdd4af1a909931d7dd01d6e05168"
+  }
+}
