@@ -1,0 +1,238 @@
+{
+  "configuration_revision": "v096_esm_penultimate_single12800_scratch_r2",
+  "runtime_revision": "0.9.6-esm-penultimate-r1",
+  "entrypoint": "scripts/nbs/run_nbs_v096_scratch.py",
+  "profile": "configs/nbs/v096_scratch_single12800.json",
+  "files": [
+    {
+      "path": "OBSERVATIONS_V096.json",
+      "sha256": "9320b5a3bc71f606aee6d17e9feab9db426676cfbaefc50d0674a7248e340a42",
+      "size_bytes": 1816
+    },
+    {
+      "path": "README_NBS_V096.md",
+      "sha256": "c735e6d802c0a70ea0cce5871b55103b7f9585fb409c9d164ba457f2353cd716",
+      "size_bytes": 7231
+    },
+    {
+      "path": "V095_LR_AUDIT.json",
+      "sha256": "d12532b0860aaf90904d204a0775d45261153fa8bd2baea52ef83f2e91a26827",
+      "size_bytes": 1798
+    },
+    {
+      "path": "VALIDATION_V096.json",
+      "sha256": "02ef7e8ab765bbb2893f86064d389b711f8d2a0e1afa8ed687867b9e8eb8be39",
+      "size_bytes": 1614
+    },
+    {
+      "path": "VALIDATION_V096_SCRATCH.json",
+      "sha256": "f04e123408736e2e68367ce72bfda514ee0bec10fe5622428ce4494e93f2b553",
+      "size_bytes": 1588
+    },
+    {
+      "path": "configs/nbs/v096_scratch_single12800.json",
+      "sha256": "80307e10b6b3d81847e3fa5fa18d8a3f6efb3c4468088b4c6d2f4902157a581b",
+      "size_bytes": 1891
+    },
+    {
+      "path": "docs/ESM_EXPORT_V096.md",
+      "sha256": "4a771199831a506b1312ededdc517feca5c0879ebb4dd1f743acd0c7fa4c29f8",
+      "size_bytes": 4413
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/esm_feature_store_v096.py",
+      "sha256": "78497aefa2cb6ed8883a9deb214b731a843ac8334051c0e0a5f34e7ec64c4e34",
+      "size_bytes": 7259
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/evaluation_report_v096.py",
+      "sha256": "1039e9a3379ec6b385363d0bc2e262bd0b1998572a7044963e765016d3614858",
+      "size_bytes": 12330
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/full_task_data_v096.py",
+      "sha256": "1238aab6de870907b06c55914593c1f8230f950ad944e39ddb5c869e77c721ca",
+      "size_bytes": 6314
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/full_task_model_v096.py",
+      "sha256": "26cde328c9804a88504a6219fa08a14e15a3a9c2ae5c9203bdd49f806fef8ece",
+      "size_bytes": 6664
+    },
+    {
+      "path": "scripts/nbs/export_esm_penultimate_v096.py",
+      "sha256": "747813db94dcba53252a650dc6a6f3dd14a63f301c089647a297079f6a2c8d0f",
+      "size_bytes": 20145
+    },
+    {
+      "path": "scripts/nbs/predict_nbs_go_v096.py",
+      "sha256": "aa94055cadff4dba5dff0fdb54ac016f76eebf7d653bcea116efd5bc281fdd05",
+      "size_bytes": 18385
+    },
+    {
+      "path": "scripts/nbs/prepare_esm_ids_v096.py",
+      "sha256": "9d3fe28782856fe5deec9e8b54c531aeaca629d24fb2f7d3b094186702a3926d",
+      "size_bytes": 7283
+    },
+    {
+      "path": "scripts/nbs/run_nbs_v096.py",
+      "sha256": "5717e0059b9398f467e9569651a165da932d74b7ec12c47c25ac2ad6567395ed",
+      "size_bytes": 13463
+    },
+    {
+      "path": "scripts/nbs/run_nbs_v096_scratch.py",
+      "sha256": "003a72e1c5093001f3a00e7faec38173e9e73a3c1dfb11cf4ee449403da01085",
+      "size_bytes": 8030
+    },
+    {
+      "path": "scripts/nbs/train_nbs_full_task_v096.py",
+      "sha256": "135723f830a3d8751608784d8d7ba6bbf3f1d8ce801fbcad0bd3bf7a2992bd1c",
+      "size_bytes": 20276
+    },
+    {
+      "path": "tests/test_v096_esm_export.py",
+      "sha256": "523fcbf410a5c307e2274f6d100584e826fe1061eca8ca0b3e2d274c6c8c0362",
+      "size_bytes": 9225
+    },
+    {
+      "path": "tests/test_v096_fusion.py",
+      "sha256": "0a291de9e2f8cef23b051c98dcd872efa753d8abaa4d3b3d290edb377198681d",
+      "size_bytes": 12223
+    },
+    {
+      "path": "tests/test_v096_prepare_ids.py",
+      "sha256": "082811852d1234d4d5ac0df37f30eb34d5f6da9bec7863aa8ef619bcdea39612",
+      "size_bytes": 2190
+    },
+    {
+      "path": "tests/test_v096_runtime.py",
+      "sha256": "ebcd84b44f97921e35c7c007a109cc698085728627d44223961f3caf43fc37c6",
+      "size_bytes": 9258
+    },
+    {
+      "path": "tests/test_v096_scratch.py",
+      "sha256": "73db293d4671e9b2eaf536f8164afc24bdb9197e1f4d07139b73450341f470c1",
+      "size_bytes": 9123
+    },
+    {
+      "path": "tests/test_v096_worker.py",
+      "sha256": "a449dcfcdc92eb93299ce630dbde1aca39c37389d760aa1a9355627b57507499",
+      "size_bytes": 7489
+    },
+    {
+      "path": "validation/v096_check.log",
+      "sha256": "6c70c1d46695e45fcdc4385908cc9fb85db1e349c868009ca4c5295b3a6dbd70",
+      "size_bytes": 5387
+    },
+    {
+      "path": "validation/v096_scratch_check.log",
+      "sha256": "7b5d800b41335c86b5001ceb1ed6c0499bf5e5853cc461c6ebc09e61af81d7a9",
+      "size_bytes": 7439
+    }
+  ],
+  "same_v096_r1_code": [
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/esm_feature_store_v096.py",
+      "sha256": "78497aefa2cb6ed8883a9deb214b731a843ac8334051c0e0a5f34e7ec64c4e34"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/evaluation_report_v096.py",
+      "sha256": "1039e9a3379ec6b385363d0bc2e262bd0b1998572a7044963e765016d3614858"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/full_task_data_v096.py",
+      "sha256": "1238aab6de870907b06c55914593c1f8230f950ad944e39ddb5c869e77c721ca"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/full_task_model_v096.py",
+      "sha256": "26cde328c9804a88504a6219fa08a14e15a3a9c2ae5c9203bdd49f806fef8ece"
+    },
+    {
+      "path": "scripts/nbs/export_esm_penultimate_v096.py",
+      "sha256": "747813db94dcba53252a650dc6a6f3dd14a63f301c089647a297079f6a2c8d0f"
+    },
+    {
+      "path": "scripts/nbs/predict_nbs_go_v096.py",
+      "sha256": "aa94055cadff4dba5dff0fdb54ac016f76eebf7d653bcea116efd5bc281fdd05"
+    },
+    {
+      "path": "scripts/nbs/prepare_esm_ids_v096.py",
+      "sha256": "9d3fe28782856fe5deec9e8b54c531aeaca629d24fb2f7d3b094186702a3926d"
+    },
+    {
+      "path": "scripts/nbs/run_nbs_v096.py",
+      "sha256": "5717e0059b9398f467e9569651a165da932d74b7ec12c47c25ac2ad6567395ed"
+    },
+    {
+      "path": "scripts/nbs/train_nbs_full_task_v096.py",
+      "sha256": "135723f830a3d8751608784d8d7ba6bbf3f1d8ce801fbcad0bd3bf7a2992bd1c"
+    },
+    {
+      "path": "tests/test_v096_esm_export.py",
+      "sha256": "523fcbf410a5c307e2274f6d100584e826fe1061eca8ca0b3e2d274c6c8c0362"
+    },
+    {
+      "path": "tests/test_v096_fusion.py",
+      "sha256": "0a291de9e2f8cef23b051c98dcd872efa753d8abaa4d3b3d290edb377198681d"
+    },
+    {
+      "path": "tests/test_v096_prepare_ids.py",
+      "sha256": "082811852d1234d4d5ac0df37f30eb34d5f6da9bec7863aa8ef619bcdea39612"
+    },
+    {
+      "path": "tests/test_v096_runtime.py",
+      "sha256": "ebcd84b44f97921e35c7c007a109cc698085728627d44223961f3caf43fc37c6"
+    },
+    {
+      "path": "tests/test_v096_worker.py",
+      "sha256": "a449dcfcdc92eb93299ce630dbde1aca39c37389d760aa1a9355627b57507499"
+    }
+  ],
+  "required_existing_release": "v095 asl_hierarchy_r1 on v094 project; original v096 code included",
+  "v095_reference_dependencies": [
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/evaluation_report_v095.py",
+      "sha256": "40d540f775b6bbc68eefe49ac727ded66be6557a98de2da6470fd360824d915e"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/full_task_loss_v095.py",
+      "sha256": "b0ad085dd36164dbf490218630875d9abc776fc958f605333106f0afd2eb4c24"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/full_task_model_v095.py",
+      "sha256": "5146060c4d4851b9113af114931f6bf3d2a224cde9dc7b1292945eb43ed55921"
+    },
+    {
+      "path": "nbs_models/nbs_protein_go/nbs_pg/optimizer_v095.py",
+      "sha256": "1aa071dc348f4a3353938d2f55872ef9d027308e27d51df44c0d6134ea6a1242"
+    },
+    {
+      "path": "scripts/nbs/predict_nbs_go_v095.py",
+      "sha256": "98c54e2030be0fc0f961c06ef1ef312989923a93b023208f3dd0234be832c200"
+    },
+    {
+      "path": "scripts/nbs/run_nbs_v095.py",
+      "sha256": "e292d586f79035e84ca53f0196469a3ddfba7e3f83e443dc9ed36d14c727ab5a"
+    },
+    {
+      "path": "scripts/nbs/train_nbs_full_task_v095.py",
+      "sha256": "57bdb31ef50b488010d6caebfa797b2b1603a8daaeb8919a11d1b2170fee3ea5"
+    },
+    {
+      "path": "tests/test_v095_integration.py",
+      "sha256": "558cd0652026ca570ef1c8c896c5db6f7acc3dbbd21e8265111b87ef73fe1f66"
+    },
+    {
+      "path": "tests/test_v095_launcher.py",
+      "sha256": "08a0d6adaa146f1d3e6289d9d02e5affc8f6cbf7c4f8b751e3547031eb213c0d"
+    },
+    {
+      "path": "tests/test_v095_loss.py",
+      "sha256": "c8648847a502be6f578a98306dcb44c4deac515f2accddeedad0d4669005bff7"
+    },
+    {
+      "path": "tests/test_v095_worker.py",
+      "sha256": "b0aed87321bfd89e07c91783dcce802a62a2b9f337f488edca17f1b81adf9d85"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "source_filename": "latence-workspace (1).json",
+  "source_sha256": "10f7cba0f40892421160d0e1a74b9660acb5343e5f2f9777264eace022015a87",
+  "exported_at": "2026-11-10T03:40:54.882Z",
+  "latest_evaluations": {
+    "v094": {
+      "version": "v094",
+      "epoch": 120,
+      "step": 5760,
+      "metrics": {
+        "fmax": 55.966723765432825,
+        "precision": 64.05018038130773,
+        "recall": 49.694967587268664,
+        "aupr": 50.80122042916501,
+        "macroAp": 30.880631567281476
+      },
+      "protocol": "d056ecb578f59ace9cf06c9aeb7e287d0b0657d77fd1961ab25c396d1dc0d314"
+    },
+    "v095": {
+      "version": "v095",
+      "epoch": 125,
+      "step": 6000,
+      "metrics": {
+        "fmax": 57.54555614455911,
+        "precision": 68.10603932869164,
+        "recall": 49.82042913278478,
+        "aupr": 50.45123914932045,
+        "macroAp": 37.47735569013683
+      },
+      "protocol": "d056ecb578f59ace9cf06c9aeb7e287d0b0657d77fd1961ab25c396d1dc0d314"
+    },
+    "backbone_base": {
+      "fmax": 57.72314936447243,
+      "precision": 71.18051637779556,
+      "recall": 48.54520711167635,
+      "aupr": 49.45078781988873,
+      "macroAp": 38.70578838925758
+    }
+  },
+  "aupr_field_definition": "exact non-interpolated Micro AP, percent",
+  "recommended_source_checkpoint": null,
+  "claims": {
+    "validated_observations": "v095 E125 Fmax 57.5456, Micro AP 50.4512; v094 E120 Fmax 55.9667",
+    "unverified_hypothesis": "frozen ESM supervised penultimate features improve low/mid-frequency discrimination",
+    "not_claimed": [
+      "Fmax>=60 guarantee",
+      "strict end-to-end zero-shot",
+      "production GPU validation"
+    ]
+  },
+  "v096_training_decision": "User requested Stage2 from scratch; do not load v095 model weights. Reuse only frozen input features/data and v095 protocol."
+}

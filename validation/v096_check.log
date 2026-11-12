@@ -1,0 +1,52 @@
+PyTorch 2.15.0+cpu
+test_ids_order_and_rejections (test_v096_esm_export.InputContractTests.test_ids_order_and_rejections) ... ok
+test_latent_ensemble_requires_explicit_concat (test_v096_esm_export.InputContractTests.test_latent_ensemble_requires_explicit_concat) ... ok
+test_layer_order_and_missing_validation (test_v096_esm_export.InputContractTests.test_layer_order_and_missing_validation) ... ok
+test_multiple_cache_dirs_reject_conflicting_ids (test_v096_esm_export.InputContractTests.test_multiple_cache_dirs_reject_conflicting_ids) ... ok
+test_end_to_end_native_and_identity (test_v096_esm_export.NativeExportTests.test_end_to_end_native_and_identity) ... m1.pt: 2/3 proteins
+m1.pt: 3/3 proteins
+m2.pt: 2/3 proteins
+m2.pt: 3/3 proteins
+Exported 3 x 10 float32 features: /tmp/tmp2r_bjm18/out
+m1.pt: 1/1 proteins
+m2.pt: 1/1 proteins
+ok
+test_failures_never_publish_partial_output (test_v096_esm_export.NativeExportTests.test_failures_never_publish_partial_output) ... Exported 1 x 10 float32 features: /tmp/tmp2r_bjm18/out2
+m1.pt: 2/3 proteins
+ok
+test_float16_cache (test_v096_esm_export.NativeExportTests.test_float16_cache) ... m1.pt: 2/3 proteins
+m1.pt: 3/3 proteins
+ok
+test_native_numpy_config_containers (test_v096_esm_export.NativeExportTests.test_native_numpy_config_containers) ... ok
+test_prelinear_exact_with_optional_residual (test_v096_esm_export.NativeExportTests.test_prelinear_exact_with_optional_residual) ... ok
+test_strict_checkpoint_and_aspect (test_v096_esm_export.NativeExportTests.test_strict_checkpoint_and_aspect) ... ok
+test_all_sampled_support_and_training_ghost_nodes_are_aligned (test_v096_fusion.FeatureIdentityTests.test_all_sampled_support_and_training_ghost_nodes_are_aligned) ... ok
+test_external_ghost_axis_is_not_registry_axis (test_v096_fusion.FeatureIdentityTests.test_external_ghost_axis_is_not_registry_axis) ... ok
+test_id_alignment_missing_and_modified_cache (test_v096_fusion.FeatureIdentityTests.test_id_alignment_missing_and_modified_cache) ... ok
+test_new_protein_requires_cache_and_same_representation_recipe (test_v096_fusion.FeatureIdentityTests.test_new_protein_requires_cache_and_same_representation_recipe) ... ok
+test_registry_identity_and_hash_validation (test_v096_fusion.FeatureIdentityTests.test_registry_identity_and_hash_validation) ... ok
+test_cpu_bf16_has_finite_backward (test_v096_fusion.FusionModelTests.test_cpu_bf16_has_finite_backward) ... /workspace/scratch/c33b28c56d5f/integration_workspace/nbs_models/nbs_protein_go/nbs_pg/full_task_model.py:36: UserWarning: Sparse invariant checks are implicitly disabled. Memory errors (e.g. SEGFAULT) will occur when operating on a sparse tensor which violates the invariants, but checks incur performance overhead. To silence this warning, explicitly opt in or out. See `torch.sparse.check_sparse_tensor_invariants.__doc__` for guidance.  (Triggered internally at /__w/pytorch/pytorch/aten/src/ATen/Context.cpp:916.)
+  return torch.sparse_coo_tensor(
+ok
+test_gate_learns_first_then_projection_and_changes_predictions (test_v096_fusion.FusionModelTests.test_gate_learns_first_then_projection_and_changes_predictions) ... ok
+test_migration_rejects_missing_extra_axis_and_nonzero_gate (test_v096_fusion.FusionModelTests.test_migration_rejects_missing_extra_axis_and_nonzero_gate) ... ok
+test_missing_or_misaligned_features_fail_even_with_zero_gate (test_v096_fusion.FusionModelTests.test_missing_or_misaligned_features_fail_even_with_zero_gate) ... ok
+test_zero_gate_preserves_real_graph_logits_exactly (test_v096_fusion.FusionModelTests.test_zero_gate_preserves_real_graph_logits_exactly) ... ok
+test_duplicate_registry_or_incomplete_fasta_rejected (test_v096_prepare_ids.PrepareIdsTests.test_duplicate_registry_or_incomplete_fasta_rejected) ... ok
+test_union_alignment_and_missing_fasta (test_v096_prepare_ids.PrepareIdsTests.test_union_alignment_and_missing_fasta) ... ok
+test_only_esm_extension_may_differ_from_v095 (test_v096_runtime.InitializationTests.test_only_esm_extension_may_differ_from_v095) ... ok
+test_fixed_weights_only_lineage_and_no_implicit_checkpoint_choice (test_v096_runtime.LauncherTests.test_fixed_weights_only_lineage_and_no_implicit_checkpoint_choice) ... ok
+test_missing_cache_fails_before_config_write (test_v096_runtime.LauncherTests.test_missing_cache_fails_before_config_write) ... ok
+test_preserves_v095_protocol_and_frozen_feature_identity (test_v096_runtime.LauncherTests.test_preserves_v095_protocol_and_frozen_feature_identity) ... ok
+test_resume_cannot_replace_frozen_features_precision_or_initialization (test_v096_runtime.LauncherTests.test_resume_cannot_replace_frozen_features_precision_or_initialization) ... ok
+test_smoke_is_isolated_and_environment_cleaned (test_v096_runtime.LauncherTests.test_smoke_is_isolated_and_environment_cleaned) ... Exported 3 x 5 float16 features: /tmp/tmpgd_7u0x_/out
+{"output_dir": "/tmp/tmp8ka2m0so/ids", "num_proteins": 3, "num_missing_embeddings": 2}
+[v096 complete] smoke: /tmp/tmp8jekwd_p/new_smoke
+ok
+test_installed_training_worker_checkpoint_and_resume (test_v096_worker.V096WorkerTests.test_installed_training_worker_checkpoint_and_resume) ... ok
+test_v095_weights_only_initialization_then_exact_resume (test_v096_worker.V096WorkerTests.test_v095_weights_only_initialization_then_exact_resume) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 9.275s
+
+OK

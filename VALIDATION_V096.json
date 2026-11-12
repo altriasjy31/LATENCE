@@ -1,0 +1,40 @@
+{
+  "revision": "0.9.6-esm-penultimate-r1",
+  "environment": {
+    "python": "3.12.14",
+    "torch": "2.15.0+cpu",
+    "numpy": "2.3.5",
+    "device": "CPU"
+  },
+  "command": "ESM_SOURCE_DIR=<uploaded esm_models source> python scripts/nbs/run_nbs_v096.py check --device cpu",
+  "result": {
+    "tests_run": 30,
+    "passed": 30,
+    "skipped": 0,
+    "failed": 0
+  },
+  "coverage": [
+    "native ESM pre-linear reconstruction with and without residual",
+    "numpy-array checkpoint vocabulary compatibility",
+    "single and concatenated ensemble caches",
+    "strict row identity and missing/cache mutation rejection",
+    "training and external ghost ID axes",
+    "zero-gate migrated v095 eval logits bitwise equal",
+    "gate and ESM projection gradients",
+    "CPU BF16 real heterograph backward",
+    "actual worker fresh and v095-initialized save/resume exact model/AdamW/scheduler/diagnostics",
+    "frozen initialization and feature configuration"
+  ],
+  "additive_only": true,
+  "prior_version_path_collisions": [],
+  "v095_code_modified": false,
+  "limitations": [
+    "No real pretrained classifier checkpoint or full PLM cache supplied",
+    "No full production dataset extraction or training performed",
+    "No CUDA/A100 memory/throughput testing",
+    "CPU torch2.15, target PyTorch2.4 must run provided check/smoke",
+    "No real end-to-end production evaluation executed; metric kernels inherited from v095",
+    "Legacy PLM cache upstream weight/truncation provenance not independently verified"
+  ],
+  "source_model_sha256": "69f765616561ca3a82e999ba808d8793cc8821954d94c1f18c845391f41a5bb9"
+}

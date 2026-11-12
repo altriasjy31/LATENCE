@@ -1,0 +1,66 @@
+{
+  "source_sha256": "10f7cba0f40892421160d0e1a74b9660acb5343e5f2f9777264eace022015a87",
+  "source_filename": "latence-workspace (1).json",
+  "num_v095_training_records": 1220,
+  "peak_observed_lr": 0.003,
+  "verified_schedule": {
+    "max_lr": 0.003,
+    "min_lr": 3e-05,
+    "epochs": 200,
+    "steps_per_epoch": 48,
+    "warmup_epochs": 5.0,
+    "hold_until_epoch": 10.0
+  },
+  "max_absolute_error": 8.673617379884035e-19,
+  "samples": [
+    {
+      "step": 5,
+      "reported_epoch": 1,
+      "completed_epoch_fraction": 0.10416666666666667,
+      "observed_lr": 6.25e-05
+    },
+    {
+      "step": 120,
+      "reported_epoch": 3,
+      "completed_epoch_fraction": 2.5,
+      "observed_lr": 0.0015
+    },
+    {
+      "step": 240,
+      "reported_epoch": 5,
+      "completed_epoch_fraction": 5.0,
+      "observed_lr": 0.003
+    },
+    {
+      "step": 480,
+      "reported_epoch": 10,
+      "completed_epoch_fraction": 10.0,
+      "observed_lr": 0.003
+    },
+    {
+      "step": 2400,
+      "reported_epoch": 50,
+      "completed_epoch_fraction": 50.0,
+      "observed_lr": 0.0026868736564536447
+    },
+    {
+      "step": 4800,
+      "reported_epoch": 100,
+      "completed_epoch_fraction": 100.0,
+      "observed_lr": 0.0016376303280264137
+    },
+    {
+      "step": 6000,
+      "reported_epoch": 125,
+      "completed_epoch_fraction": 125.0,
+      "observed_lr": 0.0010328212882310453
+    },
+    {
+      "step": 6100,
+      "reported_epoch": 128,
+      "completed_epoch_fraction": 127.08333333333333,
+      "observed_lr": 0.0009847343627455262
+    }
+  ],
+  "conclusion": "v095 actual scratch run used peak 0.003; late ~0.001 is cosine decay, not resume mode. v096 r1 warm-init recommendation used a newly configured 0.001. Scratch v096 resets model/optimizer/schedule and fixes peak 0.003."
+}

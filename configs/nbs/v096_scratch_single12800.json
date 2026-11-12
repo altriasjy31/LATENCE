@@ -1,0 +1,64 @@
+{
+  "schema": "nbs-v096-scratch-profile-v1",
+  "profile_id": "v096_esm_penultimate_single12800_scratch_r2",
+  "description": "Randomly initialize Stage2; reuse data/configuration only, never v095 model weights.",
+  "work_dir": "outputs/latence_nbs_experiments/v096/esm_penultimate_single12800_scratch",
+  "full_task": {
+    "initialization": {"mode": "fresh"},
+    "seed": 1096,
+    "epochs": 200,
+    "learning_rate": 0.003,
+    "precision": "bf16",
+    "expected_world_size": 1,
+    "weak_batch": 10240,
+    "core_batch": 2560,
+    "accumulation_steps": 2,
+    "weight_decay": 0.0001,
+    "grad_clip": 5.0,
+    "epoch_unit": "weak",
+    "variant": "dynamic",
+    "monitor_core": false,
+    "checkpoint_every_epochs": 5,
+    "scheduler": {
+      "name": "epoch_warmup_hold_cosine",
+      "warmup_epochs": 5.0,
+      "hold_until_epoch": 10.0,
+      "min_lr": 0.00003
+    },
+    "optimizer": {
+      "name": "adamw",
+      "eps": 1e-8,
+      "betas": [0.9, 0.999],
+      "decay_policy": "matrices_only"
+    },
+    "model": {
+      "encoder_variant": "hetero_tuned",
+      "sage_layers": 3,
+      "hidden_dim": 320,
+      "prediction_mode": "shared_bilinear",
+      "output_strategy": "shared_direct",
+      "go_input_mode": "ontology_raw",
+      "protein_random_features": "none",
+      "jk_mode": "sum",
+      "esm_dropout": 0.1,
+      "esm_gate_init": 0.0
+    },
+    "sampler": {"mode": "dynamic", "candidate_topk": 16},
+    "loss": {
+      "core_weight": 0.25,
+      "weak_weight": 1.0,
+      "modelout_soft_weight": 1.0,
+      "loss_scale": 1000.0,
+      "hierarchy_weight": 0.01,
+      "asl_gamma_neg": 4.0,
+      "asl_gamma_pos": 0.0,
+      "asl_clip": 0.05,
+      "teacher_topk": 2048,
+      "teacher_min_probability": 0.05,
+      "teacher_confidence_power": 0.5,
+      "hard_negative_topk": 256,
+      "hard_negative_max_teacher": 0.01,
+      "hard_negative_weight": 0.25
+    }
+  }
+}

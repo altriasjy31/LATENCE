@@ -1,0 +1,39 @@
+{
+  "configuration_revision": "v096_esm_penultimate_single12800_scratch_r2",
+  "runtime_revision": "0.9.6-esm-penultimate-r1",
+  "command": "ESM_SOURCE_DIR=<original ESM source> python scripts/nbs/run_nbs_v096_scratch.py check --device cpu",
+  "environment": {
+    "python": "3.12.14",
+    "torch": "2.15.0+cpu",
+    "device": "CPU"
+  },
+  "result": {
+    "run": 38,
+    "passed": 38,
+    "failed": 0,
+    "skipped": 0,
+    "new_scratch_tests": 8
+  },
+  "original_v096_python_modified": false,
+  "v094_v095_python_modified": false,
+  "profile_sha256": "80307e10b6b3d81847e3fa5fa18d8a3f6efb3c4468088b4c6d2f4902157a581b",
+  "training_origin": "random Stage2 parameters; pretrained feature sources stay frozen",
+  "peak_learning_rate": 0.003,
+  "steps_verified_in_v095_training_log": 1220,
+  "covered": [
+    "source LR .001 explicitly overridden to .003",
+    "source checkpoint lineage replaced with fresh without reading weights",
+    "init-from rejected",
+    "same-run resume uses own saved config and preserves schedule",
+    "resume/evaluation work without source v095 directory",
+    "isolated scratch and smoke directories",
+    "fixed-profile mismatch rejected",
+    "help describes scratch LR and suppresses weight initialization recommendation",
+    "inherited ESM extraction/fusion/actual CPU training and exact resume tests"
+  ],
+  "limitations": [
+    "Real full dataset and A100 training not executed",
+    "Standalone profile requires existing v095 data configuration plus exported ESM manifest",
+    "0.003 is the verified prior peak, not an assertion of optimal LR"
+  ]
+}
