@@ -98,6 +98,75 @@ def evaluate_retrieval(candidates, pool_ids, positives_by_go, column_scores, top
     return result, go_results, pair_results
 
 
+def compare_positive_ranks(expanded_pairs, anchor_pairs, positives, mapping,
+                           anchor_go_by_row, pool_size, top_k):
+    """Join every observed pair exactly once; positive deltas favor the extension.
+
+    Top-K credits are expectations within exact ties. Counts of credit increases
+    therefore need not be counts of binary recovered/lost hits.
+    """
+    def index(records):
+        indexed = {}
+        for record in records:
+            key = (record["protein_id"], record["go_id"])
+            if key in indexed:
+                raise ValueError(f"Duplicate positive pair in rank comparison: {key}")
+            indexed[key] = record
+        return indexed
+
+    expanded_index, anchor_index = index(expanded_pairs), index(anchor_pairs)
+    expected = {(protein, go) for protein, terms in positives.items() for go in terms}
+    if set(expanded_index) != expected or set(anchor_index) != expected:
+        raise ValueError("Paired retrieval must retain exactly every observed positive pair")
+    records = []
+    for expanded in expanded_pairs:
+        protein, go = expanded["protein_id"], expanded["go_id"]
+        anchor = anchor_index[protein, go]
+        record = {
+            "protein_id": protein, "go_id": go,
+            "evidence_codes": positives[protein][go].get("evidence_codes", []),
+            "n_proteins_ranked": pool_size,
+            "anchor_ontology_rows": list(mapping[go]),
+            "anchor_go_ids": [anchor_go_by_row[row] for row in mapping[go]],
+        }
+        for field in ("score", "rank_min", "rank_max", "midrank", "tie_count"):
+            record[f"expanded_{field}"] = expanded[field]
+            record[f"anchor_{field}"] = anchor[field]
+        for label, values in (("expanded", expanded), ("anchor", anchor)):
+            record[f"{label}_fraction_ranked_ahead"] = (
+                (values["midrank"] - 1) / max(pool_size - 1, 1)
+            )
+        record["midrank_improvement_over_anchor"] = anchor["midrank"] - expanded["midrank"]
+        record["fraction_ranked_ahead_improvement_over_anchor"] = (
+            record["anchor_fraction_ranked_ahead"] - record["expanded_fraction_ranked_ahead"]
+        )
+        for k in top_k:
+            expanded_credit, anchor_credit = expanded[f"top@{k}_credit"], anchor[f"top@{k}_credit"]
+            record[f"expanded_top@{k}_credit"] = expanded_credit
+            record[f"anchor_top@{k}_credit"] = anchor_credit
+            record[f"top@{k}_credit_improvement_over_anchor"] = expanded_credit - anchor_credit
+        records.append(record)
+    deltas = np.asarray([r["midrank_improvement_over_anchor"] for r in records], dtype=float)
+    summary = {
+        "n_observed_positive_pairs": len(records),
+        "n_midrank_improved": int(np.count_nonzero(deltas > 0)),
+        "n_midrank_unchanged": int(np.count_nonzero(deltas == 0)),
+        "n_midrank_worsened": int(np.count_nonzero(deltas < 0)),
+        "mean_midrank_improvement_over_anchor": float(deltas.mean()) if records else None,
+        "median_midrank_improvement_over_anchor": float(np.median(deltas)) if records else None,
+    }
+    for k in top_k:
+        change = np.asarray([r[f"top@{k}_credit_improvement_over_anchor"] for r in records], dtype=float)
+        summary[f"top@{k}"] = {
+            "n_pairs_credit_increased": int(np.count_nonzero(change > 0)),
+            "n_pairs_credit_unchanged": int(np.count_nonzero(change == 0)),
+            "n_pairs_credit_decreased": int(np.count_nonzero(change < 0)),
+            "net_hit_credit": float(change.sum()),
+            "pair_recall_improvement_over_anchor": float(change.mean()) if records else None,
+        }
+    return records, summary
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-manifest", type=Path, required=True)
@@ -158,14 +227,18 @@ def main(argv=None):
             "macro": "Average over GO terms with at least one observed positive; other terms remain in the coverage table.",
             "ties": "For top-K and midrank use the expectation under uniform order inside exact ties. AP groups exact ties into thresholds.",
             "uniform_random": "The expected recall under a uniform protein ordering is effective K divided by the protein pool size.",
+            "anchor_transfer": "Maximum original-ontology score over each candidate's nearest historical rows bound by the extension manifest; same checkpoint and input features.",
+            "paired_rank_improvement": "Anchor midrank minus expanded midrank. Positive values mean the expanded model ranks this positive pair higher among the same proteins.",
+            "paired_credit_improvement": "Expanded minus anchor expected top-K hit credit. Fractional changes arise from exact ties, not binary hit counts.",
         },
         "expanded": expanded,
         "anchor_transfer": None,
+        "paired_positive_rank_summary": None,
     }
 
     if args.anchor_predictions_dir is not None:
         _, extension_hash, mapping = anchor_plan(test, args.extension_dir)
-        _, anchor_path, anchor_ids, anchor_probs, _, columns = load_anchor_scores(
+        _, anchor_path, anchor_ids, anchor_probs, anchor_go_by_row, columns = load_anchor_scores(
             args.anchor_predictions_dir, pred, cohort["protein_ids"], mapping,
         )
         index = {protein: row for row, protein in enumerate(anchor_ids)}
@@ -180,6 +253,11 @@ def main(argv=None):
         result["anchor_transfer"] = anchor
         result["anchor_prediction_manifest_sha256"] = sha256(anchor_path)
         result["extension_manifest_sha256"] = extension_hash
+        pair_comparison, pair_summary = compare_positive_ranks(
+            expanded_pairs, anchor_pairs, positives, mapping, anchor_go_by_row,
+            len(ids_to_rank), args.top_k,
+        )
+        result["paired_positive_rank_summary"] = pair_summary
         result["expanded_minus_anchor"] = {
             key: value - anchor[key] if value is not None else None
             for key, value in expanded.items() if key.startswith(("go_macro_", "pair_observed_"))
@@ -196,6 +274,8 @@ def main(argv=None):
         if args.anchor_predictions_dir is not None:
             write_tsv(stage / "anchor_transfer_per_go.tsv", anchor_go, ["go_id"])
             write_tsv(stage / "anchor_transfer_positive_ranks.tsv", anchor_pairs, ["go_id", "protein_id"])
+            write_tsv(stage / "positive_pairs_comparison.tsv", pair_comparison,
+                      ["go_id", "protein_id", "midrank_improvement_over_anchor"])
         if args.output_dir.exists() or args.output_dir.is_symlink():
             raise FileExistsError(f"Choose a new retrieval output directory: {args.output_dir}")
         stage.rename(args.output_dir)

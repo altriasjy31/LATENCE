@@ -1,5 +1,7 @@
 # LATENCE v095 BP 新 GO 评估
 
+本轮新增外部基线导出、DeepGO 重训和旧锚点逐对名次分析。先读 [README_external_unseen_v095.md](README_external_unseen_v095.md)；旧锚点命令见 [ANCHOR_EVAL.md](ANCHOR_EVAL.md)。以下原有测试集构建与评估流程继续可用。
+
 将归档解压到已安装 v095 的 LATENCE 项目根目录。归档包含测试集构建、冻结 checkpoint 推理、评估和对照脚本。预测脚本使用项目中的 v095 模型定义和检查函数，并读取已有的 v095 checkpoint、独立测试特征和本体。
 
 ## 构建测试集
